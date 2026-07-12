@@ -130,20 +130,32 @@ class DWXAdapter extends ExecutionAdapter {
   async #sendOrder(order, order_type) {
     let sl = 0.0;
     let tp = 0.0;
+    const price = Number(order.price);
+    const tickSize = Number(order.tickSize);
+    const slPts = Number(order.sl);
+    const tpPts = Number(order.tp);
+    const canPriceProtection = Number.isFinite(price)
+      && Number.isFinite(tickSize)
+      && tickSize > 0;
 
-    if (order.side === 'buy') {
-      tp = order.price + (order.tp * order.tickSize);
-      sl = order.price - (order.sl * order.tickSize);
-    } else {
-      tp = order.price - (order.tp * order.tickSize);
-      sl = order.price + (order.sl * order.tickSize);
+    if (canPriceProtection) {
+      if (Number.isFinite(tpPts) && tpPts > 0) {
+        tp = order.side === 'buy'
+          ? price + (tpPts * tickSize)
+          : price - (tpPts * tickSize);
+      }
+      if (Number.isFinite(slPts) && slPts > 0) {
+        sl = order.side === 'buy'
+          ? price - (slPts * tickSize)
+          : price + (slPts * tickSize);
+      }
     }
 
     await this.client.open_order(
       order.symbol,
       order_type,
       order.qty,
-      order.price ?? 0,
+      Number.isFinite(price) ? price : 0,
       sl,
       tp,
       order.magic ?? 0,
@@ -176,7 +188,13 @@ class DWXAdapter extends ExecutionAdapter {
   }
 
   #trackPending(cid, order, order_type) {
-    this.pending.set(cid, { order, order_type, createdAt: Date.now(), cycles: 0 });
+    this.pending.set(cid, {
+      order,
+      order_type,
+      createdAt: Date.now(),
+      cycles: 0,
+      retryEnabled: order?.meta?.retry !== false
+    });
   }
 
   async #retryOrder(cid) {
@@ -214,7 +232,12 @@ class DWXAdapter extends ExecutionAdapter {
       // Ошибка OPEN_ORDER → ретрай; INFO/OK → попробуем вытащить ticket и подтвердить.
       const isError = msg?.type === 'ERROR' && msg?.error_type === 'OPEN_ORDER';
       if (isError) {
-        this.#retryOrder(cid);
+        const pending = this.pending.get(cid);
+        if (pending?.retryEnabled === false) {
+          this.#rejectPending(cid, msg?.message || msg?.reason || 'OPEN_ORDER rejected', msg);
+        } else {
+          this.#retryOrder(cid);
+        }
       } else {
         const ticket = msg?.ticket ?? (asStr.match(/ticket\\D+(\\d+)/i)?.[1]);
         this.#confirmPending(cid, ticket, undefined);

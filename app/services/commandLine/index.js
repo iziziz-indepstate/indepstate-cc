@@ -4,6 +4,7 @@
 
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
+const { CurrentOrderCommand } = require('../commands/currentOrder');
 
 function createCommandService(opts = {}) {
   const extra = Array.isArray(opts.commands)
@@ -18,6 +19,8 @@ function createCommandService(opts = {}) {
   const list = [
     new AddCommand({ onAdd: opts.onAdd }),
     new RemoveCommand({ onRemove: opts.onRemove }),
+    new CurrentOrderCommand('limit', { executionApi: opts.executionApi }),
+    new CurrentOrderCommand('market', { executionApi: opts.executionApi }),
     ...extra
   ];
 

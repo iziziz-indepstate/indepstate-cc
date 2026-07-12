@@ -12,6 +12,7 @@ settings.register(
 function initService(servicesApi = {}) {
   const cmdService = createCommandService({
     commands: servicesApi.commands,
+    executionApi: servicesApi,
     onAdd(row) {
       const win = BrowserWindow.getAllWindows()[0];
       if (win && !win.isDestroyed()) {

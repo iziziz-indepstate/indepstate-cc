@@ -11,6 +11,7 @@ const {
   buildOpenStrategyPayload
 } = require('../app/services/brokerage-adapter-optionstrat/comps/optionstrat');
 const { buildOptionStratRow } = require('../app/services/optionstrat/command');
+const { buildOptionStratHedgePayload } = require('../app/services/optionstrat/hedge');
 
 function encodeProtectedJson(obj) {
   const xorKey = 7;
@@ -198,8 +199,20 @@ async function run() {
   assert.strictEqual(built.row.ticker, 'SPXW');
   assert.strictEqual(built.row.root, 'SPX');
   assert.strictEqual(built.row.instantExecution, true);
+  assert.strictEqual(built.row.strategyCommand, 'bcs');
   assert.strictEqual(built.row.legs[1].side, 'sell');
   assert.strictEqual(built.row.legs[1].quantity, 10);
+
+  const lcsHedge = buildOptionStratHedgePayload('open', { strategyCommand: 'lcs', ticker: 'SPY', provider: 'optionstrat' });
+  assert.strictEqual(lcsHedge.eventName, 'optionstrat:open-clicked');
+  assert.strictEqual(lcsHedge.payload.hedgeOpenSide, 'buy');
+  assert.strictEqual(lcsHedge.payload.hedgeCloseSide, 'sell');
+  assert.strictEqual(lcsHedge.payload.hedgeSymbol, 'UPRO');
+
+  const spsHedge = buildOptionStratHedgePayload('close', { strategyCommand: 'sps', ticker: 'SPY', provider: 'optionstrat' });
+  assert.strictEqual(spsHedge.eventName, 'optionstrat:close-clicked');
+  assert.strictEqual(spsHedge.payload.hedgeOpenSide, 'sell');
+  assert.strictEqual(spsHedge.payload.hedgeCloseSide, 'buy');
 
   const builtDefaultQtyFromMissingArg = buildOptionStratRow({
     command: 'bcs {s1} {s2} {q}',

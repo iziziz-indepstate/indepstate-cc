@@ -6,6 +6,7 @@ const servicesApi = require('./services/servicesApi');
 const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const {detectInstrumentType} = require("./services/instruments");
 const {resolveTickSize} = require('./services/points');
+const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 const envEquityStop = Number(process.env.DEFAULT_EQUITY_STOP_USD);
@@ -558,6 +559,15 @@ function markRowClosed(key, timestamp = Date.now()) {
   }
 }
 
+function emitOptionStratButtonEvent(action, row) {
+  if (!row || row.instrumentType !== 'OPT') return;
+  const { payload } = buildOptionStratHedgePayload(action, row);
+  if (!payload.hedgeOpenSide) return;
+  ipcRenderer.invoke('optionstrat:button-event', { action, row }).catch((err) => {
+    console.warn('[optionstrat hedge]', err?.message || err);
+  });
+}
+
 function formatPercentValue(value) {
   const n = Number(value);
   if (!Number.isFinite(n)) return '-';
@@ -733,6 +743,15 @@ function setCardState(key, state) {
 
     const closePlacedOrder = async () => {
       const orderInfo = placedOrderByKey.get(key);
+      const currentRow = (appState.rows || []).find(r => rowKey(r) === key);
+      const hedgeRow = currentRow || (isOptionCard && orderInfo ? {
+        ...orderInfo,
+        ticker: orderInfo.symbol,
+        instrumentType: 'OPT'
+      } : null);
+      if (isOptionCard && hedgeRow) {
+        emitOptionStratButtonEvent('close', hedgeRow);
+      }
       let result = null;
       if (orderInfo && orderInfo.ticket && orderInfo.provider) {
         try {
@@ -2202,6 +2221,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
           side: 'OPEN',
           meta: baseMeta,
         };
+        emitOptionStratButtonEvent('open', row);
         res = await ipcRenderer.invoke('queue-place-order', payload);
       } else {
       const payload = {
@@ -2237,6 +2257,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
           provider: res.provider || row.provider || 'optionstrat',
           ticket: String(res.providerOrderId),
           symbol: row.symbol || row.ticker || '',
+          strategyCommand: row.strategyCommand,
           payoff: res.payoff || res.raw?.payoff,
           valuation: res.valuation || res.raw?.valuation,
           openedAt
@@ -2530,6 +2551,7 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
         provider: rec.provider || (row && row.provider) || '',
         ticket: providerOrderId,
         symbol: symbol,
+        strategyCommand: row?.strategyCommand,
         payoff: rec.payoff || rec.raw?.payoff,
         valuation: rec.valuation || rec.raw?.valuation,
         openedAt

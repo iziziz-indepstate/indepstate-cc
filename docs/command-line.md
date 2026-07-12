@@ -44,3 +44,19 @@ Removes cards that match a specified criterion. Criteria are written as `key:val
 
 Additional criteria may be added in the future; attempting to use an unknown key results in `Unknown criterion: {key}`.
 
+### limit-current (alias: lc)
+
+```
+limit-current {symbol} {buy|sell} {qty} [provider] [instrumentType]
+```
+
+Places a hedge-style limit order at the current quote. Buy orders use ask, sell orders use bid, and both fall back to the quote price. `provider` is optional and defaults from execution config for the instrument type; `instrumentType` defaults to `EQ`.
+
+### market-current (alias: mc)
+
+```
+market-current {symbol} {buy|sell} {qty} [provider] [instrumentType]
+```
+
+Places a hedge-style market order for the given side and quantity. It uses the same provider and instrument defaults as `limit-current`.
+

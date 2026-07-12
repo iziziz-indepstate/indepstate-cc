@@ -17,6 +17,7 @@ const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const loadConfig = require('./config/load');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { resolveTickSize } = require('./services/points');
+const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
 const execCfg = loadConfig('../services/brokerage/config/execution.json');
 const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 const uiCfg = loadConfig('../services/ui/config/ui.json');
@@ -435,6 +436,7 @@ function normalizeOrderPayload(payload) {
     return {
         instrumentType ,                // 'CX' | 'EQ' | 'FX'
       symbol,                        // 'BTCUSDT.P' | 'AAPL'
+      provider: payload.provider,
       side: payload.kind,            // 'BL'|'BSL'|'SL'|'SSL'
       type: payload.type,
       tickSize: payload.tickSize,
@@ -453,18 +455,20 @@ function normalizeOrderPayload(payload) {
   const symbol = String(payload.symbol || payload.ticker || '');
   const instrumentType =  payload.instrumentType;
   const comment = payload.comment ?? payload.meta?.comment;
+  const isHedgeMarket = payload?.meta?.hedge === true && String(payload.type || '').toLowerCase() === 'market';
   return {
     instrumentType,
     symbol,
+    provider: payload.provider,
     side: payload.side || payload.action, // 'BL'|'BSL'|'SL'|'SSL'
     type: payload.type,
     tickSize: payload.tickSize,
     qty: instrumentType === 'EQ'
       ? Math.floor(Number(payload.qty || 0))
       : Number(payload.qty || 0),
-    price: Number(payload.price || 0),
-    sl: Number(payload.sl || 0),
-    tp: payload.tp === '' || payload.tp == null ? undefined : Number(payload.tp),
+    price: isHedgeMarket ? undefined : Number(payload.price || 0),
+    sl: isHedgeMarket ? undefined : Number(payload.sl || 0),
+    tp: isHedgeMarket || payload.tp === '' || payload.tp == null ? undefined : Number(payload.tp),
     comment: comment == null ? undefined : String(comment),
     meta: payload.meta || {}
   };
@@ -488,8 +492,14 @@ function validateOrder(order) {
     const ok = (order.meta?.riskUsd > 0) && order.sl > 0 && order.price > 0 && order.qty > 0;
     return ok ? { ok: true } : { ok: false, reason: 'FX: riskUsd>0, sl>0, price>0, qty>0 required' };
   } else {
-    const ok = (order.meta?.riskUsd > 0) && order.sl > 0 && order.price > 0 && (order.qty >= 1);
-    return ok ? { ok: true } : { ok: false, reason: 'EQ: riskUsd>0, sl>0, price>0, qty>=1 required' };
+    const isHedge = order.meta?.hedge === true;
+    const type = String(order.type || '').toLowerCase();
+    const needsPrice = type !== 'market';
+    const hasPrice = Number(order.price) > 0 || !needsPrice;
+    const hasQty = Number(order.qty) >= 1;
+    const hasRiskShape = (order.meta?.riskUsd > 0) && order.sl > 0 && Number(order.price) > 0;
+    const ok = hasQty && (isHedge ? hasPrice : hasRiskShape);
+    return ok ? { ok: true } : { ok: false, reason: 'EQ: riskUsd>0, sl>0, price>0, qty>=1 required (or hedge qty with price/market)' };
   }
 }
 
@@ -513,6 +523,18 @@ function normalizeEquityOrderForExecution(order) {
   if (!['EQ','FX','CX'].includes(String(order.instrumentType))) return order;
 
   const action = String(order.side || '').toUpperCase();
+  const alreadySide = String(order.side || '').toLowerCase();
+  if (alreadySide === 'buy' || alreadySide === 'sell') {
+    const type = String(order.type || 'limit').toLowerCase();
+    const norm = { ...order, side: alreadySide, type };
+    if ((type === 'limit' || type === 'stoplimit') && Number.isFinite(Number(order.price))) {
+      norm.limitPrice = Number(order.price);
+    }
+    if ((type === 'stop' || type === 'stoplimit') && Number.isFinite(Number(order.price))) {
+      norm.stopPrice = Number(order.price);
+    }
+    return norm;
+  }
   let side, type, limitPrice, stopPrice;
 
   // Базовая интерпретация
@@ -589,8 +611,11 @@ function setupIpc(orderSvc) {
       wireAdapter(adapter, providerName);
 
       const isOptionBlock = execOrder.instrumentType === 'OPT';
+      const isHedgeMarket = !isOptionBlock
+        && execOrder.meta?.hedge === true
+        && String(execOrder.type || '').toLowerCase() === 'market';
       const quote = isOptionBlock ? { price: 1, tickSize: 0.01 } : await adapter.getQuote?.(execOrder.symbol);
-      if (!isOptionBlock && (!quote || !Number.isFinite(quote.price))) {
+      if (!isOptionBlock && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
         const rej = { status: 'rejected', provider: providerName, reason: 'No quote' };
         appendJsonl(EXEC_LOG, { t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
         return rej;
@@ -631,7 +656,11 @@ function setupIpc(orderSvc) {
       console.log('[EXEC][SIZE]', { symbol: execOrder.symbol, price: execOrder.price, riskUsd, stopPts, tickSize: execOrder.tickSize, lot: execOrder.lot, qty: execOrder.qty, tickSource: quote?.tickSource || (Number(execOrder.tickSize) > 0 ? 'payload/config' : 'adapter-pending') });
 
       if (!isOptionBlock) {
-        const rule = tradeRules.validate(execOrder, quote);
+        const quoteForRules = isHedgeMarket && (!quote || !Number.isFinite(quote.price)) ? { price: 1 } : quote;
+        const ruleOrder = execOrder.meta?.hedge === true
+          ? { ...execOrder, sl: Number.isFinite(Number(execOrder.sl)) && Number(execOrder.sl) > 0 ? execOrder.sl : Number.POSITIVE_INFINITY }
+          : execOrder;
+        const rule = tradeRules.validate(ruleOrder, quoteForRules);
         if (!rule.ok) {
           const rej = { status: 'rejected', provider: providerName, reason: rule.reason };
           appendJsonl(EXEC_LOG, { t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
@@ -739,6 +768,23 @@ function setupIpc(orderSvc) {
       return rej;
     }
   }
+
+  servicesApi.execution = {
+    queuePlaceOrder: queuePlaceOrderInternal,
+    pickProviderName
+  };
+
+  ipcMain.handle('optionstrat:button-event', async (_evt, payload = {}) => {
+    const { eventName, payload: eventPayload } = buildOptionStratHedgePayload(payload.action, payload.row || {});
+    if (!eventPayload.hedgeOpenSide) {
+      return { ok: false, reason: 'Unsupported OptionStrat strategy for hedge automation' };
+    }
+    if (servicesApi.actionBus && typeof servicesApi.actionBus.emit === 'function') {
+      servicesApi.actionBus.emit(eventName, eventPayload);
+      return { ok: true, event: eventName, payload: eventPayload };
+    }
+    return { ok: false, reason: 'actions-bus is not available' };
+  });
 
   const pendingHub = createPendingOrderHub({
     subscribe: (provider, symbols) => {

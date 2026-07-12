@@ -75,3 +75,32 @@ updated state so the UI re-renders. When no named actions exist the container re
 
 Service-specific integrations are documented alongside each service module. For TradingView
 automation, see the [tv-listener service notes](tv-listener.md).
+
+## OptionStrat hedge example
+
+OptionStrat cards emit `optionstrat:open-clicked` and `optionstrat:close-clicked` when their Open and
+Close controls are clicked. The event payload includes `hedgeSymbol`, `hedgeOpenSide`, and
+`hedgeCloseSide`, so actions can place a linked hedge order without blocking the normal OptionStrat
+operation.
+
+```json
+{
+  "enabled": true,
+  "actions": [
+    {
+      "name": "OptionStrat UPRO hedge",
+      "label": "UPRO hedge",
+      "bindings": [
+        {
+          "event": "optionstrat:open-clicked",
+          "action": "commandLine:limit-current UPRO {hedgeOpenSide} 100"
+        },
+        {
+          "event": "optionstrat:close-clicked",
+          "action": "commandLine:market-current UPRO {hedgeCloseSide} 100"
+        }
+      ]
+    }
+  ]
+}
+```

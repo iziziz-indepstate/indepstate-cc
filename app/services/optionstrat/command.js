@@ -42,6 +42,7 @@ function applyRangeAliases(vars) {
 function buildOptionStratRow(definition, args, now = Date.now()) {
   const tokens = tokenizeTemplate(definition.command);
   if (!tokens.length) throw new Error('OptionStrat command template is empty');
+  const strategyCommand = String(tokens[0] || '').toLowerCase();
   const argTokens = tokens.slice(1);
   const allowsDefaultQuantityArg = argTokens.length > 0
     && variableName(argTokens[argTokens.length - 1]) === 'q'
@@ -87,6 +88,7 @@ function buildOptionStratRow(definition, args, now = Date.now()) {
       provider: definition.provider || 'optionstrat',
       instrumentType: 'OPT',
       event: 'optionstrat',
+      strategyCommand,
       time: now,
       name: fillTemplate(definition.name || `${ticker} Option Strategy`, vars),
       description: fillTemplate(definition.description || '', vars),

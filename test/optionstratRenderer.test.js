@@ -11,6 +11,8 @@ async function run() {
   const originalDateNow = Date.now;
   const handlers = {};
   const cancelled = [];
+  const buttonEvents = [];
+  const queuedOrders = [];
   const estimates = [];
   const valuations = [];
   const savedSettings = [];
@@ -33,6 +35,14 @@ async function run() {
       }
       if (ch === 'actions-bus:list') return [];
       if (ch === 'actions-bus:set-enabled') return [];
+      if (ch === 'optionstrat:button-event') {
+        buttonEvents.push(payload);
+        return { ok: true };
+      }
+      if (ch === 'queue-place-order') {
+        queuedOrders.push(payload);
+        return { status: 'ok', provider: 'optionstrat', providerOrderId: 'deal-open', payoff };
+      }
       if (ch === 'execution:cancel-order') {
         cancelled.push(payload);
         return {
@@ -90,6 +100,7 @@ async function run() {
     price: undefined,
     instrumentType: 'OPT',
     provider: 'optionstrat',
+    strategyCommand: 'lcs',
     name: 'BCS 755/756',
     expirationDte: '0DTE',
     legs: [
@@ -111,8 +122,16 @@ async function run() {
   assert(card.textContent.includes('RR 1:0.1'));
   assert(card.textContent.includes('SPY 0DTE +10C755/-10C756'));
   assert.strictEqual(card.querySelector('button.btn').textContent, 'OPEN');
+  card.querySelector('button.btn').click();
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(buttonEvents.length, 1);
+  assert.strictEqual(buttonEvents[0].action, 'open');
+  assert.strictEqual(buttonEvents[0].row.strategyCommand, 'lcs');
+  assert.strictEqual(queuedOrders.length, 1);
+  assert.strictEqual(queuedOrders[0].side, 'OPEN');
 
-  t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', payoff });
+  t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', strategyCommand: 'lcs', payoff });
   row.valuation = { initialValue: 900, currentValue: 950, change: 50, changePct: 5.56 };
   row.openedAt = Date.UTC(2026, 5, 13, 9, 30);
   t.setCardState(key, 'placed');
@@ -129,6 +148,9 @@ async function run() {
   closeButton.click();
   await new Promise(resolve => setImmediate(resolve));
   Date.now = originalDateNow;
+  assert.strictEqual(buttonEvents.length, 2);
+  assert.strictEqual(buttonEvents[1].action, 'close');
+  assert.strictEqual(buttonEvents[1].row.strategyCommand, 'lcs');
   assert.deepStrictEqual(cancelled, [{ provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' }]);
   card = t.cardByKey(key);
   assert(card.querySelector('.card__status').classList.contains('card__status--profit'));

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "electron .",
     "postinstall": "echo Done",
-    "test": "node test/dealTrackers-source-tv-log.test.js && node test/dealTrackers-source-mt5-log.test.js && node test/dealTrackers.test.js && node test/addCommand.test.js && node test/removeCommand.test.js && node test/lastCommand.test.js && node test/optionstrat.test.js && node test/optionstratRenderer.test.js && node test/pendingOrders.test.js && node test/pendingOrdersHub.test.js && node test/retryLabel.test.js && node test/buttonStyles.test.js && node test/commandShortcuts.test.js && node test/actionsBus.test.js && node test/settingsOverrides.test.js && node test/executionLogService.test.js && node test/mcpDealsHistory.test.js && node test/mcpPriceBars.test.js && node test/dwxDealsHistory.test.js && node test/dwxHistoricBars.test.js",
+    "test": "node test/dealTrackers-source-tv-log.test.js && node test/dealTrackers-source-mt5-log.test.js && node test/dealTrackers.test.js && node test/addCommand.test.js && node test/removeCommand.test.js && node test/lastCommand.test.js && node test/currentOrderCommand.test.js && node test/optionstrat.test.js && node test/optionstratRenderer.test.js && node test/pendingOrders.test.js && node test/pendingOrdersHub.test.js && node test/retryLabel.test.js && node test/buttonStyles.test.js && node test/commandShortcuts.test.js && node test/actionsBus.test.js && node test/settingsOverrides.test.js && node test/executionLogService.test.js && node test/mcpDealsHistory.test.js && node test/mcpPriceBars.test.js && node test/dwxMarketHedge.test.js && node test/dwxDealsHistory.test.js && node test/dwxHistoricBars.test.js",
     "build": "electron-builder --win",
     "release": "electron-builder --win --publish always"
   },
