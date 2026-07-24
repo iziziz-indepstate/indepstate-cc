@@ -53,6 +53,7 @@
 - Repo overview: `README.md`, `docs/README.md`.
 - Execution adapters: `docs/execution-adapters.md`.
 - Order cards: `app/services/orderCards/README.md`, `docs/OrderCardsConfig.md`.
+- Level-order cards: `docs/level-order.md`.
 - Trade rules: `app/services/tradeRules/README.md`.
 - Order math: `docs/order-calculator.md`.
 - Events: `docs/events.md`.
@@ -60,6 +61,7 @@
 
 ## Working Conventions
 - Keep this `AGENTS.md` short and high-signal; if future notes need more detail, put extensions under `docs/AGENTS.md.parts/` and link them from here.
+- Put user-facing feature docs in `docs/*.md`; use service-local `README.md` mainly for low-level service, adapter, or source-specific details.
 - Use CommonJS style (`require`, `module.exports`) unless a touched area already differs.
 - Keep service changes modular: prefer adding/extending a service, manifest, config, and docs instead of hard-wiring behavior in unrelated files.
 - Preserve config override behavior; do not edit user/root `config/*.json` unless explicitly requested.

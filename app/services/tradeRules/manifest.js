@@ -12,4 +12,8 @@ function initService(servicesApi = {}) {
   servicesApi.tradeRules = tradeRules;
 }
 
+settings.onApply('trade-rules', ({ config }) => {
+  tradeRules.configure(config);
+});
+
 module.exports = { initService };

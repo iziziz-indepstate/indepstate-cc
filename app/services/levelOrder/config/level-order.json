@@ -1,0 +1,11 @@
+{
+  "defaults": {
+    "maxLot": 0,
+    "minLot": 1,
+    "stopOffsetPts": 10,
+    "takeProfitPts": null,
+    "buyPriceSource": "bid",
+    "sellPriceSource": "bid"
+  },
+  "symbols": []
+}

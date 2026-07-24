@@ -7,6 +7,15 @@
         "type": "string",
         "description": "Command name"
       }
+    },
+    "aliases": {
+      "description": "Command alias templates",
+      "item": {
+        "description": "Alias",
+        "enabled": { "type": "boolean", "description": "Enabled" },
+        "from": { "type": "string", "description": "Alias command" },
+        "to": { "type": "string", "description": "Command template" }
+      }
     }
   }
 }

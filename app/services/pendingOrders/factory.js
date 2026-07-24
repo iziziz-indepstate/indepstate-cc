@@ -5,6 +5,7 @@ const {
   KNOWN_EXTREMUM,
   OPPOSITE_EXTREMUM,
   B1_TAIL,
+  LEVEL_OFFSET,
   B1_10p_GAP
 } = require('./strategies/consolidation');
 const { LimitByCurrentStrategy } = require('./strategies/limitByCurrent');
@@ -17,6 +18,7 @@ function createStrategyFactory(strategyConfig, extraStrategies = {}, extraHelper
     KNOWN_EXTREMUM,
     OPPOSITE_EXTREMUM,
     B1_TAIL,
+    LEVEL_OFFSET,
     B1_10p_GAP,
     ...extraHelpers
   };
@@ -36,6 +38,16 @@ function createStrategyFactory(strategyConfig, extraStrategies = {}, extraHelper
         opts[key] = helpers[opts[key]];
       }
     });
+    if (opts.stoppLossRule === LEVEL_OFFSET) {
+      const tickSize = Number(opts.tickSize);
+      const stopOffsetPts = Number(opts.stopOffsetPts);
+      if (!Number.isFinite(tickSize) || tickSize <= 0) {
+        throw new Error('LEVEL_OFFSET requires tickSize > 0');
+      }
+      if (!Number.isFinite(stopOffsetPts) || stopOffsetPts <= 0) {
+        throw new Error('LEVEL_OFFSET requires stopOffsetPts > 0 from the order-card SL field');
+      }
+    }
     return new Strategy(opts);
   };
 }

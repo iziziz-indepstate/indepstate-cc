@@ -543,6 +543,10 @@ class OptionStratAdapter extends ExecutionAdapter {
   async getQuote() {
     return { price: 1, bid: 1, ask: 1, tickSize: 0.01 };
   }
+
+  async getInstrumentMetadata() {
+    return { tickSize: 0.01, quantityStep: 1, minQty: 1, contractSize: 100, sources: { tickSize: 'optionstrat' } };
+  }
 }
 
 module.exports = {

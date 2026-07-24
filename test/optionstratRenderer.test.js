@@ -131,7 +131,7 @@ async function run() {
   assert.strictEqual(queuedOrders.length, 1);
   assert.strictEqual(queuedOrders[0].side, 'OPEN');
 
-  t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', strategyCommand: 'lcs', payoff });
+  t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: row.name, strategyCommand: 'lcs', payoff });
   row.valuation = { initialValue: 900, currentValue: 950, change: 50, changePct: 5.56 };
   row.openedAt = Date.UTC(2026, 5, 13, 9, 30);
   t.setCardState(key, 'placed');
@@ -151,7 +151,7 @@ async function run() {
   assert.strictEqual(buttonEvents.length, 2);
   assert.strictEqual(buttonEvents[1].action, 'close');
   assert.strictEqual(buttonEvents[1].row.strategyCommand, 'lcs');
-  assert.deepStrictEqual(cancelled, [{ provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' }]);
+  assert.deepStrictEqual(cancelled, [{ provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: 'BCS 755/756' }]);
   card = t.cardByKey(key);
   assert(card.querySelector('.card__status').classList.contains('card__status--profit'));
   assert.strictEqual(card.querySelector('.btns').style.display, 'none');

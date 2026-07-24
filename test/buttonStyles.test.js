@@ -1,4 +1,6 @@
 const assert = require('assert');
+const fs = require('fs');
+const path = require('path');
 let JSDOM;
 try { ({ JSDOM } = require('jsdom')); }
 catch (e) {
@@ -8,7 +10,15 @@ catch (e) {
 const Module = require('module');
 
 async function run() {
+  const indexHtml = fs.readFileSync(path.join(__dirname, '../app/index.html'), 'utf8');
+  const placedColor = indexHtml.match(/\.card__status--placed\s*\{\s*background:([^;]+);/)?.[1];
+  const executingColor = indexHtml.match(/\.card__status--executing\s*\{\s*background:([^;]+);/)?.[1];
+  assert.strictEqual(placedColor, '#3b82f6');
+  assert.strictEqual(executingColor, '#f59e0b');
+  assert.notStrictEqual(placedColor, executingColor);
+
   const handlers = {};
+  const rendererFailures = [];
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, ...args) => {
@@ -16,6 +26,7 @@ async function run() {
       if (ch === 'settings:get') return { autoscroll: true };
       if (ch === 'settings:list') return [];
       if (ch === 'settings:set') return true;
+      if (ch === 'settings:renderer-failed') { rendererFailures.push(args); return {}; }
       if (ch === 'actions-bus:list') return [];
       if (ch === 'actions-bus:set-enabled') return [];
       return {};
@@ -38,6 +49,7 @@ async function run() {
 
   const renderer = require('../app/renderer.js');
   const t = renderer.__testing;
+  await new Promise(resolve => setImmediate(resolve));
 
   const row = { ticker: 'TST', event: 'evt', time: 0, price: 1 };
   handlers['orders:new'](null, row);
@@ -47,6 +59,19 @@ async function run() {
   const sfbBtn = Array.from(buttons).find(b => b.dataset.kind === 'SFB');
   assert(bfbBtn.classList.contains('bc'));
   assert(sfbBtn.classList.contains('sc'));
+  await handlers['settings:changed'](null, {
+    saved: true,
+    section: 'order-cards',
+    config: { ...require('../app/services/orderCards/config/order-cards.json'), buttons: [{ label: 'LIVE', action: 'BL', style: 'bl' }] },
+    appliedPaths: ['buttons']
+  });
+  assert.deepStrictEqual(rendererFailures, []);
+  assert.strictEqual(t.state.rows.length, 1);
+  assert.strictEqual(document.querySelectorAll('.card').length, 1);
+  assert.deepStrictEqual(
+    Array.from(document.querySelectorAll('.card button.btn')).map(button => button.textContent),
+    ['LIVE']
+  );
   console.log('buttonStyles test passed');
 }
 

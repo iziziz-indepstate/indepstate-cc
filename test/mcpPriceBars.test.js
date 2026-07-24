@@ -19,9 +19,9 @@ async function run() {
   let received;
   const handler = createGetPriceBarsHandler({
     brokerage: {
-      getExecutionConfig: () => ({ default: 'dwx' }),
+      getExecutionConfig: () => ({ default: 'dwx', bySymbol: { AAPL: 'j2t' } }),
       getAdapter(provider) {
-        assert.strictEqual(provider, 'dwx');
+        assert.strictEqual(provider, 'j2t');
         return {
           async getHistoricBars(args) {
             received = args;
@@ -33,19 +33,19 @@ async function run() {
   });
 
   const result = await handler({
-    symbol: 'EURUSD',
+    symbol: 'AAPL',
     timeframe: 'm1',
     from: '2026-06-10T12:00:00.000Z',
     to: '2026-06-10T13:00:00.000Z',
     limit: 100,
     timeoutMs: 1234
   });
-  assert.strictEqual(result.provider, 'dwx');
-  assert.strictEqual(result.symbol, 'EURUSD');
+  assert.strictEqual(result.provider, 'j2t');
+  assert.strictEqual(result.symbol, 'AAPL');
   assert.strictEqual(result.timeframe, 'M1');
   assert.strictEqual(result.count, 1);
   assert.deepStrictEqual(result.bars, fakeBars);
-  assert.strictEqual(received.symbol, 'EURUSD');
+  assert.strictEqual(received.symbol, 'AAPL');
   assert.strictEqual(received.timeframe, 'M1');
   assert.strictEqual(received.limit, 100);
   assert.strictEqual(received.timeoutMs, 1234);
@@ -60,12 +60,22 @@ async function run() {
       to: '2026-06-10T00:01:00Z',
       limit: 999999
     },
-    { getExecutionConfig: () => ({ default: 'dwx' }) }
+    { getExecutionConfig: () => ({ default: 'dwx', bySymbol: { GBPUSD: 'j2t' } }) }
   );
   assert.strictEqual(normalized.provider, 'simulated');
   assert.strictEqual(normalized.symbol, 'gbpusd');
   assert.strictEqual(normalized.timeframe, 'M1');
   assert.strictEqual(normalized.limit, 5000);
+
+  const symbolResolved = normalizePriceBarsInput(
+    {
+      symbol: ' gbpusd ',
+      from: '2026-06-10T00:00:00Z',
+      to: '2026-06-10T00:01:00Z'
+    },
+    { getExecutionConfig: () => ({ default: 'dwx', bySymbol: { GBPUSD: 'j2t' } }) }
+  );
+  assert.strictEqual(symbolResolved.provider, 'j2t');
 
   await assert.rejects(
     () => handler({ from: '2026-06-10T00:00:00Z', to: '2026-06-10T00:01:00Z' }),

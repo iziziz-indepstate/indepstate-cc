@@ -1,18 +1,31 @@
 const path = require('path');
 const settings = require('../settings');
-const { OrderCalculator } = require('./index');
+const loadConfig = require('../../config/load');
+const { migrateLegacyRiskConfig } = require('./migrateLegacyRiskConfig');
+
+const configPath = path.join(__dirname, 'config', 'order-calculator.json');
+const descriptorPath = path.join(__dirname, 'config', 'order-calculator-settings-descriptor.json');
+
+// Only the main process owns persisted config migrations. The renderer loads
+// this manifest for hooks but must not race the main process for the same file.
+if (process.type !== 'renderer') migrateLegacyRiskConfig();
 
 settings.register(
   'order-calculator',
-  path.join(__dirname, 'config', 'order-calculator.json'),
-  path.join(__dirname, 'config', 'order-calculator-settings-descriptor.json')
+  configPath,
+  descriptorPath
 );
 
 function initService(servicesApi = {}) {
   const orderCalculator = require('./index');
-  // If it's already a singleton from require('./index'), we just ensure it's in servicesApi
-  // The singleton might need servicesApi for its getter
+  // The singleton can be required before service manifests load, so refresh it
+  // after the migration has written the new override.
+  orderCalculator.configure(loadConfig(configPath));
   servicesApi.orderCalculator = orderCalculator;
 }
+
+settings.onApply('order-calculator', ({ config }) => {
+  require('./index').configure(config);
+});
 
 module.exports = { initService };

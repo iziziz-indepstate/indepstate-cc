@@ -1,3 +1,11 @@
 {
-  "profitRate": 3
+  "profitRate": 3,
+  "riskUsd": {
+    "byInstrumentType": {
+      "EQ": 50,
+      "FX": 50,
+      "CX": 0.2
+    },
+    "bySymbol": {}
+  }
 }

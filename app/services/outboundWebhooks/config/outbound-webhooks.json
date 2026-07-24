@@ -1,0 +1,52 @@
+{
+  "enabled": true,
+  "trace": {
+    "enabled": true,
+    "includePayload": true,
+    "includeBody": true
+  },
+  "targets": {
+    "is-simple-txt": {
+      "enabled": false,
+      "dryRun": false,
+      "url": "https://ai.depositphotos.net/dev/bwh",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer ${ENV:IS_SIMPLE_TXT_TOKEN}"
+      },
+      "body": {
+        "text": "{text}"
+      },
+      "retry": {
+        "attempts": 3,
+        "backoffMs": [1000, 2000, 4000]
+      }
+    },
+    "is-signal-relay": {
+      "enabled": false,
+      "dryRun": false,
+      "url": "https://is-signal-relay.7557reg.workers.dev/signal",
+      "method": "POST",
+      "headers": {
+        "Content-Type": "application/json",
+        "X-Relay-Secret": "${ENV:SIGNAL_RELAY_SECRET}"
+      },
+      "body": {
+        "event": "{event}",
+        "cardId": "{cardId}",
+        "symbol": "{symbol}",
+        "legs": "{legs}",
+        "qty": "{qty}",
+        "price": "{price}",
+        "ts": "{ts}"
+      },
+      "dedupeKey": "{event}:{cardId}",
+      "retry": {
+        "attempts": 3,
+        "backoffMs": [1000, 2000, 4000]
+      }
+    }
+  },
+  "groups": {}
+}

@@ -2,11 +2,34 @@ const assert = require('assert');
 const { EventEmitter } = require('events');
 const {
   DWXAdapter,
+  calculateDwxProtectionPrices,
   filterDwxBars,
+  isDwxOpenPosition,
+  isDwxPendingOrder,
   normalizeDwxBar
 } = require('../app/services/brokerage-adapter-dwx/comps/dwx');
 
 async function run() {
+  assert.deepStrictEqual(calculateDwxProtectionPrices({
+    side: 'buy',
+    price: 100,
+    sl: 10,
+    tp: undefined,
+    tickSize: 0.5
+  }), { sl: 95, tp: 0 });
+  assert.deepStrictEqual(calculateDwxProtectionPrices({
+    side: 'sell',
+    price: 100,
+    sl: 10,
+    tp: 20,
+    tickSize: 0.5
+  }), { sl: 105, tp: 90 });
+  assert.strictEqual(isDwxPendingOrder({ type: 'buylimit' }), true);
+  assert.strictEqual(isDwxPendingOrder({ type: 'sellstop' }), true);
+  assert.strictEqual(isDwxOpenPosition({ type: 'buylimit' }), false);
+  assert.strictEqual(isDwxOpenPosition({ type: 'buy' }), true);
+  assert.strictEqual(isDwxOpenPosition({ type: 'sell' }), true);
+
   const normalized = normalizeDwxBar('1781078460', {
     open: '1.1000',
     high: '1.1010',

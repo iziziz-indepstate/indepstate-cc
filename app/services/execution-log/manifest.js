@@ -3,6 +3,8 @@ const path = require('path');
 const settings = require('../settings');
 const loadConfig = require('../../config/load');
 const { createExecutionLogService } = require('./index');
+let currentService = null;
+let quitHookRegistered = false;
 
 settings.register(
   'execution-log',
@@ -17,23 +19,29 @@ function initService(servicesApi = {}) {
   } catch {
     cfg = {};
   }
-  if (cfg.enabled === false) return;
-
-  const svc = createExecutionLogService(cfg);
-  try {
-    svc.start();
-  } catch (err) {
-    console.error('[execution-log] failed to start:', err.message);
-    return;
+  function replace(config = {}) {
+    if (config.enabled === false) {
+      currentService?.stop();
+      currentService = null;
+      delete servicesApi.executionLog;
+      return;
+    }
+    const next = createExecutionLogService(config);
+    next.start();
+    currentService?.stop();
+    currentService = next;
+    servicesApi.executionLog = next;
   }
-
-  servicesApi.executionLog = svc;
+  try { replace(cfg); }
+  catch (err) { console.error('[execution-log] failed to start:', err.message); }
+  settings.onApply('execution-log', ({ config }) => replace(config));
 
   let electronApp;
   try { ({ app: electronApp } = require('electron')); } catch {}
-  if (electronApp) {
+  if (electronApp && !quitHookRegistered) {
+    quitHookRegistered = true;
     electronApp.on('quit', () => {
-      try { svc.stop(); } catch {}
+      try { currentService?.stop(); } catch {}
     });
   }
 }

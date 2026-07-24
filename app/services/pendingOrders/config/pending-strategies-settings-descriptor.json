@@ -17,7 +17,7 @@
       },
       "stoppLossRule": {
         "type": "string",
-        "description": "Stop Loss Rule"
+        "description": "Stop loss rule (B1_TAIL or LEVEL_OFFSET; LEVEL_OFFSET uses the card SL as offset points)"
       }
     },
     "falseBreak": {
@@ -31,7 +31,7 @@
       "description": "Limit by current price strategy",
       "stoppLossRule": {
         "type": "string",
-        "description": "Stop loss rule name"
+        "description": "Stop loss rule name (B1_TAIL or LEVEL_OFFSET; LEVEL_OFFSET uses the card SL as offset points)"
       },
       "priceSource": {
         "type": "string",

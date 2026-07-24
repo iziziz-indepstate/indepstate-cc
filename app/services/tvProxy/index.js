@@ -93,7 +93,12 @@ function start(opts = {}) {
 
   return {
     addListener(fn) {
-      if (typeof fn === 'function') listeners.push(fn);
+      if (typeof fn !== 'function') return () => {};
+      listeners.push(fn);
+      return () => {
+        const index = listeners.indexOf(fn);
+        if (index >= 0) listeners.splice(index, 1);
+      };
     },
     stop() {
       log('[stop] sending SIGTERM');

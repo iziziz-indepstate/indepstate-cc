@@ -4,6 +4,7 @@ Electron application that executes trading orders received from various sources 
 
 - **blue** – order placed, waiting for fill
 - **yellow** – position opened
+- **gray** – position closed but broker-reported realized P&L is unavailable
 - **green/red** – position closed in profit/loss
 
 A lightweight event bus emits `order:placed`, `position:opened`, `position:closed` and `order:cancelled` so other parts of the app can react to changes.
@@ -28,7 +29,7 @@ Notable configuration files include:
 - [`app/services/dealTrackers-source-tv-log/config/tv-logs.json`](app/services/dealTrackers-source-tv-log/config/tv-logs.json) – directories containing TradingView CSV logs.
 - [`app/services/dealTrackers-source-mt5-log/config/mt5-logs.json`](app/services/dealTrackers-source-mt5-log/config/mt5-logs.json) – directories containing MetaTrader reports.
 - [`app/services/dealTrackers-chartImages/config/chart-images.json`](app/services/dealTrackers-chartImages/config/chart-images.json) – chart screenshot service settings.
-- [`app/services/points/config/tick-sizes.json`](app/services/points/config/tick-sizes.json) – tick size overrides for points calculations.
+- [`app/services/instrumentInfo/config/tick-sizes.json`](app/services/instrumentInfo/config/tick-sizes.json) – tick size overrides for instrument metadata and point calculations.
 
 ## Services
 
@@ -41,7 +42,7 @@ Notable configuration files include:
 - **Deal Trackers: MT5 Log Source** – parses MetaTrader 5 reports for closed trades. [Details](app/services/dealTrackers-source-mt5-log/README.md)
 - **Webhooks** – converts raw webhook payloads into order card rows. [Details](app/services/webhooks/README.md)
 - **Command Line** – text interface for quick actions. [Details](docs/command-line.md)
-- **Points** – converts price differences into point values using tick sizes. [Details](app/services/points/README.md)
+- **Instrument information** – centralizes quotes, trading metadata, tick-size overrides, and point conversion. [Details](docs/instrument-info.md)
 - **Order Calculator** – shared stop-loss, take-profit and position sizing math. [Details](docs/order-calculator.md)
 - **Event Bus** – broadcasts order lifecycle events. [Details](docs/events.md)
 - **Actions Bus** – routes service events to command runners for automation. [Details](docs/actions-bus.md)

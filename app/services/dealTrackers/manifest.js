@@ -19,9 +19,11 @@ function initService(servicesApi = {}) {
   } catch {
     cfg = {};
   }
-  if (cfg.enabled === false) return;
-  dealTrackers.init(cfg);
+  dealTrackers.init(cfg.enabled === false ? {} : cfg);
   servicesApi.dealTrackers = dealTrackers;
+  settings.onApply('deal-trackers', ({ config }) => {
+    dealTrackers.init(config?.enabled === false ? {} : config);
+  });
 }
 
 module.exports = { initService };

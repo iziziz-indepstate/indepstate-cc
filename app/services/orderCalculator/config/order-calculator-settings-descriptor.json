@@ -1,6 +1,27 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Order calculator",
+    "rawEditor": {
+      "path": "riskUsd.bySymbol",
+      "type": "object",
+      "label": "Symbol risks JSON"
+    }
+  },
   "options": {
-    "profitRate": { "type": "number", "description": "Default profit rate (multiplier for stop loss)" }
+    "profitRate": { "type": "number", "description": "Default profit rate (multiplier for stop loss)" },
+    "riskUsd": {
+      "description": "Shared default risk in USD",
+      "byInstrumentType": {
+        "description": "Default risk by instrument type",
+        "EQ": { "type": "number", "description": "Default equity risk in USD" },
+        "FX": { "type": "number", "description": "Default FX risk in USD" },
+        "CX": { "type": "number", "description": "Default crypto risk in USD" }
+      },
+      "bySymbol": {
+        "description": "Default risk overrides by symbol",
+        "__allowUnknown": true,
+        "__replace": true
+      }
+    }
   }
 }

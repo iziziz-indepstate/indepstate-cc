@@ -13,6 +13,10 @@
       "CFD": { "type": "string", "description": "Provider for CFD instruments" },
       "OPT": { "type": "string", "description": "Provider for option block instruments" }
     },
+    "bySymbol": {
+      "description": "Execution provider per symbol",
+      "__allowUnknown": true
+    },
     "providers": {
       "description": "Provider configurations",
       "__allowUnknown": true,
@@ -55,6 +59,14 @@
           "description": "Exchange options",
           "defaultType": { "type": "string", "description": "Default market type" }
         },
+        "protectiveOrders": {
+          "description": "Protective SL/TP order safety settings",
+          "manualModificationStrategy": {
+            "type": "string",
+            "description": "How to handle externally moved tracked protective orders: adopt the broker price or stop managing that bracket",
+            "enum": ["adopt", "stop-managing"]
+          }
+        },
         "params": {
           "description": "Additional parameters",
           "recvWindow": { "type": "number", "description": "Receive window" }
@@ -63,6 +75,64 @@
           "description": "Symbol remapping",
           "BTCUSDT": { "type": "string", "description": "BTC/USDT symbol" },
           "ETHUSDT": { "type": "string", "description": "ETH/USDT symbol" }
+        }
+      },
+      "ibkr": {
+        "description": "Interactive Brokers provider settings",
+        "adapter": { "type": "string", "description": "Adapter name" },
+        "enabled": { "type": "boolean", "description": "Enable IBKR execution" },
+        "mode": { "type": "string", "description": "IBKR environment: paper or live" },
+        "debug": { "type": "boolean", "description": "Print IBKR adapter logs to the console" },
+        "host": { "type": "string", "description": "TWS / IB Gateway host" },
+        "port": { "type": "number", "description": "TWS / IB Gateway API port" },
+        "clientId": { "type": "number", "description": "IBKR API client ID" },
+        "accountId": { "type": "string", "description": "IBKR account ID" },
+        "defaultTif": { "type": "string", "description": "Default time in force" },
+        "instruments": {
+          "description": "IBKR contract mappings by symbol",
+          "__allowUnknown": true
+        },
+        "quoteTimeoutMs": { "type": "number", "description": "Quote timeout ms" },
+        "marketDataType": { "type": "number", "description": "Market data type" },
+        "defaultTickSize": { "type": "string", "description": "Fallback tick size" },
+        "contractResolveTimeoutMs": { "type": "number", "description": "Contract resolution timeout ms" },
+        "commissionReportTimeoutMs": { "type": "number", "description": "How long to wait for broker-reported realized P&L before showing closed/unknown" },
+        "trackExternalExecutions": { "type": "boolean", "description": "Infer unambiguous closes submitted through TWS or other IBKR clients; requires Master API client ID 0 for complete coverage" },
+        "contractResolution": {
+          "description": "Dynamic contract resolution defaults",
+          "enabled": { "type": "boolean", "description": "Resolve missing contracts through IBKR" },
+          "profiles": {
+            "description": "Named IBKR contract resolution profiles",
+            "__allowUnknown": true,
+            "STK": {
+              "description": "Stock contract resolution profile",
+              "secType": { "type": "string", "description": "IBKR security type" },
+              "exchange": { "type": "string", "description": "IBKR destination exchange" },
+              "currency": { "type": "string", "description": "Contract currency" },
+              "preferredPrimaryExchanges": {
+                "description": "Preferred primary exchanges",
+                "item": { "type": "string", "description": "Exchange" }
+              }
+            },
+            "CFD": {
+              "description": "CFD contract resolution profile",
+              "secType": { "type": "string", "description": "IBKR security type" },
+              "exchange": { "type": "string", "description": "IBKR destination exchange" },
+              "currency": { "type": "string", "description": "Contract currency" },
+              "preferredPrimaryExchanges": {
+                "description": "Preferred primary exchanges",
+                "item": { "type": "string", "description": "Exchange" }
+              }
+            }
+          },
+          "profileBySymbol": {
+            "description": "Contract resolution profile per symbol",
+            "__allowUnknown": true
+          },
+          "defaultProfile": {
+            "type": "string",
+            "description": "Profile used when no instrument-specific profile is selected"
+          }
         }
       }
     }

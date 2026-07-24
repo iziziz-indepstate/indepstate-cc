@@ -1,5 +1,5 @@
 // app/services/webhooks/parsers/atr.js
-const { toPoints } = require('../../points');
+const { toPoints } = require('../../instrumentInfo/points');
 
 const NUM = '[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?';
 const RE_NESTED = new RegExp(

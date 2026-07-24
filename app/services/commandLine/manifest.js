@@ -10,9 +10,11 @@ settings.register(
 );
 
 function initService(servicesApi = {}) {
+  const { config } = settings.readConfig('command-line') || {};
   const cmdService = createCommandService({
     commands: servicesApi.commands,
     executionApi: servicesApi,
+    aliases: config && config.aliases,
     onAdd(row) {
       const win = BrowserWindow.getAllWindows()[0];
       if (win && !win.isDestroyed()) {
@@ -30,6 +32,7 @@ function initService(servicesApi = {}) {
     }
   });
   servicesApi.commandLine = cmdService;
+  settings.onApply('command-line', ({ config }) => cmdService.configure({ aliases: config?.aliases }));
   if (servicesApi.actionBus) {
     const runner = (cmd) => cmdService.run(cmd);
     if (typeof servicesApi.actionBus.registerCommandRunner === 'function') {
@@ -55,6 +58,12 @@ function hookRenderer(ipcRenderer) {
       if (Array.isArray(list)) shortcuts = new Set(list.map(String));
     })
     .catch(() => {});
+
+  ipcRenderer.on('settings:changed', (_event, result) => {
+    if (result?.section !== 'command-line') return;
+    const list = result.config?.shortcuts;
+    shortcuts = new Set(Array.isArray(list) ? list.map(String) : []);
+  });
 
   document.addEventListener('keydown', (e) => {
     const active = document.activeElement;

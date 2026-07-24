@@ -3,6 +3,8 @@
   "options": {
     "bySymbol": {
       "description": "Tick size overrides by symbol",
+      "__allowUnknown": true,
+      "__replace": true,
       "BNBUSDT.P": { "type": "number", "description": "Tick size for BNBUSDT.P" },
       "AIOTUSDT.P": { "type": "number", "description": "Tick size for AIOTUSDT.P" }
     },

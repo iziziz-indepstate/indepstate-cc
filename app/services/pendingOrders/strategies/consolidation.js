@@ -24,6 +24,22 @@ function B1_TAIL(bars, side, _price) {
   return side === 'long' ? b1.low : b1.high;
 }
 
+// LEVEL_OFFSET anchors the stop on the opposite side of the watched level.
+// The pending hub later converts this stop price to the complete distance from
+// the strategy's actual entry price, so that distance includes both the move
+// from entry to level and the configured offset beyond the level.
+function LEVEL_OFFSET(_bars, side, price, { tickSize, stopOffsetPts } = {}) {
+  const level = Number(price);
+  const tick = Number(tickSize);
+  const offset = Number(stopOffsetPts);
+  if (!Number.isFinite(level)) throw new Error('LEVEL_OFFSET requires a finite level');
+  if (!Number.isFinite(tick) || tick <= 0) throw new Error('LEVEL_OFFSET requires tickSize > 0');
+  if (!Number.isFinite(offset) || offset <= 0) throw new Error('LEVEL_OFFSET requires stopOffsetPts > 0');
+  if (side === 'long') return level - offset * tick;
+  if (side === 'short') return level + offset * tick;
+  throw new Error(`LEVEL_OFFSET requires side long or short, received: ${side}`);
+}
+
 // B1_10p_GAP offsets the entry price by 10% of the breakout bar range
 // (minimum 0.01) plus 0.02 to place the limit order.
 function B1_10p_GAP(bars, side, price) {
@@ -54,7 +70,9 @@ class ConsolidationStrategy {
     historyLoader,
     historyTimeframe = 'M1',
     historyPreload = false,
-    symbol
+    symbol,
+    tickSize,
+    stopOffsetPts
   } = {}) {
     this.price = Number(price);
     this.side = side;
@@ -66,6 +84,8 @@ class ConsolidationStrategy {
     this.historyLoader = typeof historyLoader === 'function' ? historyLoader : null;
     this.historyPreload = Boolean(historyPreload);
     this.symbol = symbol;
+    this.tickSize = Number(tickSize);
+    this.stopOffsetPts = Number(stopOffsetPts);
     this.initialBars = [];
     this.done = false;
     this.historyLoadPromise = null;
@@ -97,7 +117,11 @@ class ConsolidationStrategy {
     if (!this.rangeRule(p, this.side, seq)) return null;
     this.done = true;
     const limitPrice = this.dealPriceRule(seq, this.side, p);
-    const stopLoss = this.stoppLossRule(seq, this.side, p);
+    const stopLoss = this.stoppLossRule(seq, this.side, p, {
+      tickSize: this.tickSize,
+      stopOffsetPts: this.stopOffsetPts,
+      entryPrice: limitPrice
+    });
     return { limitPrice, stopLoss };
   }
 
@@ -143,5 +167,6 @@ module.exports = {
   KNOWN_EXTREMUM,
   OPPOSITE_EXTREMUM,
   B1_TAIL,
+  LEVEL_OFFSET,
   B1_10p_GAP
 };

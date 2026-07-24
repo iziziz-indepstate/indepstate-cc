@@ -22,6 +22,14 @@ function initService(servicesApi = {}) {
   app.whenReady().then(() => {
     const svc = start(cfg);
     servicesApi.autoUpdater = svc;
+    settings.onApply('auto-updater', ({ config, changedPaths }) => {
+      if (!servicesApi.autoUpdater) return { restartRequiredPaths: changedPaths };
+      servicesApi.autoUpdater.autoDownload = config.autoDownload !== false;
+      servicesApi.autoUpdater.allowPrerelease = config.allowPrerelease === true;
+      if (config.owner && config.repo) {
+        servicesApi.autoUpdater.setFeedURL({ provider: config.provider || 'github', owner: config.owner, repo: config.repo });
+      }
+    });
   }).catch((err) => {
     console.error('[auto-updater] init failed', err);
   });

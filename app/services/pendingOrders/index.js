@@ -4,6 +4,7 @@ const {
   B1_RANGE_CONSOLIDATION,
   KNOWN_EXTREMUM,
   B1_TAIL,
+  LEVEL_OFFSET,
   B1_10p_GAP
 } = require('./strategies/consolidation');
 const { FalseBreakStrategy } = require('./strategies/falseBreak');
@@ -23,6 +24,7 @@ module.exports = {
   B1_RANGE_CONSOLIDATION,
   KNOWN_EXTREMUM,
   B1_TAIL,
+  LEVEL_OFFSET,
   B1_10p_GAP,
   FalseBreakStrategy,
   LimitByCurrentStrategy,

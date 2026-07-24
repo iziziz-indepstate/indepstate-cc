@@ -42,7 +42,13 @@ let cfg = {};
 try { cfg = loadConfig('../services/tradeRules/config/trade-rules.json'); }
 catch { cfg = {}; }
 
-module.exports = buildTradeRules(cfg);
+const singleton = buildTradeRules(cfg);
+singleton.configure = function configure(next = {}) {
+  this.rules = buildTradeRules(next).rules;
+  return this;
+};
+
+module.exports = singleton;
 module.exports.TradeRules = TradeRules;
 module.exports.TradeRule = TradeRule;
 module.exports.MaxOrderPriceDeviationRule = MaxOrderPriceDeviationRule;

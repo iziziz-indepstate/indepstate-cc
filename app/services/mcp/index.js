@@ -1,4 +1,5 @@
 const express = require('express');
+const { createProviderResolver } = require('../brokerage/providerResolver');
 
 const DEFAULT_TIMEOUT_MS = 5000;
 const MAX_TIMEOUT_MS = 60000;
@@ -37,11 +38,10 @@ function createGetDealsHistoryHandler(servicesApi = {}) {
 }
 
 function normalizeDealsHistoryInput(input = {}, brokerage = {}) {
-  const executionConfig = typeof brokerage.getExecutionConfig === 'function'
-    ? brokerage.getExecutionConfig()
-    : {};
-  const provider = String(input.provider || executionConfig.default || '').trim().toLowerCase();
-  if (!provider) throw new Error('provider is required');
+  const provider = resolveBrokerageProvider(
+    { provider: input.provider },
+    brokerage
+  );
 
   const from = parseIsoDate(input.from, 'from', true);
   const to = parseIsoDate(input.to || new Date().toISOString(), 'to', true);
@@ -101,14 +101,13 @@ function createGetPriceBarsHandler(servicesApi = {}) {
 }
 
 function normalizePriceBarsInput(input = {}, brokerage = {}) {
-  const executionConfig = typeof brokerage.getExecutionConfig === 'function'
-    ? brokerage.getExecutionConfig()
-    : {};
-  const provider = String(input.provider || executionConfig.default || '').trim().toLowerCase();
-  if (!provider) throw new Error('provider is required');
-
   const symbol = String(input.symbol || '').trim();
   if (!symbol) throw new Error('symbol is required');
+
+  const provider = resolveBrokerageProvider(
+    { provider: input.provider, symbol, payload: input },
+    brokerage
+  );
 
   const timeframe = String(input.timeframe || 'M1').trim().toUpperCase();
   if (!timeframe) throw new Error('timeframe is required');
@@ -263,6 +262,16 @@ function clampBarsLimit(value) {
   const n = Number(value ?? DEFAULT_BARS_LIMIT);
   if (!Number.isFinite(n) || n <= 0) return DEFAULT_BARS_LIMIT;
   return Math.min(Math.trunc(n), MAX_BARS_LIMIT);
+}
+
+function resolveBrokerageProvider(context = {}, brokerage = {}) {
+  if (typeof brokerage.resolveProvider === 'function') {
+    return brokerage.resolveProvider(context).provider;
+  }
+  const resolver = createProviderResolver({
+    getExecutionConfig: brokerage.getExecutionConfig
+  });
+  return resolver.resolveProvider(context).provider;
 }
 
 function normalizeHttpPath(value) {

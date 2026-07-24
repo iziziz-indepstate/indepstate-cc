@@ -67,7 +67,8 @@
     .card__status--pending { background:#9ca3af; }
     .card__status--pending-exec { background:#9ca3af; color:#000; border-radius:4px; padding:2px 6px; width:auto; height:auto; }
     .card__status--placed { background:#3b82f6; }
-    .card__status--executing { background:#3b82f6; }
+    .card__status--executing { background:#f59e0b; }
+    .card__status--closed { background:#6b7280; }
     .card__status--profit { background:var(--green); }
     .card__status--loss { background:var(--red); }
     .retry-btn { width:22px; height:22px; border-radius:50%; border:1px solid var(--border); background:#18181b; color:#fff; font-size:11px; margin-left:6px; cursor:pointer; }
@@ -77,8 +78,10 @@
     /* settings panel */
     #settings-btn{background:none;border:1px solid var(--border);border-radius:8px;padding:6px;cursor:pointer;color:var(--text);}
     #settings-btn:hover{filter:brightness(1.1)}
+    #settings-btn.settings-restart-required{border-color:#f59e0b;color:#fbbf24;box-shadow:0 0 0 1px rgba(245,158,11,.2)}
     #settings-panel{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;z-index:10;}
     #settings-dialog{background:var(--panel);border:1px solid var(--border);border-radius:8px;width:600px;min-height:300px;display:flex;overflow:hidden;position:relative;height:80vh;}
+    #settings-restart-required{display:none;position:absolute;left:160px;right:36px;top:7px;padding:4px 8px;border:1px solid rgba(245,158,11,.5);border-radius:5px;background:rgba(245,158,11,.12);color:#fbbf24;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;z-index:1;}
     #settings-sections{width:150px;border-right:1px solid var(--border);padding:32px 10px 10px;display:flex;flex-direction:column;gap:4px;overflow:auto;}
     #settings-sections div{cursor:pointer;padding:4px;border-radius:4px;}
     #settings-sections div:hover{background:rgba(255,255,255,0.05)}
@@ -98,6 +101,18 @@
     #settings-fields .settings-window-state-actions{display:flex;gap:8px;flex-wrap:wrap;}
     #settings-fields .settings-window-state-actions button{border:1px solid var(--border);background:#18181b;color:var(--text);border-radius:4px;padding:4px 8px;cursor:pointer;}
     #settings-fields .settings-window-state-actions button:hover{filter:brightness(1.1)}
+    #settings-fields .settings-editor-controls{display:flex;gap:4px;margin-bottom:10px;}
+    #settings-fields .settings-editor-controls button{border:1px solid var(--border);background:#18181b;color:var(--muted);border-radius:4px;padding:5px 10px;cursor:pointer;}
+    #settings-fields .settings-editor-controls button.active{background:rgba(255,255,255,.1);color:var(--text);border-color:#52525b;}
+    #settings-fields .settings-raw-editor textarea{box-sizing:border-box;width:100%;resize:vertical;padding:10px;border:1px solid var(--border);border-radius:6px;background:#0f0f11;color:var(--text);font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;line-height:1.45;tab-size:2;}
+    #settings-fields .settings-raw-editor textarea[data-role="raw-json"]{min-height:48vh;}
+    #settings-fields .settings-snippet-toggle{margin-top:8px;border:1px dashed var(--border);background:#18181b;color:var(--text);border-radius:4px;padding:5px 9px;cursor:pointer;}
+    #settings-fields .settings-snippet-panel{margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;background:rgba(0,0,0,.15);}
+    #settings-fields .settings-snippet-panel textarea{min-height:100px;}
+    #settings-fields .settings-snippet-actions{display:flex;gap:6px;margin-top:8px;}
+    #settings-fields .settings-snippet-actions button{border:1px solid var(--border);background:#18181b;color:var(--text);border-radius:4px;padding:4px 8px;cursor:pointer;}
+    #settings-fields .settings-raw-editor textarea:focus{outline:1px solid #71717a;border-color:#71717a;}
+    #settings-fields .settings-raw-error{margin-top:6px;color:var(--red);font-size:12px;white-space:pre-wrap;}
     #settings-close{position:absolute;top:8px;right:6px;border:none;background:none;color:var(--text);cursor:pointer;}
 
     /* command line input at bottom */
@@ -115,6 +130,7 @@
   <div id="settings-panel">
     <div id="settings-dialog">
       <button id="settings-close">✖</button>
+      <div id="settings-restart-required" title="Saved settings that will take effect after restarting ISCC"></div>
       <div id="settings-sections"></div>
       <div id="settings-fields"></div>
     </div>

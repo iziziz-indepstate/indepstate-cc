@@ -28,14 +28,6 @@
         }
       }
     },
-    "defaultEquityStopUsd": {
-      "type": "number",
-      "description": "Default equity stop in USD"
-    },
-    "defaultCxStopUsd": {
-      "type": "number",
-      "description": "Default crypto stop in USD"
-    },
     "closedCardEventStrategy": {
       "type": "string",
       "description": "How to handle events for closed cards"

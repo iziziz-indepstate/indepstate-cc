@@ -5,8 +5,9 @@ This file defines event sources and display options for order cards in the UI.
 ## Parameters
 
 - `sources`: list of event sources (webhook, file, etc.).
-- `defaultEquityStopUsd`: default stop value in USD for equity cards.
 - `closedCardEventStrategy`: reaction to a new event for a ticker whose card is already closed (`ignore` or `revive`).
+
+Default Risk $ values and symbol overrides are configured in the shared order-calculator settings. See [order-calculator.md](order-calculator.md).
 
 ### Display options
 - `showBidAsk`: boolean, default `false`. When `true`, the card header shows the Bid/Ask price pair next to the ticker and updates with quotes.

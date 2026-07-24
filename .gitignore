@@ -4,6 +4,7 @@ out/
 dist/
 /config/
 node_modules/
+*.pyc
 .env
 *-lock.json
 *.log

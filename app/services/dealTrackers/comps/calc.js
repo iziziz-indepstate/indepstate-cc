@@ -1,4 +1,4 @@
-const points = require('../../points');
+const points = require('../../instrumentInfo/points');
 
 function round2(n) {
   return Math.round(n * 100) / 100;

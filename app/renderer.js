@@ -2,29 +2,23 @@
 const {ipcRenderer} = require('electron');
 const path = require('path');
 const loadConfig = require('./config/load');
+const settingsRuntime = require('./services/settings');
 const servicesApi = require('./services/servicesApi');
 const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const {detectInstrumentType} = require("./services/instruments");
-const {resolveTickSize} = require('./services/points');
 const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
+const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumentInfo/points');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
-const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
-const envEquityStop = Number(process.env.DEFAULT_EQUITY_STOP_USD);
-const EQUITY_DEFAULT_STOP_USD = Number.isFinite(envEquityStop)
-  ? envEquityStop
-  : Number(orderCardsCfg?.defaultEquityStopUsd) || 0;
+const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('./services/levelOrder/strategy');
+let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
+let levelOrderCfg = loadConfig('../services/levelOrder/config/level-order.json');
 
-const envCxStop = Number(process.env.DEFAULT_CX_STOP_USD);
-const CX_DEFAULT_STOP_USD = Number.isFinite(envCxStop)
-  ? envCxStop
-  : Number(orderCardsCfg?.defaultCxStopUsd) || 0;
-
-const SHOW_BID_ASK = !!(orderCardsCfg && orderCardsCfg.showBidAsk);
-const SHOW_SPREAD = !!(orderCardsCfg && orderCardsCfg.showSpread);
+let SHOW_BID_ASK = !!(orderCardsCfg && orderCardsCfg.showBidAsk);
+let SHOW_SPREAD = !!(orderCardsCfg && orderCardsCfg.showSpread);
 
 
 const envInstrRefresh = Number(process.env.INSTRUMENT_REFRESH_MS);
-const INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh)
+let INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh)
   ? envInstrRefresh
   : Number(orderCardsCfg?.instrumentRefreshMs) || 1000;
 let optionStratValuationRefreshMs = 5000;
@@ -38,8 +32,8 @@ const DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS = {
 };
 let optionStratDisplayFields = {...DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS};
 
-const CLOSED_CARD_EVENT_STRATEGY = orderCardsCfg?.closedCardEventStrategy || 'ignore';
-const BUTTON_ROWS = Number(orderCardsCfg?.buttonRows) || 1;
+let CLOSED_CARD_EVENT_STRATEGY = orderCardsCfg?.closedCardEventStrategy || 'ignore';
+let BUTTON_ROWS = Number(orderCardsCfg?.buttonRows) || 1;
 
 const DEFAULT_CARD_BUTTONS = [
   {label: 'BL', action: 'BL', style: 'bl'},
@@ -49,7 +43,7 @@ const DEFAULT_CARD_BUTTONS = [
   {label: 'SC', action: 'SC', style: 'sc'},
   {label: 'SFB', action: 'SFB', style: 'sc'}
 ];
-const CARD_BUTTONS = Array.isArray(orderCardsCfg?.buttons) && orderCardsCfg.buttons.length
+let CARD_BUTTONS = Array.isArray(orderCardsCfg?.buttons) && orderCardsCfg.buttons.length
   ? orderCardsCfg.buttons.map((b) => Array.isArray(b) ? {label: b[0], action: b[1], style: b[2]} : b)
     .filter((b) => b && b.label && b.action)
   : DEFAULT_CARD_BUTTONS;
@@ -81,7 +75,7 @@ const closedCardStrategies = {
   }
 };
 
-const handleClosedCard = closedCardStrategies[CLOSED_CARD_EVENT_STRATEGY] || closedCardStrategies.ignore;
+let handleClosedCard = closedCardStrategies[CLOSED_CARD_EVENT_STRATEGY] || closedCardStrategies.ignore;
 
 // ======= App state =======
 const state = {rows: [], filter: '', autoscroll: true};
@@ -109,10 +103,10 @@ ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
 // Equities:  { qty, price, sl, tp, risk, tpTouched }
 const uiState = new Map();
 
-// Per-card execution state (pending/placed/executing/profit/loss)
+// Per-card execution state (pending/placed/executing/closed/profit/loss)
 const cardStates = new Map();
 // Order for sorting cards by execution state
-const cardStateOrder = {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, profit: 5, loss: 6};
+const cardStateOrder = {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7};
 
 // Short labels for pending execution orders
 const pendingExecLabels = new Map(); // key -> label
@@ -121,6 +115,10 @@ const pendingExecLabels = new Map(); // key -> label
 const pendingByReqId = new Map();
 const pendingIdByReqId = new Map();
 const ticketToKey = new Map(); // ticket -> rowKey
+const levelOrderGroups = new Map(); // parent requestId -> grouped child state
+const levelOrderChildToGroup = new Map(); // child requestId -> parent requestId
+const levelOrderPendingToGroup = new Map(); // adapter pendingId/cid -> parent requestId
+const levelOrderTicketToGroup = new Map(); // provider ticket -> parent requestId
 const placedOrderByKey = new Map(); // rowKey -> { provider, ticket, symbol }
 const retryCounts = new Map(); // reqId -> retry count
 const instantExecutedKeys = new Set();
@@ -129,7 +127,30 @@ const instantExecutedKeys = new Set();
 const userTouchedByTicker = new Map(); // ticker -> boolean
 
 // котировки по тикерам
-const instrumentInfo = new Map(); // ticker -> {price,bid,ask}
+const instrumentInfo = new Map(); // provider:symbol -> flattened instrument snapshot for UI use
+function instrumentInfoKey(ticker, provider) {
+  return `${String(provider || '').trim().toLowerCase()}:${String(ticker || '').trim().toUpperCase()}`;
+}
+function instrumentInfoFor(ticker, rowOrProvider) {
+  const provider = typeof rowOrProvider === 'object' ? rowOrProvider?.provider : rowOrProvider;
+  const inferredProvider = provider || state.rows.find(row => row.ticker === ticker)?.provider;
+  return instrumentInfo.get(instrumentInfoKey(ticker, inferredProvider)) || instrumentInfo.get(ticker);
+}
+function flattenInstrumentSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  if (!snapshot.quote && !snapshot.metadata) return { ...snapshot, snapshot };
+  return {
+    ...(snapshot.quote || {}),
+    ...(snapshot.metadata || {}),
+    provider: snapshot.provider,
+    symbol: snapshot.symbol,
+    instrumentType: snapshot.instrumentType,
+    sources: snapshot.sources || {},
+    quoteUpdatedAt: snapshot.quoteUpdatedAt,
+    metadataUpdatedAt: snapshot.metadataUpdatedAt,
+    snapshot
+  };
+}
 // історія спредів у пунктах: ticker -> number[] (trim до 100)
 const spreadHistory = new Map();
 
@@ -143,9 +164,74 @@ const $settingsPanel = document.getElementById('settings-panel');
 const $settingsSections = document.getElementById('settings-sections');
 const $settingsFields = document.getElementById('settings-fields');
 const $settingsClose = document.getElementById('settings-close');
+const $settingsRestart = document.getElementById('settings-restart-required');
 const settingsForms = new Map();
+const DESCRIPTOR_META_KEYS = new Set(['description', 'type', 'item', 'default', 'enum']);
 
 loadRendererHooks();
+
+function applyOrderCardsConfig(config = {}) {
+  orderCardsCfg = config;
+  SHOW_BID_ASK = !!config.showBidAsk;
+  SHOW_SPREAD = !!config.showSpread;
+  INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh) ? envInstrRefresh : Number(config.instrumentRefreshMs) || 1000;
+  CLOSED_CARD_EVENT_STRATEGY = config.closedCardEventStrategy || 'ignore';
+  BUTTON_ROWS = Number(config.buttonRows) || 1;
+  CARD_BUTTONS = Array.isArray(config.buttons) && config.buttons.length
+    ? config.buttons.map(b => Array.isArray(b) ? { label: b[0], action: b[1], style: b[2] } : b)
+      .filter(b => b && b.label && b.action)
+    : DEFAULT_CARD_BUTTONS;
+  handleClosedCard = closedCardStrategies[CLOSED_CARD_EVENT_STRATEGY] || closedCardStrategies.ignore;
+  render();
+}
+
+function renderRestartStatus(status = []) {
+  if (!$settingsRestart) return;
+  const entries = Array.isArray(status) ? status : [];
+  if (!entries.length) {
+    $settingsRestart.style.display = 'none';
+    $settingsRestart.textContent = '';
+    $settingsBtn.classList.remove('settings-restart-required');
+    $settingsBtn.title = 'Settings';
+    return;
+  }
+  $settingsRestart.textContent = `Restart required: ${entries.map(entry => `${entry.section} (${(entry.paths || []).join(', ')})`).join('; ')}`;
+  $settingsRestart.style.display = 'block';
+  $settingsBtn.classList.add('settings-restart-required');
+  $settingsBtn.title = $settingsRestart.textContent;
+}
+
+settingsRuntime.onApply('ui', ({ config }) => {
+  if (typeof config.autoscroll === 'boolean') state.autoscroll = config.autoscroll;
+});
+settingsRuntime.onApply('order-cards', ({ config }) => applyOrderCardsConfig(config));
+settingsRuntime.onApply('order-calculator', () => render());
+settingsRuntime.onApply('level-order', ({ config }) => {
+  levelOrderCfg = config || {};
+  render();
+});
+settingsRuntime.onApply('optionstrat', ({ config }) => {
+  const ms = Number(config?.valuationRefreshMs);
+  if (Number.isFinite(ms) && ms > 0) optionStratValuationRefreshMs = ms;
+  optionStratDisplayFields = normalizeOptionStratDisplayFields(config?.displayFields);
+  render();
+});
+
+ipcRenderer.on('settings:changed', async (_event, result) => {
+  if (!result?.saved) return;
+  const local = await settingsRuntime.applyConfig(result.section, result.config, result.appliedPaths || [], { source: 'settings-ui-renderer' });
+  const failedPaths = new Set(local.restartRequiredPaths || []);
+  settingsRuntime.commitAppliedConfig(
+    result.section,
+    result.config,
+    (result.appliedPaths || []).filter(pathName => !failedPaths.has(pathName))
+  );
+  if (local.errors.length) {
+    await ipcRenderer.invoke('settings:renderer-failed', result.section, result.appliedPaths || [], local.errors.join('; ')).catch(() => {});
+  }
+  ipcRenderer.invoke('settings:restart-status').then(renderRestartStatus).catch(() => {});
+});
+ipcRenderer.invoke('settings:restart-status').then(renderRestartStatus).catch(() => {});
 
 function loadRendererHooks() {
   let dirs = [];
@@ -169,6 +255,7 @@ function loadRendererHooks() {
 
 function loadSettingsSections() {
   settingsForms.clear();
+  ipcRenderer.invoke('settings:restart-status').then(renderRestartStatus).catch(() => {});
   ipcRenderer.invoke('settings:list').then((sections = []) => {
     $settingsSections.innerHTML = '';
     let prevGroup;
@@ -189,6 +276,103 @@ function loadSettingsSections() {
   });
 }
 
+function setNestedSettingValue(obj, path, value) {
+  const parts = path.split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
+    const nextIsIndex = /^\d+$/.test(parts[i + 1]);
+    if (nextIsIndex) {
+      if (!Array.isArray(cur[part])) cur[part] = [];
+    } else if (typeof cur[part] !== 'object' || cur[part] === null || Array.isArray(cur[part])) {
+      cur[part] = {};
+    }
+    cur = cur[part];
+  }
+  const last = parts[parts.length - 1];
+  if (/^\d+$/.test(last)) cur[Number(last)] = value;
+  else cur[last] = value;
+}
+
+function getNestedSettingValue(obj, path) {
+  if (!path) return obj;
+  return path.split('.').reduce((value, part) => value == null ? undefined : value[part], obj);
+}
+
+function deleteNestedSettingValue(obj, path) {
+  const parts = String(path || '').split('.').filter(Boolean);
+  if (!parts.length) return;
+  const parent = parts.slice(0, -1)
+    .reduce((value, part) => value == null ? undefined : value[part], obj);
+  if (parent && typeof parent === 'object') delete parent[parts.at(-1)];
+}
+
+function cloneSettingsValue(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function serializeStructuredSettingsForm(form, name) {
+  const data = {};
+  for (const input of form.querySelectorAll('input')) {
+    const key = input.dataset.field;
+    if (!key) continue;
+    if (key.split('.').some(part => part.startsWith('__'))) continue;
+    let value;
+    if (input.dataset.arrayMarker === '1') value = [];
+    else if (input.type === 'checkbox') value = input.checked;
+    else if (input.type === 'number') value = input.value === '' ? null : Number(input.value);
+    else value = input.value;
+    setNestedSettingValue(data, key, value);
+  }
+  for (const group of form.querySelectorAll('.settings-dynamic-map[data-setting-path]')) {
+    const values = {};
+    const valueRole = group.dataset.valueRole || 'value';
+    for (const row of group.querySelectorAll('.settings-dynamic-map-row')) {
+      const symbol = row.querySelector('input[data-role="symbol"]')?.value.trim();
+      const value = Number(row.querySelector(`input[data-role="${valueRole}"]`)?.value);
+      if (symbol && Number.isFinite(value) && value > 0) values[symbol] = value;
+    }
+    setNestedSettingValue(data, group.dataset.settingPath, values);
+  }
+  return data;
+}
+
+function setRawSettingsError(form, message = '') {
+  const error = form.querySelector('[data-role="raw-json-error"]');
+  if (!error) return;
+  error.textContent = message;
+  error.style.display = message ? 'block' : 'none';
+}
+
+function parseRawSettingsForm(form) {
+  const editor = form.querySelector('textarea[data-role="raw-json"]');
+  if (!editor) return serializeStructuredSettingsForm(form, form.dataset.section);
+  try {
+    const config = JSON.parse(editor.value);
+    if (form.dataset.rawEditorType === 'array' && !Array.isArray(config)) {
+      throw new Error('Configuration must be a JSON array');
+    }
+    if (form.dataset.rawEditorType !== 'array' && (!config || typeof config !== 'object' || Array.isArray(config))) {
+      throw new Error('Configuration must be a JSON object');
+    }
+    setRawSettingsError(form);
+    return config;
+  } catch (error) {
+    setRawSettingsError(form, error?.message || String(error));
+    throw error;
+  }
+}
+
+function serializeSettingsForm(form, name) {
+  if (form.dataset.editorMode !== 'json') return serializeStructuredSettingsForm(form, name);
+  const rawConfig = parseRawSettingsForm(form);
+  const rawPath = form.dataset.rawEditorPath || '';
+  if (!rawPath) return rawConfig;
+  const config = serializeStructuredSettingsForm(form, name);
+  setNestedSettingValue(config, rawPath, rawConfig);
+  return config;
+}
+
 function getSettingsInput(form, field) {
   return form.querySelector(`input[data-field="${field}"]`);
 }
@@ -205,7 +389,7 @@ function formatWindowState(state) {
   return `width ${value('width')} / height ${value('height')} / x ${value('x')} / y ${value('y')}`;
 }
 
-function appendUiWindowStateTools(form) {
+function appendUiWindowStateTools(form, parent = form) {
   const group = document.createElement('div');
   group.className = 'settings-group settings-window-state';
 
@@ -233,7 +417,7 @@ function appendUiWindowStateTools(form) {
   actions.appendChild(applyBtn);
 
   group.appendChild(actions);
-  form.insertBefore(group, form.firstChild);
+  parent.insertBefore(group, parent.firstChild);
 
   let lastState = null;
   const refresh = () => ipcRenderer.invoke('window:get-state')
@@ -262,6 +446,110 @@ function appendUiWindowStateTools(form) {
   refresh();
 }
 
+function appendNumericSymbolMapTools(form, {
+  path,
+  title,
+  values = {},
+  valuePlaceholder,
+  valueRole = 'value',
+  rowClass = '',
+  addLabel = 'Add symbol override',
+  onChange
+} = {}, parent = form) {
+  const group = document.createElement('div');
+  group.className = 'settings-group settings-dynamic-map';
+  group.dataset.settingPath = path;
+  group.dataset.valueRole = valueRole;
+
+  const titleElement = document.createElement('div');
+  titleElement.className = 'settings-group-title';
+  titleElement.textContent = title;
+  group.appendChild(titleElement);
+
+  const rows = document.createElement('div');
+  rows.className = 'settings-dynamic-map-rows';
+  group.appendChild(rows);
+
+  const markDirty = () => {
+    form.dataset.dirty = '1';
+    onChange?.();
+  };
+  const addRow = (symbol = '', numericValue = '') => {
+    const row = document.createElement('div');
+    row.className = `settings-dynamic-map-row ${rowClass}`.trim();
+    row.style.display = 'grid';
+    row.style.gridTemplateColumns = '1fr 110px auto';
+    row.style.gap = '8px';
+    row.style.alignItems = 'center';
+    row.style.marginBottom = '8px';
+
+    const symbolInput = document.createElement('input');
+    symbolInput.type = 'text';
+    symbolInput.placeholder = 'SYMBOL';
+    symbolInput.value = symbol;
+    symbolInput.dataset.role = 'symbol';
+    symbolInput.addEventListener('input', markDirty);
+    row.appendChild(symbolInput);
+
+    const valueInput = document.createElement('input');
+    valueInput.type = 'number';
+    valueInput.step = 'any';
+    valueInput.placeholder = valuePlaceholder;
+    valueInput.value = numericValue == null ? '' : String(numericValue);
+    valueInput.dataset.role = valueRole;
+    valueInput.addEventListener('input', markDirty);
+    row.appendChild(valueInput);
+
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.textContent = 'Remove';
+    remove.className = 'settings-array-remove';
+    remove.addEventListener('click', () => {
+      row.remove();
+      markDirty();
+    });
+    row.appendChild(remove);
+    rows.appendChild(row);
+  };
+
+  Object.entries(values || {}).forEach(([symbol, value]) => addRow(symbol, value));
+
+  const add = document.createElement('button');
+  add.type = 'button';
+  add.textContent = addLabel;
+  add.className = 'settings-array-add';
+  add.addEventListener('click', () => {
+    addRow('', '');
+    markDirty();
+  });
+  group.appendChild(add);
+  parent.appendChild(group);
+}
+
+function numericSymbolMapSpecs(name, config = {}) {
+  if (name === 'tick-sizes') {
+    return [{
+      path: 'bySymbol',
+      title: 'Tick size overrides by symbol',
+      values: config.bySymbol || {},
+      valuePlaceholder: 'Tick size',
+      valueRole: 'tickSize',
+      rowClass: 'tick-size-symbol-row'
+    }];
+  }
+  if (name === 'order-calculator') {
+    return [{
+      path: 'riskUsd.bySymbol',
+      title: 'Default risk overrides by symbol',
+      values: config.riskUsd?.bySymbol || {},
+      valuePlaceholder: 'Risk $',
+      valueRole: 'riskUsd',
+      rowClass: 'risk-symbol-row'
+    }];
+  }
+  return [];
+}
+
 function showSection(name) {
   [...$settingsSections.querySelectorAll('div[data-section]')].forEach(d => {
     d.classList.toggle('active', d.dataset.section === name);
@@ -274,9 +562,27 @@ function showSection(name) {
   }
   ipcRenderer.invoke('settings:get', name).then((res = {}) => {
     const cfg = res.config || res;
-    const desc = (res.descriptor && res.descriptor.options) || {};
+    const descriptorProperties = (res.descriptor && res.descriptor.properties) || {};
+    const rawEditorDescriptor = descriptorProperties.rawEditor === true
+      ? {}
+      : (descriptorProperties.rawEditor && typeof descriptorProperties.rawEditor === 'object'
+          ? descriptorProperties.rawEditor
+          : null);
+    const desc = cloneSettingsValue((res.descriptor && res.descriptor.options) || {});
+    const dynamicMapPaths = numericSymbolMapSpecs(name, cfg).map(spec => spec.path);
+    dynamicMapPaths.forEach(mapPath => deleteNestedSettingValue(desc, mapPath));
     const form = document.createElement('form');
     form.dataset.section = name;
+    form.dataset.editorMode = 'form';
+    const structuredEditor = document.createElement('div');
+    structuredEditor.className = 'settings-structured-editor';
+    form.appendChild(structuredEditor);
+    let structuredEditorChanged = false;
+    let structuredConfigValue = cfg;
+    const markStructuredDirty = () => {
+      structuredEditorChanged = true;
+      form.dataset.dirty = '1';
+    };
     const hasOwn = Object.prototype.hasOwnProperty;
     const getDefault = (d) => (d && hasOwn.call(d, 'default') ? d.default : undefined);
     const build = (parent, cfgObj, descObj, prefix = '') => {
@@ -291,6 +597,14 @@ function showSection(name) {
         const itemsWrap = document.createElement('div');
         const baseParts = prefix ? prefix.split('.') : [];
         const itemIsObjDesc = itemDesc && typeof itemDesc === 'object' && !itemDesc.type && Object.keys(itemDesc).length;
+        if (prefix) {
+          const marker = document.createElement('input');
+          marker.type = 'hidden';
+          marker.dataset.field = prefix;
+          marker.dataset.arrayMarker = '1';
+          marker.value = '';
+          parent.appendChild(marker);
+        }
         const renderItem = (val, idx) => {
           const d = itemDesc;
           const defaultVal = getDefault(d);
@@ -314,7 +628,7 @@ function showSection(name) {
             rm.addEventListener('click', () => {
               itemsWrap.removeChild(group);
               reindex();
-              form.dataset.dirty = '1';
+              markStructuredDirty();
             });
             head.appendChild(rm);
             group.appendChild(head);
@@ -347,10 +661,10 @@ function showSection(name) {
             }
             input.dataset.field = path;
             input.addEventListener('input', () => {
-              form.dataset.dirty = '1';
+              markStructuredDirty();
             });
             input.addEventListener('change', () => {
-              form.dataset.dirty = '1';
+              markStructuredDirty();
             });
             label.appendChild(input);
             const rm = document.createElement('button');
@@ -360,7 +674,7 @@ function showSection(name) {
             rm.addEventListener('click', () => {
               itemsWrap.removeChild(label);
               reindex();
-              form.dataset.dirty = '1';
+              markStructuredDirty();
             });
             label.appendChild(rm);
             itemsWrap.appendChild(label);
@@ -391,7 +705,7 @@ function showSection(name) {
           else if (itemDesc && itemDesc.type === 'boolean') v = false;
           else v = '';
           renderItem(v, itemsWrap.children.length);
-          form.dataset.dirty = '1';
+          markStructuredDirty();
         });
         parent.appendChild(itemsWrap);
         parent.appendChild(addBtn);
@@ -402,9 +716,9 @@ function showSection(name) {
         ...Object.keys(descObj || {})
       ]);
       for (const key of keys) {
-        if (key === 'description') continue;
-        if (key === 'type' && descObj && typeof descObj.type === 'string') continue;
         const hasValue = cfgObj && hasOwn.call(cfgObj, key);
+        if (String(key).startsWith('__')) continue;
+        if (!hasValue && DESCRIPTOR_META_KEYS.has(key)) continue;
         const val = hasValue ? cfgObj[key] : undefined;
         const d = descObj ? descObj[key] : undefined;
         const defaultVal = getDefault(d);
@@ -448,18 +762,174 @@ function showSection(name) {
           const path = prefix ? `${prefix}.${key}` : key;
           input.dataset.field = path;
           input.addEventListener('input', () => {
-            form.dataset.dirty = '1';
+            markStructuredDirty();
           });
           input.addEventListener('change', () => {
-            form.dataset.dirty = '1';
+            markStructuredDirty();
           });
           label.appendChild(input);
           parent.appendChild(label);
         }
       }
     };
-    build(form, cfg, desc);
-    if (name === 'ui') appendUiWindowStateTools(form);
+    const renderStructuredEditor = (config) => {
+      structuredEditor.innerHTML = '';
+      const structuredConfig = cloneSettingsValue(config) || {};
+      const dynamicMapSpecs = numericSymbolMapSpecs(name, config);
+      dynamicMapSpecs.forEach(spec => deleteNestedSettingValue(structuredConfig, spec.path));
+      build(structuredEditor, structuredConfig, desc);
+      if (name === 'ui') appendUiWindowStateTools(form, structuredEditor);
+      dynamicMapSpecs.forEach(spec => {
+        appendNumericSymbolMapTools(form, { ...spec, onChange: markStructuredDirty }, structuredEditor);
+      });
+      structuredConfigValue = config;
+      structuredEditorChanged = false;
+    };
+    renderStructuredEditor(cfg);
+
+    if (rawEditorDescriptor) {
+      const rawEditorPath = String(rawEditorDescriptor.path || '');
+      const initialRawValue = getNestedSettingValue(cfg, rawEditorPath);
+      const rawEditorType = rawEditorDescriptor.type || (Array.isArray(initialRawValue) ? 'array' : 'object');
+      form.dataset.rawEditorPath = rawEditorPath;
+      form.dataset.rawEditorType = rawEditorType;
+      const controls = document.createElement('div');
+      controls.className = 'settings-editor-controls';
+      const formButton = document.createElement('button');
+      formButton.type = 'button';
+      formButton.textContent = 'Form';
+      formButton.dataset.editorMode = 'form';
+      formButton.className = 'active';
+      const jsonButton = document.createElement('button');
+      jsonButton.type = 'button';
+      jsonButton.textContent = rawEditorDescriptor.label || (rawEditorPath ? `${rawEditorPath} JSON` : 'JSON');
+      jsonButton.dataset.editorMode = 'json';
+      controls.append(formButton, jsonButton);
+      form.insertBefore(controls, structuredEditor);
+
+      const rawEditor = document.createElement('div');
+      rawEditor.className = 'settings-raw-editor';
+      rawEditor.hidden = true;
+      const textarea = document.createElement('textarea');
+      textarea.dataset.role = 'raw-json';
+      textarea.spellcheck = false;
+      textarea.setAttribute('aria-label', `${descriptorProperties.name || name} JSON configuration`);
+      const error = document.createElement('div');
+      error.className = 'settings-raw-error';
+      error.dataset.role = 'raw-json-error';
+      error.style.display = 'none';
+      rawEditor.append(textarea, error);
+
+      if (rawEditorDescriptor.snippets === true && rawEditorType === 'array') {
+        const snippetToggle = document.createElement('button');
+        snippetToggle.type = 'button';
+        snippetToggle.className = 'settings-snippet-toggle';
+        snippetToggle.textContent = rawEditorDescriptor.snippetLabel || 'Add JSON snippet';
+        const snippetPanel = document.createElement('div');
+        snippetPanel.className = 'settings-snippet-panel';
+        snippetPanel.hidden = true;
+        const snippetEditor = document.createElement('textarea');
+        snippetEditor.dataset.role = 'raw-json-snippet';
+        snippetEditor.spellcheck = false;
+        snippetEditor.placeholder = '{ "event": "event-name", "action": "commandLine:command" }';
+        const snippetError = document.createElement('div');
+        snippetError.className = 'settings-raw-error';
+        snippetError.dataset.role = 'raw-json-snippet-error';
+        snippetError.style.display = 'none';
+        const snippetActions = document.createElement('div');
+        snippetActions.className = 'settings-snippet-actions';
+        const appendSnippet = document.createElement('button');
+        appendSnippet.type = 'button';
+        appendSnippet.textContent = 'Append';
+        const cancelSnippet = document.createElement('button');
+        cancelSnippet.type = 'button';
+        cancelSnippet.textContent = 'Cancel';
+        snippetActions.append(appendSnippet, cancelSnippet);
+        snippetPanel.append(snippetEditor, snippetError, snippetActions);
+        rawEditor.append(snippetToggle, snippetPanel);
+
+        const setSnippetError = (message = '') => {
+          snippetError.textContent = message;
+          snippetError.style.display = message ? 'block' : 'none';
+        };
+        snippetToggle.addEventListener('click', () => {
+          snippetPanel.hidden = false;
+          snippetEditor.focus();
+        });
+        cancelSnippet.addEventListener('click', () => {
+          snippetPanel.hidden = true;
+          snippetEditor.value = '';
+          setSnippetError();
+        });
+        appendSnippet.addEventListener('click', () => {
+          try {
+            const current = parseRawSettingsForm(form);
+            const parsed = JSON.parse(snippetEditor.value);
+            const additions = Array.isArray(parsed) ? parsed : [parsed];
+            if (!additions.length || additions.some(item => !item || typeof item !== 'object' || Array.isArray(item))) {
+              throw new Error('Snippet must be an action object or an array of action objects');
+            }
+            textarea.value = JSON.stringify([...current, ...additions], null, 2);
+            form.dataset.dirty = '1';
+            setRawSettingsError(form);
+            setSnippetError();
+            snippetEditor.value = '';
+            snippetPanel.hidden = true;
+            textarea.focus();
+          } catch (snippetFailure) {
+            setSnippetError(snippetFailure?.message || String(snippetFailure));
+            snippetEditor.focus();
+          }
+        });
+      }
+      form.appendChild(rawEditor);
+
+      const activateMode = (mode) => {
+        if (mode === form.dataset.editorMode) return true;
+        if (mode === 'json') {
+          const config = structuredEditorChanged
+            ? serializeStructuredSettingsForm(form, name)
+            : structuredConfigValue;
+          const rawValue = getNestedSettingValue(config, rawEditorPath);
+          textarea.value = JSON.stringify(
+            rawValue === undefined ? (rawEditorType === 'array' ? [] : {}) : rawValue,
+            null,
+            2
+          );
+        } else {
+          let rawValue;
+          try {
+            rawValue = parseRawSettingsForm(form);
+          } catch {
+            textarea.focus();
+            return false;
+          }
+          let rawConfig = cloneSettingsValue(structuredEditorChanged
+            ? serializeStructuredSettingsForm(form, name)
+            : structuredConfigValue);
+          if (rawEditorPath) {
+            if (!rawConfig || typeof rawConfig !== 'object' || Array.isArray(rawConfig)) rawConfig = {};
+            setNestedSettingValue(rawConfig, rawEditorPath, rawValue);
+          }
+          else rawConfig = rawValue;
+          renderStructuredEditor(rawConfig);
+        }
+        form.dataset.editorMode = mode;
+        structuredEditor.hidden = mode !== 'form';
+        rawEditor.hidden = mode !== 'json';
+        formButton.classList.toggle('active', mode === 'form');
+        jsonButton.classList.toggle('active', mode === 'json');
+        if (mode === 'json') textarea.focus();
+        return true;
+      };
+
+      formButton.addEventListener('click', () => activateMode('form'));
+      jsonButton.addEventListener('click', () => activateMode('json'));
+      textarea.addEventListener('input', () => {
+        form.dataset.dirty = '1';
+        try { parseRawSettingsForm(form); } catch {}
+      });
+    }
     settingsForms.set(name, form);
     $settingsFields.innerHTML = '';
     $settingsFields.appendChild(form);
@@ -706,6 +1176,12 @@ function runCommand(str) {
 }
 
 function setCardState(key, state) {
+  if (state) {
+    cardStates.set(key, state);
+  } else {
+    cardStates.delete(key);
+  }
+
   const card = cardByKey(key);
   if (!card) return;
   const isOptionCard = card.dataset.instrumentType === 'OPT';
@@ -720,7 +1196,6 @@ function setCardState(key, state) {
   const buttons = card.querySelectorAll('button.btn');
 
   if (state) {
-    cardStates.set(key, state);
     status.style.display = 'inline-block';
     status.className = `card__status card__status--${state}`;
     if (state === 'pending-exec') {
@@ -758,7 +1233,8 @@ function setCardState(key, state) {
           result = await ipcRenderer.invoke('execution:cancel-order', {
             provider: orderInfo.provider,
             ticket: orderInfo.ticket,
-            symbol: orderInfo.symbol
+            symbol: orderInfo.symbol,
+            name: orderInfo.name || currentRow?.name
           });
         } catch (err) {
           result = { status: 'error', reason: err?.message || String(err) };
@@ -773,7 +1249,7 @@ function setCardState(key, state) {
         }
         const finalValuation = result?.valuation || result?.raw?.valuation;
         if (finalValuation) {
-          const current = appState.rows.find(r => rowKey(r) === key);
+          const current = currentRow;
           if (current) current.valuation = finalValuation;
           if (orderInfo) orderInfo.valuation = finalValuation;
         }
@@ -819,6 +1295,26 @@ function setCardState(key, state) {
       status.title = 'Отменить pe';
       status.onclick = () => {
         const reqId = card.dataset.reqId;
+        const currentRow = appState.rows.find(r => rowKey(r) === key);
+        if (currentRow?.cardType === 'levelOrder') {
+          if (!reqId) {
+            for (const group of levelOrderGroupsByKey(key)) cancelLevelOrderTerminalOrders(group, currentRow);
+          }
+          if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId).catch(() => {});
+          if (reqId) {
+            pendingByReqId.delete(reqId);
+            pendingIdByReqId.delete(reqId);
+            retryCounts.delete(reqId);
+            clearLevelOrderGroup(reqId);
+            delete card.dataset.reqId;
+          } else {
+            clearLevelOrderByKey(key);
+          }
+          delete card.dataset.pendingId;
+          setCardState(key, null);
+          render();
+          return;
+        }
         const pendingId = card.dataset.pendingId || (reqId ? pendingIdByReqId.get(reqId) : null);
         if (pendingId) ipcRenderer.invoke('pending:cancel', pendingId).catch(() => {
         });
@@ -881,7 +1377,6 @@ function setCardState(key, state) {
       if (retryBtn) retryBtn.style.display = 'none';
     }
   } else {
-    cardStates.delete(key);
     card.classList.remove('card--mini');
     status.style.display = 'none';
     status.textContent = '';
@@ -948,24 +1443,25 @@ const pendingOptionValuations = new Set();
 function ensureInstrument(ticker, provider) {
   if (!ticker) return;
   if (!state.rows.some(r => r.ticker === ticker && r.provider === provider)) return; // card removed
-  if (instrumentInfo.has(ticker)) return; // already have data
-  if (pendingInstruments.has(ticker)) return; // request in-flight
-  pendingInstruments.add(ticker);
+  const infoKey = instrumentInfoKey(ticker, provider);
+  if (instrumentInfo.has(infoKey)) return; // already have data
+  if (pendingInstruments.has(infoKey)) return; // request in-flight
+  pendingInstruments.add(infoKey);
   ipcRenderer.invoke('instrument:get', {symbol: ticker, provider}).then(info => {
     if (info) {
-      pendingInstruments.delete(ticker);
-      instrumentInfo.set(ticker, info);
+      pendingInstruments.delete(infoKey);
+      instrumentInfo.set(infoKey, flattenInstrumentSnapshot(info));
       updateSpreadForTicker(ticker);
       render();
     } else {
       setTimeout(() => {
-        pendingInstruments.delete(ticker);
+        pendingInstruments.delete(infoKey);
         ensureInstrument(ticker, provider);
       }, 1000);
     }
   }).catch(() => {
     setTimeout(() => {
-      pendingInstruments.delete(ticker);
+      pendingInstruments.delete(infoKey);
       ensureInstrument(ticker, provider);
     }, 1000);
   });
@@ -974,8 +1470,9 @@ function ensureInstrument(ticker, provider) {
 function forgetInstrument(ticker, provider) {
   if (!ticker) return;
   if (state.rows.some(r => r.ticker === ticker && r.provider === provider)) return;
-  instrumentInfo.delete(ticker);
-  pendingInstruments.delete(ticker);
+  const infoKey = instrumentInfoKey(ticker, provider);
+  instrumentInfo.delete(infoKey);
+  pendingInstruments.delete(infoKey);
   ipcRenderer.invoke('instrument:forget', {symbol: ticker, provider}).catch(() => {
   });
 }
@@ -1058,29 +1555,31 @@ function refreshOptionValuation(key, orderInfo) {
     if (running) return;
     running = true;
     try {
-      const tickers = Array.from(new Set((state.rows || []).map(r => r.ticker).filter(Boolean)));
-      if (!tickers.length) return;
+      const instruments = Array.from(new Map((state.rows || [])
+        .filter(r => r.ticker)
+        .map(r => [instrumentInfoKey(r.ticker, r.provider), { ticker: r.ticker, provider: r.provider }])).values());
+      if (!instruments.length) return;
 
-      await Promise.all(tickers.map(async (t) => {
-        const row = state.rows.find(r => r.ticker === t);
+      await Promise.all(instruments.map(async ({ ticker: t, provider }) => {
+        const row = state.rows.find(r => r.ticker === t && r.provider === provider);
         if (!row) return; // пропускаємо, якщо картки вже немає
-        const provider = row.provider;
+        const infoKey = instrumentInfoKey(t, provider);
         // не дублюємо запит, якщо вже є активний
-        if (pendingInstruments.has(t)) return;
+        if (pendingInstruments.has(infoKey)) return;
 
-        pendingInstruments.add(t);
+        pendingInstruments.add(infoKey);
         try {
           const info = await ipcRenderer.invoke('instrument:get', {symbol: t, provider});
           if (info) {
-            const prev = instrumentInfo.get(t);
-            instrumentInfo.set(t, info);
+            const prev = instrumentInfo.get(infoKey);
+            instrumentInfo.set(infoKey, flattenInstrumentSnapshot(info));
             updateSpreadForTicker(t);
             revalidateCardsForTicker(t);
           }
         } catch {
           // ігноруємо помилку; наступна ітерація спробує знову
         } finally {
-          pendingInstruments.delete(t);
+          pendingInstruments.delete(infoKey);
         }
       }));
     } finally {
@@ -1122,6 +1621,14 @@ function migrateKey(oldKey, newKey, {preserveUi = false, nextUiPatch = null} = {
   if (placedOrderByKey.has(oldKey)) {
     placedOrderByKey.set(newKey, placedOrderByKey.get(oldKey));
     placedOrderByKey.delete(oldKey);
+  }
+
+  for (const group of levelOrderGroups.values()) {
+    if (group.key === oldKey) group.key = newKey;
+  }
+
+  for (const [ticket, key] of ticketToKey.entries()) {
+    if (key === oldKey) ticketToKey.set(ticket, newKey);
   }
 }
 
@@ -1184,12 +1691,25 @@ function createCard(row, index) {
   // Левая часть: тикер (+ bid/ask при наявності)
   const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
   left.appendChild(el('div', null, instrumentType === 'OPT' ? (row.name || row.ticker) : row.ticker, {style: 'font-weight:600;font-size:13px'}));
+  let $levelPointSize = null;
+  if (row.cardType === 'levelOrder') {
+    $levelPointSize = inputNumber('Pt', 'point-size');
+    $levelPointSize.title = 'Point price override';
+    Object.assign($levelPointSize.style, {
+      width: '58px',
+      height: '20px',
+      padding: '2px 5px',
+      fontSize: '11px',
+      borderRadius: '5px'
+    });
+    left.appendChild($levelPointSize);
+  }
   if (SHOW_BID_ASK) {
     const $bidask = el('span', 'card__bidask');
     $bidask.title = 'Bid / Ask';
     $bidask.style.fontSize = '11px';
     $bidask.style.color = '#6b7280';
-    $bidask.textContent = formatBidAskText(instrumentInfo.get(row.ticker), row) || '';
+    $bidask.textContent = formatBidAskText(instrumentInfoFor(row.ticker, row), row) || '';
     left.appendChild($bidask);
   }
   head.appendChild(left);
@@ -1255,13 +1775,13 @@ function createCard(row, index) {
   let body;
   switch (instrumentType) {
     case 'EQ':
-      body = createEquitiesBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createEquitiesBody(row, key);
       break;
     case 'FX':
-      body = createFxBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createFxBody(row, key);
       break;
     case 'CX':
-      body = createCryptoBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createCryptoBody(row, key);
       break;
     case 'OPT':
       body = createOptionBody(row, key);
@@ -1276,15 +1796,21 @@ function createCard(row, index) {
   const btns = el('div', 'btns');
   const mk = (label, cls, kind) => {
     const b = btn(label, cls, async () => {
-      const v = body.validate();
+      const v = row.cardType === 'levelOrder' ? body.validate(kind) : body.validate();
       if (!v.valid) return;
-      await place(kind, row, v, instrumentType, label);
+      if (row.cardType === 'levelOrder') {
+        await placeLevelOrder(kind, row, v, instrumentType, label);
+      } else {
+        await place(kind, row, v, instrumentType, label);
+      }
     });
     b.setAttribute('data-kind', kind);
     return b;
   };
   const cardButtons = instrumentType === 'OPT'
     ? [{ label: 'OPEN', action: 'OPEN', style: 'bl' }]
+    : row.cardType === 'levelOrder'
+      ? [{ label: 'LB', action: 'LB', style: 'bl' }, { label: 'LS', action: 'LS', style: 'sl' }]
     : CARD_BUTTONS;
   const cols = Math.ceil(cardButtons.length / BUTTON_ROWS);
   btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
@@ -1309,6 +1835,162 @@ function createCard(row, index) {
   card._validate = (commit = false) => body.validate(commit);
 
   return card;
+}
+
+function createLevelOrderBody(row, key, $pointSize) {
+  const defaults = resolveLevelOrderDefaults(levelOrderCfg, row.ticker);
+  const defaultRisk = orderCalc.defaultRiskUsd({
+    symbol: row.ticker,
+    instrumentType: row.instrumentType || detectInstrumentType(row.ticker)
+  });
+  const saved = uiState.get(key) || {
+    level: row.level != null ? String(row.level) : '',
+    risk: row.riskUsd != null ? String(row.riskUsd) : (defaultRisk != null ? String(defaultRisk) : ''),
+    stopOffsetPts: row.stopOffsetPts != null ? String(row.stopOffsetPts) : (defaults.stopOffsetPts != null ? String(defaults.stopOffsetPts) : ''),
+    maxLot: row.maxLot != null ? String(row.maxLot) : (defaults.maxLot != null ? String(defaults.maxLot) : '0'),
+    takeProfitPts: row.takeProfitPts != null ? String(row.takeProfitPts) : (defaults.takeProfitPts != null ? String(defaults.takeProfitPts) : ''),
+    pointSize: row.pointSize != null ? String(row.pointSize) : ''
+  };
+  if ($pointSize) $pointSize.value = saved.pointSize;
+
+  const line = el('div', 'quad-line level-order-line');
+  line.style.display = 'grid';
+  line.style.gridTemplateColumns = '1fr 1fr 1fr 1fr 1fr';
+  line.style.alignItems = 'center';
+  line.style.gap = line.style.gap || '8px';
+
+  const $level = inputNumber('Level', 'level');
+  const $risk = inputNumber('Risk $', 'risk');
+  const $stopOffset = inputNumber('Stop off', 'sl');
+  const $maxLot = inputNumber('Max lot', 'qty');
+  const $tp = inputNumber('TP pts', 'tp');
+
+  $level.value = saved.level;
+  $risk.value = saved.risk;
+  $stopOffset.value = saved.stopOffsetPts;
+  $maxLot.value = saved.maxLot;
+  $tp.value = saved.takeProfitPts;
+
+  line.appendChild($level);
+  line.appendChild($risk);
+  line.appendChild($stopOffset);
+  line.appendChild($maxLot);
+  line.appendChild($tp);
+
+  const persist = () => {
+    uiState.set(key, {
+      level: $level.value,
+      risk: $risk.value,
+      stopOffsetPts: $stopOffset.value,
+      maxLot: $maxLot.value,
+      takeProfitPts: $tp.value,
+      pointSize: $pointSize ? $pointSize.value : ''
+    });
+  };
+
+  const body = {
+    type: 'levelOrder',
+    line,
+    setButtons($btns) {
+      this._btns = $btns;
+    },
+    setNote($note) {
+      this._note = $note;
+    },
+    validate(actionForValidation) {
+      const level = _normNum($level.value);
+      const risk = _normNum($risk.value);
+      const stopOffsetPts = _normNum($stopOffset.value);
+      const maxLot = _normNum($maxLot.value);
+      const takeProfitPts = _normNum($tp.value);
+      const pointSize = _normNum($pointSize?.value);
+      const info = instrumentInfoFor(row.ticker, row);
+      const bid = Number(info?.bid);
+      const ask = Number(info?.ask);
+      const buyPriceSource = normalizePriceSource(defaults.buyPriceSource, 'bid');
+      const sellPriceSource = normalizePriceSource(defaults.sellPriceSource, 'bid');
+      const sourceForAction = action => String(action || '').toUpperCase() === 'LS' ? sellPriceSource : buyPriceSource;
+      const quoteForAction = action => resolveQuotePrice({ bid, ask, source: sourceForAction(action) });
+      const pointSizeOk = !$pointSize || $pointSize.value === '' || (Number.isFinite(pointSize) && pointSize > 0);
+      const tick = pointSizeOk && Number.isFinite(pointSize) && pointSize > 0 ? pointSize : tickSize(row);
+      const tickOk = Number.isFinite(tick) && tick > 0;
+      const minLot = Number(defaults.minLot);
+      const minLotOk = Number.isFinite(minLot) && minLot > 0;
+      const tpOk = $tp.value === '' || (Number.isFinite(takeProfitPts) && takeProfitPts > 0);
+      const maxLotOk = Number.isFinite(maxLot) && maxLot >= 0;
+      const commonValid = isPos(level) && isPos(risk) && isSL(stopOffsetPts) && maxLotOk && minLotOk && tpOk && pointSizeOk && tickOk;
+      const quoteByAction = {
+        LB: quoteForAction('LB'),
+        LS: quoteForAction('LS')
+      };
+      const requestedActionRaw = String(actionForValidation || '').toUpperCase();
+      const requestedAction = requestedActionRaw === 'LB' || requestedActionRaw === 'LS' ? requestedActionRaw : '';
+      const quoteOk = action => quoteByAction[action]?.ok === true;
+      const valid = commonValid && (requestedAction ? quoteOk(requestedAction) : quoteOk('LB') && quoteOk('LS'));
+
+      line.classList.toggle('card--invalid', !valid);
+      const setErr = (inp, bad) => inp.classList.toggle('input--error', !!bad);
+      setErr($level, !isPos(level));
+      setErr($risk, !isPos(risk));
+      setErr($stopOffset, !isSL(stopOffsetPts));
+      setErr($maxLot, !maxLotOk);
+      setErr($tp, !tpOk);
+      if ($pointSize) setErr($pointSize, !pointSizeOk);
+
+      const commonReason = !isPos(level) ? 'Level > 0'
+        : !isPos(risk) ? 'Risk $ > 0'
+          : !isSL(stopOffsetPts) ? 'Stop offset pts > 0'
+            : !maxLotOk ? 'Max lot >= 0'
+              : !minLotOk ? 'Min lot > 0'
+                : !tpOk ? 'TP pts > 0 or blank'
+                  : !pointSizeOk ? 'Point price > 0 or blank'
+                    : !tickOk ? 'Tick size required'
+                      : '';
+      const quoteReason = requestedAction && !quoteOk(requestedAction)
+        ? quoteByAction[requestedAction]?.reason
+        : !quoteOk('LB') ? quoteByAction.LB.reason
+          : !quoteOk('LS') ? quoteByAction.LS.reason
+            : '';
+      const reason = commonReason || quoteReason;
+      const buttonReason = action => commonReason || (!quoteOk(action) ? quoteByAction[action]?.reason : '');
+      if (this._btns) this._btns.querySelectorAll('button').forEach(b => {
+        const action = String(b.dataset.kind || '').toUpperCase();
+        const buttonValid = commonValid && quoteOk(action);
+        b.disabled = !buttonValid;
+        const title = buttonReason(action);
+        if (title) b.title = title; else b.removeAttribute('title');
+      });
+      if (this._note) {
+        this._note.textContent = reason;
+        this._note.style.display = reason ? 'block' : 'none';
+      }
+      persist();
+      return {
+        valid,
+        type: 'levelOrder',
+        level,
+        risk,
+        stopOffsetPts,
+        maxLot,
+        minLot,
+        takeProfitPts: $tp.value === '' ? null : takeProfitPts,
+        buyPriceSource,
+        sellPriceSource,
+        pointSize: $pointSize && $pointSize.value !== '' ? pointSize : null,
+        tickSize: tick
+      };
+    }
+  };
+
+  [$level, $risk, $stopOffset, $maxLot, $tp, $pointSize].filter(Boolean).forEach(inp => {
+    inp.addEventListener('input', () => {
+      markTouched(row.ticker);
+      persist();
+      body.validate();
+    });
+  });
+
+  return body;
 }
 
 function createOptionBody(row, key) {
@@ -1421,12 +2103,13 @@ function createOptionBody(row, key) {
 
 // ======= Crypto body (Qty, Price, SL, TP; TP auto = SL*3) =======
 function createCryptoBody(row, key) {
+  const defaultRisk = orderCalc.defaultRiskUsd({ symbol: row.ticker, instrumentType: 'CX' });
   const saved = uiState.get(key) || {
     qty: row.qty != null ? String(row.qty) : '',
     price: row.price != null ? String(row.price) : '',
     sl: row.sl != null ? String(row.sl) : '',
     tp: row.tp != null ? String(row.tp) : '',
-    risk: CX_DEFAULT_STOP_USD ? String(CX_DEFAULT_STOP_USD) : '', // дефолтный риск из конфига, // як у FX: Risk $, використовується для автоперерахунку qty
+    risk: row.risk != null ? String(row.risk) : (defaultRisk != null ? String(defaultRisk) : ''),
     tpTouched: row.tp != null, // если TP пришёл с хуком — не перезатираем авто-логикой
   };
   let tpTouched = !!saved.tpTouched;
@@ -1484,11 +2167,11 @@ function createCryptoBody(row, key) {
 
     if (isPos(r) && isSL(sl) && Number.isFinite(tick) && tick > 0) {
       const q = orderCalc.qty({riskUsd: r, stopPts: sl, tickSize: tick, lot, instrumentType: 'CX'});
-      console.log('[UI][SIZE]', { ticker: row.ticker, riskUsd: r, stopPts: sl, tickSize: tick, quoteTickSize: instrumentInfo.get(row.ticker)?.tickSize, rowTickSize: row.tickSize, qty: q });
+      console.log('[UI][SIZE]', { ticker: row.ticker, riskUsd: r, stopPts: sl, tickSize: tick, quoteTickSize: instrumentInfoFor(row.ticker, row)?.tickSize, rowTickSize: row.tickSize, qty: q });
       $qty.value = String(q);
     }
     if (isPos(r) && isSL(sl) && (!Number.isFinite(tick) || tick <= 0)) {
-      console.log('[UI][SIZE]', { ticker: row.ticker, riskUsd: r, stopPts: sl, tickSize: tick, quoteTickSize: instrumentInfo.get(row.ticker)?.tickSize, rowTickSize: row.tickSize, qty: null, state: 'tick-loading' });
+      console.log('[UI][SIZE]', { ticker: row.ticker, riskUsd: r, stopPts: sl, tickSize: tick, quoteTickSize: instrumentInfoFor(row.ticker, row)?.tickSize, rowTickSize: row.tickSize, qty: null, state: 'tick-loading' });
       $qty.value = '';
     }
     persist();
@@ -1509,7 +2192,7 @@ function createCryptoBody(row, key) {
       const risk = _normNum($risk.value);
       const sl = priceToPoints($sl, pr, row, commit);
       const tpVal = priceToPoints($tp, pr, row, commit);
-      const info = instrumentInfo.get(row.ticker);
+      const info = instrumentInfoFor(row.ticker, row);
       const instrumentType = row.instrumentType || detectInstrumentType(row.ticker);
       const qtyOk = isPos(qty);
       const priceOk = isPos(pr);
@@ -1616,12 +2299,13 @@ function createCryptoBody(row, key) {
 
 // ======= Equities body (Qty, Price, SL, TP; Risk$ separate line; Qty auto from Risk/SL) =======
 function createFxBody(row, key) {
+  const defaultRisk = orderCalc.defaultRiskUsd({ symbol: row.ticker, instrumentType: 'FX' });
   const saved = uiState.get(key) || {
     qty: row.qty != null ? String(row.qty) : '',
     price: row.price != null ? String(row.price) : '',
     sl: row.sl != null ? String(row.sl) : '',
     tp: row.tp != null ? String(row.tp) : '',
-    risk: row.risk != null ? String(row.risk) : (EQUITY_DEFAULT_STOP_USD ? String(EQUITY_DEFAULT_STOP_USD) : ''), // дефолтный риск или из строки
+    risk: row.risk != null ? String(row.risk) : (defaultRisk != null ? String(defaultRisk) : ''),
     tpTouched: row.tp != null,
   };
   let tpTouched = !!saved.tpTouched;
@@ -1689,7 +2373,7 @@ function createFxBody(row, key) {
       const sl = priceToPoints($sl, pr, row, commit);
       const tpVal = priceToPoints($tp, pr, row, commit);
       const risk = _normNum($risk.value);
-      const info = instrumentInfo.get(row.ticker);
+      const info = instrumentInfoFor(row.ticker, row);
       const instrumentType = row.instrumentType || 'FX';
 
       const qtyOk = Number.isFinite(qtyRaw) && qtyRaw > 0;
@@ -1800,12 +2484,13 @@ function createFxBody(row, key) {
 
 // ======= Equities body (Qty, Price, SL, TP; Risk$ separate line; Qty auto from Risk/SL) =======
 function createEquitiesBody(row, key) {
+  const defaultRisk = orderCalc.defaultRiskUsd({ symbol: row.ticker, instrumentType: 'EQ' });
   const saved = uiState.get(key) || {
     qty: row.qty != null ? String(row.qty) : '',
     price: row.price != null ? String(row.price) : '',
     sl: row.sl != null ? String(row.sl) : '',
     tp: row.tp != null ? String(row.tp) : '',
-    risk: row.risk != null ? String(row.risk) : (EQUITY_DEFAULT_STOP_USD ? String(EQUITY_DEFAULT_STOP_USD) : ''), // дефолтный риск или из строки
+    risk: row.risk != null ? String(row.risk) : (defaultRisk != null ? String(defaultRisk) : ''),
     tpTouched: row.tp != null,
   };
   let tpTouched = !!saved.tpTouched;
@@ -1875,7 +2560,7 @@ function createEquitiesBody(row, key) {
       const sl = priceToPoints($sl, pr, row, commit);
       const tpVal = priceToPoints($tp, pr, row, commit);
       const risk = _normNum($risk.value);
-      const info = instrumentInfo.get(row.ticker);
+      const info = instrumentInfoFor(row.ticker, row);
       const instrumentType = row.instrumentType || detectInstrumentType(row.ticker);
 
       const qtyOk = Number.isFinite(qtyRaw) && qtyRaw >= 1 && Math.floor(qtyRaw) === qtyRaw;
@@ -1999,13 +2684,15 @@ function createEquitiesBody(row, key) {
 
 
 function tickSize(row) {
-  const info = instrumentInfo.get(row.ticker);
-  return resolveTickSize({
-    symbol: row.ticker,
-    explicitTickSize: row?.tickSize,
-    quoteTickSize: info?.tickSize,
-    quoteTickSource: info?.tickSource
-  });
+  const explicit = Number(row?.tickSize);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  const info = instrumentInfoFor(row.ticker, row);
+  const cached = Number(info?.tickSize);
+  if (Number.isFinite(cached) && cached > 0 && String(info?.sources?.tickSize || '').startsWith('adapter:')) return cached;
+  const configured = Number(findTickSizeOverride(row.ticker));
+  if (Number.isFinite(configured) && configured > 0) return configured;
+  if (Number.isFinite(cached) && cached > 0) return cached;
+  return getDefaultTickSize();
 }
 
 function decimalsFromTick(tick) {
@@ -2068,7 +2755,7 @@ function calcAvg(arr, n) {
 }
 
 function formatSpreadTriple(ticker, row, curPtsOverride) {
-  const info = instrumentInfo.get(ticker);
+  const info = instrumentInfoFor(ticker, row);
   const cur = Number.isFinite(curPtsOverride) ? curPtsOverride : computeSpreadPts(info, row);
   if (!Number.isFinite(cur)) return '';
   const hist = spreadHistory.get(ticker) || [];
@@ -2079,7 +2766,7 @@ function formatSpreadTriple(ticker, row, curPtsOverride) {
 
 function updateSpreadForTicker(ticker) {
   if (!ticker) return;
-  const info = instrumentInfo.get(ticker);
+  const info = instrumentInfoFor(ticker);
   const row = state.rows.find(r => r.ticker === ticker);
   if (!row) return;
 
@@ -2120,6 +2807,143 @@ function revalidateCardsForTicker(ticker) {
       }
     }
   });
+}
+
+function ensureLevelOrderGroup(parentRequestId, key, total = null) {
+  if (!parentRequestId || !key) return null;
+  let group = levelOrderGroups.get(parentRequestId);
+  if (!group) {
+    group = {
+      parentRequestId,
+      key,
+      total: Number.isFinite(Number(total)) && Number(total) > 0 ? Number(total) : null,
+      childReqIds: new Set(),
+      placedReqIds: new Set(),
+      openedTickets: new Set(),
+      closedTickets: new Set(),
+      profitByTicket: new Map(),
+      tickets: new Set()
+    };
+    levelOrderGroups.set(parentRequestId, group);
+  } else {
+    group.key = key;
+    if (Number.isFinite(Number(total)) && Number(total) > 0) group.total = Number(total);
+  }
+  return group;
+}
+
+function findLevelOrderGroupByReqId(reqId) {
+  const parent = levelOrderChildToGroup.get(reqId);
+  return parent ? levelOrderGroups.get(parent) : null;
+}
+
+function findLevelOrderGroupByPendingId(pendingId) {
+  const parent = levelOrderPendingToGroup.get(String(pendingId || ''));
+  return parent ? levelOrderGroups.get(parent) : null;
+}
+
+function findOrRegisterLevelOrderGroupFromMeta(meta = {}, fallbackKey) {
+  const reqId = meta.requestId;
+  const parentRequestId = meta.parentRequestId;
+  if (!parentRequestId || !reqId) return null;
+  const existing = findLevelOrderGroupByReqId(reqId);
+  if (existing) return existing;
+  const childCount = Number(meta.childCount);
+  const key = fallbackKey || pendingByReqId.get(parentRequestId);
+  if (!key) return null;
+  const group = ensureLevelOrderGroup(parentRequestId, key, childCount);
+  group.childReqIds.add(reqId);
+  levelOrderChildToGroup.set(reqId, parentRequestId);
+  pendingByReqId.set(reqId, key);
+  return group;
+}
+
+function registerLevelOrderChild(rec = {}, fallbackKey) {
+  const meta = {
+    ...(rec.order?.meta || {}),
+    requestId: rec.order?.meta?.requestId || rec.reqId,
+    parentRequestId: rec.order?.meta?.parentRequestId || rec.parentRequestId,
+    childCount: rec.order?.meta?.childCount || rec.childCount,
+    childIndex: rec.order?.meta?.childIndex || rec.childIndex
+  };
+  const parentRequestId = meta.parentRequestId;
+  const reqId = meta.requestId || rec.reqId;
+  if (!parentRequestId || !reqId) return null;
+  const childCount = Number(meta.childCount);
+  const key = fallbackKey || pendingByReqId.get(parentRequestId) || findKeyByTicker(rec.order?.symbol || rec.order?.ticker);
+  if (!key) return null;
+  const group = ensureLevelOrderGroup(parentRequestId, key, childCount);
+  group.childReqIds.add(reqId);
+  levelOrderChildToGroup.set(reqId, parentRequestId);
+  if (rec.pendingId) levelOrderPendingToGroup.set(String(rec.pendingId), parentRequestId);
+  if (rec.cid) levelOrderPendingToGroup.set(String(rec.cid), parentRequestId);
+  pendingByReqId.set(reqId, key);
+  return group;
+}
+
+function registerLevelOrderTicket(group, ticket, key) {
+  const normalized = String(ticket || '').trim();
+  if (!group || !normalized) return;
+  group.tickets.add(normalized);
+  levelOrderTicketToGroup.set(normalized, group.parentRequestId);
+  ticketToKey.set(normalized, key || group.key);
+}
+
+function levelOrderAllPlaced(group) {
+  if (!group) return false;
+  const total = group.total || group.childReqIds.size;
+  return total > 0 && group.placedReqIds.size >= total;
+}
+
+function levelOrderAllOpened(group) {
+  if (!group) return false;
+  if (group.lifecycleReady === true) return true;
+  const total = group.total || group.childReqIds.size;
+  return total > 0 && group.openedTickets.size >= total;
+}
+
+function levelOrderAllClosed(group) {
+  if (!group) return false;
+  const total = group.tickets.size || group.total || group.childReqIds.size;
+  return total > 0 && group.closedTickets.size >= total;
+}
+
+function clearLevelOrderGroup(parentReqId) {
+  const group = levelOrderGroups.get(parentReqId);
+  levelOrderGroups.delete(parentReqId);
+  if (group) {
+    for (const childReqId of group.childReqIds) {
+      levelOrderChildToGroup.delete(childReqId);
+      pendingByReqId.delete(childReqId);
+      pendingIdByReqId.delete(childReqId);
+      retryCounts.delete(childReqId);
+    }
+    for (const ticket of group.tickets) {
+      levelOrderTicketToGroup.delete(ticket);
+      ticketToKey.delete(ticket);
+    }
+  }
+  for (const [pendingId, parent] of levelOrderPendingToGroup.entries()) {
+    if (parent === parentReqId) levelOrderPendingToGroup.delete(pendingId);
+  }
+}
+
+function levelOrderGroupsByKey(key) {
+  return Array.from(levelOrderGroups.values()).filter(group => group.key === key);
+}
+
+function clearLevelOrderByKey(key) {
+  for (const group of levelOrderGroupsByKey(key)) clearLevelOrderGroup(group.parentRequestId);
+}
+
+function cancelLevelOrderTerminalOrders(group, row) {
+  if (!group) return;
+  const provider = row?.provider || '';
+  const symbol = row?.symbol || row?.ticker || '';
+  for (const ticket of group.tickets) {
+    if (group.openedTickets.has(ticket)) continue;
+    ipcRenderer.invoke('execution:cancel-order', { provider, ticket, symbol }).catch(() => {});
+  }
 }
 
 // ======= Order placement (shared) =======
@@ -2195,6 +3019,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
     if (isPendingExec) {
       const pendPayload = {
         ticker: row.ticker,
+        provider: row.provider,
         event: row.event,
         price: Number(priceVal),
         side: isLong ? 'long' : 'short',
@@ -2258,6 +3083,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
           ticket: String(res.providerOrderId),
           symbol: row.symbol || row.ticker || '',
           strategyCommand: row.strategyCommand,
+          name: row.name,
           payoff: res.payoff || res.raw?.payoff,
           valuation: res.valuation || res.raw?.valuation,
           openedAt
@@ -2280,6 +3106,83 @@ async function place(kind, row, v, instrumentType, btnLabel) {
   }
 }
 
+async function placeLevelOrder(kind, row, v, instrumentType, btnLabel) {
+  if (!v.valid) return;
+
+  const key = rowKey(row);
+  const requestId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  const strategyId = `${requestId}_${String(kind).toLowerCase()}`;
+  pendingByReqId.set(requestId, key);
+  ensureLevelOrderGroup(requestId, key);
+  retryCounts.set(requestId, 0);
+  pendingExecLabels.set(key, btnLabel || kind);
+  setCardState(key, 'pending-exec');
+  const card = cardByKey(key);
+  if (card) {
+    card.dataset.reqId = requestId;
+    const rb = card.querySelector('.retry-btn');
+    if (rb) rb.textContent = '0';
+  }
+
+  try {
+    const res = await ipcRenderer.invoke('level-order:place', {
+      ticker: row.ticker,
+      provider: row.provider,
+      instrumentType,
+      action: kind,
+      level: v.level,
+      riskUsd: v.risk,
+      stopOffsetPts: v.stopOffsetPts,
+      maxLot: v.maxLot,
+      minLot: v.minLot,
+      takeProfitPts: v.takeProfitPts,
+      buyPriceSource: v.buyPriceSource,
+      sellPriceSource: v.sellPriceSource,
+      pointSize: v.pointSize,
+      tickSize: v.tickSize,
+      requestId,
+      strategyId
+    });
+    if (!res || res.status === 'rejected' || res.status === 'error') {
+      levelOrderGroups.delete(requestId);
+      setCardState(key, null);
+      toast(`x ${row.ticker}: ${res?.reason || 'Rejected'}`);
+      shakeCard(key);
+      render();
+      return;
+    }
+    const group = levelOrderGroups.get(requestId);
+    if (group && res.raw?.plan?.childQtys) group.total = res.raw.plan.childQtys.length;
+    if (group && Array.isArray(res.raw?.results)) {
+      for (const child of res.raw.results) {
+        const childReqId = child?.requestId;
+        const childStatus = child?.result?.status;
+        if (!childReqId || (childStatus !== 'ok' && childStatus !== 'simulated')) continue;
+        group.childReqIds.add(childReqId);
+        levelOrderChildToGroup.set(childReqId, group.parentRequestId);
+        const providerOrderId = String(child?.result?.providerOrderId || '');
+        if (providerOrderId.startsWith('pending:')) {
+          levelOrderPendingToGroup.set(providerOrderId.slice('pending:'.length), group.parentRequestId);
+        } else if (providerOrderId) {
+          registerLevelOrderTicket(group, providerOrderId, key);
+        }
+      }
+    }
+    if (group && levelOrderAllPlaced(group)) {
+      setCardState(key, levelOrderAllOpened(group) ? 'executing' : 'pending-exec');
+    } else {
+      setCardState(key, 'pending-exec');
+    }
+    toast(`... ${row.ticker}: level order sent`);
+    render();
+  } catch (e) {
+    setCardState(key, null);
+    toast(`x ${row.ticker}: ${e.message || e}`);
+    shakeCard(key);
+    render();
+  }
+}
+
 function clearPendingByKey(key) {
   for (const [rid, k] of pendingByReqId.entries()) {
     if (k === key) {
@@ -2287,6 +3190,15 @@ function clearPendingByKey(key) {
       pendingIdByReqId.delete(rid);
       retryCounts.delete(rid);
     }
+  }
+  for (const [parentReqId, group] of levelOrderGroups.entries()) {
+    if (group.key !== key) continue;
+    levelOrderGroups.delete(parentReqId);
+    for (const childReqId of group.childReqIds) levelOrderChildToGroup.delete(childReqId);
+    for (const [pendingId, parent] of levelOrderPendingToGroup.entries()) {
+      if (parent === parentReqId) levelOrderPendingToGroup.delete(pendingId);
+    }
+    for (const ticket of group.tickets) levelOrderTicketToGroup.delete(ticket);
   }
   pendingExecLabels.delete(key);
   placedOrderByKey.delete(key);
@@ -2350,6 +3262,8 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
 
   let key = pendingByReqId.get(reqId);
   if (!key) key = findKeyByTicker(rec?.order?.symbol || rec?.order?.ticker);
+  const levelGroup = registerLevelOrderChild(rec, key);
+  if (levelGroup) key = levelGroup.key;
   if (!key) return;
 
   pendingByReqId.set(reqId, key);
@@ -2363,14 +3277,14 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
     if (card) delete card.dataset.pendingId;
   }
   if (card) {
-    card.dataset.reqId = reqId;
+    card.dataset.reqId = levelGroup ? levelGroup.parentRequestId : reqId;
     const rb = card.querySelector('.retry-btn');
     if (rb) rb.textContent = '0';
   }
-  if (cardStates.get(key) !== 'pending-exec' || rec?.order?.side) {
+  if (!levelGroup && (cardStates.get(key) !== 'pending-exec' || rec?.order?.side)) {
     setCardState(key, 'pending');
   }
-  if (card && rec?.order) {
+  if (!levelGroup && card && rec?.order) {
     const ui = uiState.get(key) || {};
     if (rec.order.qty != null) {
       ui.qty = String(rec.order.qty);
@@ -2398,7 +3312,9 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
 });
 
 ipcRenderer.on('execution:retry', (_evt, rec) => {
-  const key = pendingByReqId.get(rec.reqId);
+  let key = pendingByReqId.get(rec.reqId);
+  const levelGroup = findLevelOrderGroupByReqId(rec.reqId) || findLevelOrderGroupByPendingId(rec.pendingId);
+  if (levelGroup) key = levelGroup.key;
   if (!key) return;
   retryCounts.set(rec.reqId, rec.count);
   const card = cardByKey(key);
@@ -2409,8 +3325,32 @@ ipcRenderer.on('execution:retry', (_evt, rec) => {
 });
 
 ipcRenderer.on('execution:retry-stopped', (_evt, rec) => {
-  const key = pendingByReqId.get(rec.reqId);
+  const levelGroup = findLevelOrderGroupByReqId(rec.reqId)
+    || findLevelOrderGroupByPendingId(rec.pendingId)
+    || levelOrderGroups.get(rec.parentRequestId || rec.reqId);
+  let key = pendingByReqId.get(rec.reqId);
+  if (levelGroup) key = levelGroup.key;
   if (!key) return;
+  if (levelGroup) {
+    const parentReqId = levelGroup.parentRequestId;
+    clearLevelOrderGroup(parentReqId);
+    pendingByReqId.delete(parentReqId);
+    pendingIdByReqId.delete(parentReqId);
+    retryCounts.delete(parentReqId);
+    const card = cardByKey(key);
+    if (card) {
+      delete card.dataset.reqId;
+      delete card.dataset.pendingId;
+      const rb = card.querySelector('.retry-btn');
+      if (rb) {
+        rb.textContent = '0';
+        rb.style.display = 'none';
+      }
+    }
+    setCardState(key, null);
+    render();
+    return;
+  }
   pendingByReqId.delete(rec.reqId);
   retryCounts.delete(rec.reqId);
   const card = cardByKey(key);
@@ -2474,7 +3414,7 @@ ipcRenderer.on('orders:new', (_evt, row) => {
   const oldRow = state.rows[idx];
   const oldKey = rowKey(oldRow);
   const st = cardStates.get(oldKey);
-  if (st === 'profit' || st === 'loss') {
+  if (st === 'closed' || st === 'profit' || st === 'loss') {
     handleClosedCard({row, idx, oldRow, oldKey});
     return;
   }
@@ -2505,6 +3445,14 @@ ipcRenderer.on('orders:new', (_evt, row) => {
       if (row.price != null) patch.price = String(row.price);
       if (row.sl != null) patch.sl = String(row.sl);
       if (row.tp != null) patch.tp = String(row.tp);
+      if (row.cardType === 'levelOrder') {
+        if (row.level != null) patch.level = String(row.level);
+        if (row.riskUsd != null) patch.risk = String(row.riskUsd);
+        if (row.stopOffsetPts != null) patch.stopOffsetPts = String(row.stopOffsetPts);
+        if (row.maxLot != null) patch.maxLot = String(row.maxLot);
+        if (row.takeProfitPts != null) patch.takeProfitPts = String(row.takeProfitPts);
+        if (row.pointSize != null) patch.pointSize = String(row.pointSize);
+      }
       return patch;
     }
   });
@@ -2521,7 +3469,8 @@ ipcRenderer.on('orders:new', (_evt, row) => {
 ipcRenderer.on('execution:result', (_evt, rec) => {
   const reqId = rec?.order?.meta?.requestId || rec?.reqId;
   if (!reqId) return;
-  const key = pendingByReqId.get(reqId);
+  const levelGroup = registerLevelOrderChild(rec) || findLevelOrderGroupByPendingId(rec?.pendingId || rec?.cid);
+  const key = levelGroup?.key || pendingByReqId.get(reqId);
   if (!key) return;
 
   pendingByReqId.delete(reqId);
@@ -2536,6 +3485,30 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
   }
 
   const ok = rec.status === 'ok' || rec.status === 'simulated';
+  if (levelGroup) {
+    if (ok) {
+      levelGroup.placedReqIds.add(reqId);
+      if (rec.providerOrderId) registerLevelOrderTicket(levelGroup, rec.providerOrderId, key);
+      if (levelOrderAllPlaced(levelGroup)) {
+        setCardState(key, levelOrderAllOpened(levelGroup) ? 'executing' : 'pending-exec');
+        const cardEl = cardByKey(key);
+        if (cardEl) {
+          delete cardEl.dataset.reqId;
+          delete cardEl.dataset.pendingId;
+        }
+        toast(`✔ ${rec.order?.symbol || ''}: level order group placed`);
+        render();
+      }
+      return;
+    }
+    setCardState(key, null);
+    render();
+    shakeCard(key);
+    if (card) card.title = rec.reason || 'Rejected';
+    toast(`✖ ${rec.order?.symbol || ''}: ${rec.reason || 'Rejected'}`);
+    return;
+  }
+
   if (ok) {
     const st = cardStates.get(key);
     if (st !== 'executing' && st !== 'profit' && st !== 'loss') {
@@ -2552,6 +3525,7 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
         ticket: providerOrderId,
         symbol: symbol,
         strategyCommand: row?.strategyCommand,
+        name: rec.order?.name || row?.name,
         payoff: rec.payoff || rec.raw?.payoff,
         valuation: rec.valuation || rec.raw?.valuation,
         openedAt
@@ -2572,38 +3546,113 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
 });
 
 ipcRenderer.on('position:opened', (_evt, rec) => {
-  let key = ticketToKey.get(String(rec.ticket));
+  const ticket = String(rec.ticket);
+  let levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
+  let key = levelGroup?.key || ticketToKey.get(ticket);
+  if (!levelGroup && rec.origOrder?.meta?.parentRequestId) {
+    const groupByMeta = findLevelOrderGroupByReqId(rec.origOrder.meta.requestId)
+      || findOrRegisterLevelOrderGroupFromMeta(rec.origOrder.meta, key || pendingByReqId.get(rec.origOrder.meta.parentRequestId));
+    if (groupByMeta) {
+      levelGroup = groupByMeta;
+      key = key || groupByMeta.key;
+      registerLevelOrderTicket(levelGroup, ticket, key);
+    }
+  }
   if (!key) {
-    const reqId = rec.origOrder?.meta?.requestId;
+    const meta = rec.origOrder?.meta || {};
+    const reqId = meta.requestId;
     if (reqId) {
-      key = pendingByReqId.get(reqId);
-      if (key) ticketToKey.set(String(rec.ticket), key);
+      const fallbackKey = meta.parentRequestId ? pendingByReqId.get(meta.parentRequestId) : null;
+      const groupByReq = findLevelOrderGroupByReqId(reqId) || findOrRegisterLevelOrderGroupFromMeta(meta, fallbackKey);
+      if (groupByReq) levelGroup = groupByReq;
+      key = groupByReq?.key || pendingByReqId.get(reqId);
+      if (key) {
+        ticketToKey.set(ticket, key);
+        if (levelGroup) registerLevelOrderTicket(levelGroup, ticket, key);
+      }
     }
   }
   if (!key) return;
+  if (levelGroup) {
+    levelGroup.openedTickets.add(ticket);
+    markRowOpened(key);
+    if (levelOrderAllOpened(levelGroup)) {
+      placedOrderByKey.delete(key);
+      setCardState(key, 'executing');
+      render();
+    }
+    return;
+  }
   placedOrderByKey.delete(key);
   markRowOpened(key);
   setCardState(key, 'executing');
   render();
 });
 
-ipcRenderer.on('position:closed', (_evt, rec) => {
-  const key = ticketToKey.get(String(rec.ticket));
+ipcRenderer.on('level-order:positions-ready', (_evt, rec = {}) => {
+  const parentRequestId = rec.parentRequestId || rec.requestId;
+  const group = levelOrderGroups.get(parentRequestId);
+  let key = group?.key || pendingByReqId.get(parentRequestId);
+  if ((!key || !cardByKey(key)) && rec.symbol) {
+    const liveKey = findKeyByTicker(rec.symbol);
+    if (liveKey) {
+      if (group) group.key = liveKey;
+      key = liveKey;
+    }
+  }
   if (!key) return;
-  ticketToKey.delete(String(rec.ticket));
+  if (group) {
+    group.lifecycleReady = true;
+    group.foundQty = Number(rec.foundQty);
+    group.expectedQty = Number(rec.expectedQty);
+    for (const cid of rec.foundCids || []) levelOrderPendingToGroup.set(String(cid), parentRequestId);
+  }
+  setCardState(key, 'executing');
+  render();
+});
+
+ipcRenderer.on('position:closed', (_evt, rec) => {
+  const ticket = String(rec.ticket);
+  const levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
+  const key = levelGroup?.key || ticketToKey.get(ticket);
+  if (!key) return;
+  if (levelGroup) {
+    levelGroup.closedTickets.add(ticket);
+    if (typeof rec.profit === 'number') levelGroup.profitByTicket.set(ticket, rec.profit);
+    else levelGroup.profitByTicket.delete(ticket);
+    markRowClosed(key);
+    if (levelOrderAllClosed(levelGroup)) {
+      const tickets = Array.from(levelGroup.tickets);
+      const pnlComplete = tickets.length > 0 && tickets.every(groupTicket => levelGroup.profitByTicket.has(groupTicket));
+      const totalProfit = pnlComplete
+        ? tickets.reduce((sum, groupTicket) => sum + levelGroup.profitByTicket.get(groupTicket), 0)
+        : null;
+      setCardState(key, pnlComplete ? (totalProfit >= 0 ? 'profit' : 'loss') : 'closed');
+      render();
+    }
+    return;
+  }
   markRowClosed(key);
   if (typeof rec.profit === 'number') {
     setCardState(key, rec.profit >= 0 ? 'profit' : 'loss');
-    render();
   } else {
-    removeRowByKey(key);
+    setCardState(key, 'closed');
   }
+  render();
 });
 
 ipcRenderer.on('order:cancelled', (_evt, rec) => {
-  const key = ticketToKey.get(String(rec.ticket));
+  const ticket = String(rec.ticket);
+  const levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
+  const key = levelGroup?.key || ticketToKey.get(ticket);
   if (key) {
-    ticketToKey.delete(String(rec.ticket));
+    const row = state.rows.find(r => rowKey(r) === key);
+    ticketToKey.delete(ticket);
+    if (levelGroup || row?.cardType === 'levelOrder' || levelOrderGroupsByKey(key).length > 0) {
+      if (levelGroup) levelGroup.tickets.delete(ticket);
+      levelOrderTicketToGroup.delete(ticket);
+      return;
+    }
     placedOrderByKey.delete(key);
     removeRowByKey(key);
   }
@@ -2618,61 +3667,41 @@ $settingsBtn.addEventListener('click', () => {
   $settingsPanel.style.display = 'flex';
   loadSettingsSections();
 });
-function saveAndCloseSettingsPanel() {
-  const setNested = (obj, path, value) => {
-    const parts = path.split('.');
-    let cur = obj;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const p = parts[i];
-      const next = parts[i + 1];
-      const nextIsIndex = /^\d+$/.test(next);
-      if (nextIsIndex) {
-        if (!Array.isArray(cur[p])) cur[p] = [];
-      } else {
-        if (typeof cur[p] !== 'object' || cur[p] === null || Array.isArray(cur[p])) cur[p] = {};
-      }
-      cur = cur[p];
-    }
-    const last = parts[parts.length - 1];
-    if (/^\d+$/.test(last)) {
-      cur[Number(last)] = value;
-    } else {
-      cur[last] = value;
-    }
-  };
-  for (const [name, form] of settingsForms.entries()) {
-    if (form.dataset.dirty) {
-      const data = {};
-      for (const inp of form.querySelectorAll('input')) {
-        const k = inp.dataset.field;
-        if (!k) continue;
-        let val;
-        if (inp.type === 'checkbox') val = inp.checked;
-        else if (inp.type === 'number') val = inp.value === '' ? null : Number(inp.value);
-        else val = inp.value;
-        setNested(data, k, val);
-      }
-      ipcRenderer.invoke('settings:set', name, data).catch(() => {
-      });
-      if (name === 'ui') {
-        state.autoscroll = !!data.autoscroll;
-        const windowState = {};
-        for (const field of ['width', 'height', 'x', 'y']) {
-          if (Number.isFinite(data[field])) windowState[field] = data[field];
+let settingsSaveInProgress = false;
+async function saveAndCloseSettingsPanel() {
+  if (settingsSaveInProgress) return;
+  settingsSaveInProgress = true;
+  const results = [];
+  try {
+    const pendingSaves = [];
+    for (const [name, form] of settingsForms.entries()) {
+      if (form.dataset.dirty) {
+        try {
+          pendingSaves.push([name, serializeSettingsForm(form, name)]);
+        } catch (error) {
+          showSection(name);
+          form.querySelector('textarea[data-role="raw-json"]')?.focus();
+          toast(`Invalid JSON in ${name}: ${error?.message || error}`);
+          return;
         }
-        ipcRenderer.invoke('window:set-state', windowState).catch(() => {
-        });
-      }
-      if (name === 'optionstrat') {
-        const ms = Number(data.valuationRefreshMs);
-        if (Number.isFinite(ms) && ms > 0) optionStratValuationRefreshMs = ms;
-        optionStratDisplayFields = normalizeOptionStratDisplayFields(data.displayFields);
-        render();
       }
     }
+    for (const [name, data] of pendingSaves) {
+      results.push(await ipcRenderer.invoke('settings:set', name, data));
+    }
+    const failures = results.flatMap(result => result?.errors || []);
+    const restart = await ipcRenderer.invoke('settings:restart-status').catch(() => []);
+    renderRestartStatus(restart);
+    if (failures.length) toast(`Settings saved; apply failed: ${failures.join('; ')}`);
+    else if (Array.isArray(restart) && restart.length) toast('Settings saved; restart required for some changes');
+    else if (results.length) toast('Settings saved and applied');
+    $settingsPanel.style.display = 'none';
+    settingsForms.clear();
+  } catch (error) {
+    toast(`Settings save failed: ${error?.message || error}`);
+  } finally {
+    settingsSaveInProgress = false;
   }
-  $settingsPanel.style.display = 'none';
-  settingsForms.clear();
 }
 
 $settingsClose.addEventListener('click', saveAndCloseSettingsPanel);
@@ -2717,11 +3746,22 @@ if (typeof module !== 'undefined') {
     state,
     pendingByReqId,
     pendingIdByReqId,
+    ticketToKey,
+    levelOrderGroups,
+    levelOrderChildToGroup,
+    levelOrderPendingToGroup,
+    levelOrderTicketToGroup,
+    clearLevelOrderGroup,
     retryCounts,
     cardStates,
     pendingExecLabels,
     placedOrderByKey,
+    instrumentInfo,
     settingsForms,
+    migrateKey,
+    setLevelOrderConfig(config) {
+      levelOrderCfg = config || {};
+    },
     setOptionStratDisplayFields(fields) {
       optionStratDisplayFields = normalizeOptionStratDisplayFields(fields);
     },

@@ -23,6 +23,15 @@ class ExecutionAdapter {
    */
   async getQuote(_symbol) { return null; }
 
+  /**
+   * Optional stable trading metadata for a symbol.
+   * @returns {Promise<{tickSize?:number,quantityStep?:number,minQty?:number,maxQty?:number,minNotional?:number,contractSize?:number}|null>}
+   */
+  async getInstrumentMetadata(_symbol) { return null; }
+
+  // Optional non-blocking creation hook for adapters backed by one safe batch metadata request:
+  // async preloadInstrumentMetadata() {}
+
   async forgetQuote(_symbol) { return; }
 }
 module.exports = { ExecutionAdapter };

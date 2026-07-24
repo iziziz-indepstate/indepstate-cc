@@ -22,6 +22,32 @@ const adapter = Object.create(CCXTExecutionAdapter.prototype);
   assert.strictEqual(r.source, 'absolute');
 })();
 
+(function testMissingTakeProfitIsNotCoercedToEntryPrice() {
+  for (const tp of [null, undefined, '', 0, -1, Number.NaN]) {
+    const r = adapter._resolveBinanceBracketPrices({ order: { sl: 10, tp }, direction: 'LONG', entryPrice: 100, tickSize: 0.1 });
+    assert.strictEqual(r.stopLossPrice, 99);
+    assert.strictEqual(r.takeProfitPrice, undefined);
+    assert.strictEqual(r.source, 'points');
+  }
+})();
+
+(function testAbsoluteStopWithoutTakeProfit() {
+  const r = adapter._resolveBinanceBracketPrices({ order: { slPrice: 99, tpPrice: '' }, direction: 'LONG', entryPrice: 100, tickSize: 0.1 });
+  assert.strictEqual(r.stopLossPrice, 99);
+  assert.strictEqual(r.takeProfitPrice, undefined);
+  assert.strictEqual(r.source, 'absolute');
+})();
+
+(function testStopOnlyOrderUsesManagedBinanceFlow() {
+  const a = Object.create(CCXTExecutionAdapter.prototype);
+  a._isBinanceUsdmLike = () => true;
+  for (const tp of [null, undefined, '', 0, -1, Number.NaN]) {
+    assert.strictEqual(a._shouldUseBinanceBracketFlow({ ccxtType: 'limit', order: { sl: 10, tp } }), true);
+  }
+  assert.strictEqual(a._shouldUseBinanceBracketFlow({ ccxtType: 'limit', order: { sl: 0, tp: null } }), false);
+  assert.strictEqual(a._shouldUseBinanceBracketFlow({ ccxtType: 'market', order: { sl: 10, tp: null } }), false);
+})();
+
 console.log('binanceBracketPriceResolver.test passed');
 
 (async function testGetQuoteTickSizeFallback() {

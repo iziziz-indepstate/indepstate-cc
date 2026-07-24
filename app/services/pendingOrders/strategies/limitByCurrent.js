@@ -25,7 +25,9 @@ class LimitByCurrentStrategy {
     historyLoader,
     getQuote,
     bars,
-    symbol
+    symbol,
+    tickSize,
+    stopOffsetPts
   } = {}) {
     this.price = Number(price);
     this.side = side;
@@ -36,6 +38,8 @@ class LimitByCurrentStrategy {
     this.historyLoader = typeof historyLoader === 'function' ? historyLoader : null;
     this.getQuote = typeof getQuote === 'function' ? getQuote : async () => null;
     this.symbol = symbol;
+    this.tickSize = Number(tickSize);
+    this.stopOffsetPts = Number(stopOffsetPts);
     this.done = false;
     this.cachedSeq = null;
     this.initialBars = Array.isArray(bars)
@@ -62,7 +66,11 @@ class LimitByCurrentStrategy {
     const seq = await this._getSequence();
     if (!seq || seq.length === 0) return null;
 
-    const stopLoss = this.stoppLossRule(seq, this.side, this.price);
+    const stopLoss = this.stoppLossRule(seq, this.side, this.price, {
+      tickSize: this.tickSize,
+      stopOffsetPts: this.stopOffsetPts,
+      entryPrice: currentPrice
+    });
     if (!Number.isFinite(stopLoss)) return null;
 
     this.done = true;

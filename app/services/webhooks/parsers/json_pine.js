@@ -1,5 +1,5 @@
 // Pine bot JSON : {"symbol":"AXTI","direction":"short","type":"stop limit","qty":33,"sl":0.3,"tp":0.9,"slPrice":23.59,"tpPrice":22.39,"note":"1. Prime BR","stop":23.29,"limit":23.29,"entryPrice":23.29,"magic":2329099}
-const {toPoints} = require("../../points");
+const {toPoints} = require("../../instrumentInfo/points");
 
 function num(x) { const n = Number(x); return Number.isFinite(n) ? n : undefined; }
 

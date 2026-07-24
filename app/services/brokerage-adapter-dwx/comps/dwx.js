@@ -128,28 +128,8 @@ class DWXAdapter extends ExecutionAdapter {
 
   /** ---------- внутреннее ---------- */
   async #sendOrder(order, order_type) {
-    let sl = 0.0;
-    let tp = 0.0;
     const price = Number(order.price);
-    const tickSize = Number(order.tickSize);
-    const slPts = Number(order.sl);
-    const tpPts = Number(order.tp);
-    const canPriceProtection = Number.isFinite(price)
-      && Number.isFinite(tickSize)
-      && tickSize > 0;
-
-    if (canPriceProtection) {
-      if (Number.isFinite(tpPts) && tpPts > 0) {
-        tp = order.side === 'buy'
-          ? price + (tpPts * tickSize)
-          : price - (tpPts * tickSize);
-      }
-      if (Number.isFinite(slPts) && slPts > 0) {
-        sl = order.side === 'buy'
-          ? price - (slPts * tickSize)
-          : price + (slPts * tickSize);
-      }
-    }
+    const { sl, tp } = calculateDwxProtectionPrices(order);
 
     await this.client.open_order(
       order.symbol,
@@ -256,13 +236,17 @@ class DWXAdapter extends ExecutionAdapter {
       if (!ord) continue;
       let meta = this._ticketMeta.get(t);
       if (!meta) {
+        const opened = isDwxOpenPosition(ord);
         meta = {
           initialOpenTime: ord.open_time,
           lastOpenTime: ord.open_time,
           profit: ord.pnl,
-          opened: false,
+          opened,
         };
         this._ticketMeta.set(t, meta);
+        if (opened) {
+          this.events.emit('position:opened', { ticket: t, order: ord });
+        }
       } else {
         if (!meta.opened && ord.open_time !== meta.initialOpenTime) {
           meta.opened = true;
@@ -331,7 +315,16 @@ class DWXAdapter extends ExecutionAdapter {
   }
 
   async listOpenOrders() {
-    return Object.values(this.client.open_orders || {});
+    return Object.entries(this.client.open_orders || {}).map(([ticket, order]) => {
+      const meta = this._ticketMeta.get(String(ticket));
+      return {
+        ...order,
+        ticket: order?.ticket ?? ticket,
+        __isPosition: meta?.opened === true,
+        __initialOpenTime: meta?.initialOpenTime,
+        __lastOpenTime: meta?.lastOpenTime
+      };
+    });
   }
 
   async findClosedTradeByCid(cid, lookbackDays = 30, timeoutMs = 2000) {
@@ -414,6 +407,17 @@ function validate(o = {}) {
   if ((o.type === 'limit' || o.type === 'stop') && typeof o.price !== 'number') return 'price is required for limit/stop';
   if (typeof o.qty !== 'number' || o.qty <= 0) return 'volume must be > 0';
   return null;
+}
+
+function isDwxPendingOrder(order) {
+  const type = String(order?.type || order?.order_type || '').toLowerCase();
+  return type.includes('limit') || type.includes('stop') || type.includes('pending');
+}
+
+function isDwxOpenPosition(order) {
+  const type = String(order?.type || order?.order_type || '').toLowerCase();
+  if (isDwxPendingOrder(order)) return false;
+  return type.includes('buy') || type.includes('sell');
 }
 
 function randomId() { return crypto.randomBytes(6).toString('hex'); }
@@ -646,6 +650,22 @@ function numberOr(...values) {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function calculateDwxProtectionPrices(order = {}) {
+  const price = Number(order.price);
+  const tickSize = Number(order.tickSize);
+  const slPts = Number(order.sl);
+  const tpPts = Number(order.tp);
+  const safePrice = Number.isFinite(price) ? price : 0;
+  const safeTick = Number.isFinite(tickSize) && tickSize > 0 ? tickSize : 0;
+  const hasSl = Number.isFinite(slPts) && slPts > 0 && safeTick > 0;
+  const hasTp = Number.isFinite(tpPts) && tpPts > 0 && safeTick > 0;
+  const isBuy = String(order.side || '').toLowerCase() === 'buy';
+  return {
+    sl: hasSl ? (isBuy ? safePrice - slPts * safeTick : safePrice + slPts * safeTick) : 0,
+    tp: hasTp ? (isBuy ? safePrice + tpPts * safeTick : safePrice - tpPts * safeTick) : 0
+  };
+}
+
 function findHeuristicMatchCid(pendingMap, mtOrder) {
   // Подбираем pending, который максимально похож
   const entries = [...pendingMap.entries()];
@@ -684,6 +704,9 @@ module.exports = {
   calculateLookbackDays,
   filterDwxBars,
   filterDwxDeals,
+  calculateDwxProtectionPrices,
+  isDwxOpenPosition,
+  isDwxPendingOrder,
   normalizeDwxBar,
   normalizeDwxDeal,
   parseDealTime

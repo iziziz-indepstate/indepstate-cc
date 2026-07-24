@@ -8,6 +8,11 @@ class PendingOrderService {
     this.nextId = 1;
   }
 
+  configureStrategies(createStrategy) {
+    if (typeof createStrategy !== 'function') throw new Error('createStrategy callback required');
+    this.createStrategy = createStrategy;
+  }
+
   addOrder(opts = {}) {
     const {
       price,
@@ -18,6 +23,7 @@ class PendingOrderService {
       rangeRule,
       dealPriceRule,
       stoppLossRule,
+      stopOffsetPts,
       priceSource,
       historyBars,
       historyTimeframe,
@@ -33,6 +39,7 @@ class PendingOrderService {
     if (rangeRule != null) params.rangeRule = rangeRule;
     if (dealPriceRule != null) params.dealPriceRule = dealPriceRule;
     if (stoppLossRule != null) params.stoppLossRule = stoppLossRule;
+    if (stopOffsetPts != null) params.stopOffsetPts = stopOffsetPts;
     if (priceSource != null) params.priceSource = priceSource;
     if (historyBars != null) params.historyBars = historyBars;
     if (historyTimeframe != null) params.historyTimeframe = historyTimeframe;

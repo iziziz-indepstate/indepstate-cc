@@ -15,7 +15,7 @@ function loadExecutionConfigFromDisk() {
     return loadConfig('../services/brokerage/config/execution.json');
   } catch (e) {
     console.error('[adapterRegistry] cannot read execution.json:', e.message);
-    return { providers:{}, byInstrumentType:{}, default:'simulated' };
+    return { providers:{}, byInstrumentType:{}, bySymbol:{}, default:'simulated' };
   }
 }
 
@@ -23,6 +23,35 @@ function initExecutionConfig(cfg){
   executionConfig = deepClone(cfg || {});
   // config changed — rebuild adapters on next getAdapter()
   instances.clear();
+}
+
+function updateExecutionRouting(cfg = {}, paths = []) {
+  const current = getExecutionConfig();
+  const providers = current.providers || {};
+  const next = deepClone(current);
+  const unavailablePaths = [];
+  const available = value => {
+    const name = String(value || '').trim().toLowerCase();
+    return !name || !!providers[name];
+  };
+  for (const pathName of paths) {
+    const parts = pathName.split('.');
+    let value = cfg;
+    for (const part of parts) value = value == null ? undefined : value[part];
+    if (value !== undefined && !available(value)) {
+      unavailablePaths.push(pathName);
+      continue;
+    }
+    let target = next;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      target[parts[i]] = target[parts[i]] && typeof target[parts[i]] === 'object' ? target[parts[i]] : {};
+      target = target[parts[i]];
+    }
+    if (value === undefined) delete target[parts[parts.length - 1]];
+    else target[parts[parts.length - 1]] = deepClone(value);
+  }
+  executionConfig = next;
+  return unavailablePaths;
 }
 
 function getExecutionConfig(){
@@ -77,6 +106,11 @@ function getAdapter(name){
   const provCfg = resolveSecrets((cfg.providers && cfg.providers[n]) || {});
   const inst = buildAdapter(n, provCfg);
   instances.set(n, inst);
+  if (typeof inst.preloadInstrumentMetadata === 'function') {
+    Promise.resolve()
+      .then(() => inst.preloadInstrumentMetadata())
+      .catch(err => console.error('[adapterRegistry] instrument metadata preload failed:', n, err?.message || err));
+  }
   return inst;
 }
 
@@ -85,4 +119,4 @@ function getProviderConfig(name){
   return (cfg.providers && cfg.providers[name]) || {};
 }
 
-module.exports = { getAdapter, initExecutionConfig, getExecutionConfig, getProviderConfig };
+module.exports = { getAdapter, initExecutionConfig, updateExecutionRouting, getExecutionConfig, getProviderConfig };

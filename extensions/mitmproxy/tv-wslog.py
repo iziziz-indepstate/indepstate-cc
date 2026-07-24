@@ -8,7 +8,7 @@ HOST_ALLOW = None                 # например: r"tradingview\.com$"  (Non
 # что ловим в WS:
 WS_RX = r'alert_fired'            # например: r'"event"\s*:\s*"alert"'
 # что ловим в HTTP запросах (см. HTTP_METHODS ниже):
-HTTP_RX = r'LineToolHorzline'
+HTTP_RX = r'LineToolHorz(?:Line|Ray)'
 HTTP_METHODS = {"PUT"}            # можно добавить методы при необходимости
 
 rx_host = re.compile(HOST_ALLOW, re.I) if HOST_ALLOW else None
@@ -16,6 +16,11 @@ rx_ws_text = re.compile(WS_RX, re.I) if WS_RX else None
 rx_http_text = re.compile(HTTP_RX, re.I) if HTTP_RX else None
 
 MAX_LOG_TEXT = 2000               # чтобы не раздувать лог
+SOURCE_TOOL_TYPES = {
+    "LineToolHorzLine": ("line_creations", "line_removals"),
+    "LineToolHorzRay": ("ray_creations", "ray_removals"),
+}
+source_tool_types = {}
 
 
 def _host_ok(flow: http.HTTPFlow) -> bool:
@@ -42,7 +47,7 @@ def _decode_bytes(b: bytes):
 
 
 def _extract_source_updates(flow: http.HTTPFlow, text: str):
-    """Вернёт словарь с lineId созданных/удалённых линий, если удалось распарсить тело."""
+    """Вернёт словарь с id созданных/удалённых line/ray tools, если удалось распарсить тело."""
     if not text:
         return None
 
@@ -59,8 +64,13 @@ def _extract_source_updates(flow: http.HTTPFlow, text: str):
     if not isinstance(sources, dict):
         return None
 
-    created = []
-    removed = []
+    updates = {
+        "line_creations": [],
+        "line_removals": [],
+        "ray_creations": [],
+        "ray_removals": [],
+        "unknown_removals": [],
+    }
 
     for raw_id, src in sources.items():
         if raw_id is None:
@@ -70,7 +80,11 @@ def _extract_source_updates(flow: http.HTTPFlow, text: str):
             continue
 
         if src is None:
-            removed.append(line_id)
+            tool_type = source_tool_types.pop(line_id, None)
+            if tool_type in SOURCE_TOOL_TYPES:
+                updates[SOURCE_TOOL_TYPES[tool_type][1]].append(line_id)
+            else:
+                updates["unknown_removals"].append(line_id)
             continue
 
         if not isinstance(src, dict):
@@ -78,13 +92,14 @@ def _extract_source_updates(flow: http.HTTPFlow, text: str):
 
         state = src.get("state")
         tool_type = state.get("type") if isinstance(state, dict) else None
-        if tool_type == "LineToolHorzLine":
-            created.append(line_id)
+        if tool_type in SOURCE_TOOL_TYPES:
+            source_tool_types[line_id] = tool_type
+            updates[SOURCE_TOOL_TYPES[tool_type][0]].append(line_id)
 
-    if not created and not removed:
+    if not any(updates.values()):
         return None
 
-    return {"created": created, "removed": removed}
+    return updates
 
 
 # ================== WebSocket хуки ==================
@@ -182,11 +197,13 @@ def request(flow: http.HTTPFlow):
             "text": text[:MAX_LOG_TEXT]
         }
         if source_updates:
-            if source_updates.get("created"):
-                out["line_creations"] = source_updates["created"]
-            if source_updates.get("removed"):
-                out["line_removals"] = source_updates["removed"]
+            for key in ("line_creations", "line_removals", "ray_creations", "ray_removals", "unknown_removals"):
+                if source_updates.get(key):
+                    out[key] = source_updates[key]
+            if source_updates.get("line_removals"):
                 out["line_removal"] = True
+            if source_updates.get("ray_removals"):
+                out["ray_removal"] = True
     else:
         # если текст не декодировался — всё равно логируем, но без фильтра по содержимому
         # (если нужно жёстко фильтровать, можно вместо этого return)

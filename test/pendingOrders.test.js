@@ -2,6 +2,8 @@ const assert = require('assert');
 const {
   createPendingOrderService,
   B1_RANGE_CONSOLIDATION,
+  LEVEL_OFFSET,
+  LimitByCurrentStrategy,
   createStrategyFactory
 } = require('../app/services/pendingOrders');
 
@@ -11,6 +13,10 @@ async function sendBars(svc, bars) {
 }
 
 async function run() {
+  // level-offset helper anchors the stop beyond the watched level
+  assert.strictEqual(LEVEL_OFFSET([], 'long', 100, { tickSize: 0.5, stopOffsetPts: 4 }), 98);
+  assert.strictEqual(LEVEL_OFFSET([], 'short', 200, { tickSize: 0.25, stopOffsetPts: 6 }), 201.5);
+
   // long order triggers after 3 bars
   let exec;
   const svc1 = createPendingOrderService({ strategyConfig: {} });
@@ -80,6 +86,50 @@ async function run() {
   ];
   await sendBars(svc3, bars3);
   assert.deepStrictEqual(exec, { id: 1, side: 'short', limitPrice: 198.5, stopLoss: 201 });
+
+  // level-offset consolidation preserves its entry and anchors the stop beyond the level
+  exec = undefined;
+  const svcLevelOffset = createPendingOrderService({
+    strategyConfig: { consolidation: { bars: 3, stoppLossRule: 'LEVEL_OFFSET' } }
+  });
+  svcLevelOffset.addOrder({
+    price: 100,
+    side: 'long',
+    tickSize: 0.5,
+    stopOffsetPts: 2,
+    onExecute: r => { exec = r; }
+  });
+  await sendBars(svcLevelOffset, bars1);
+  assert.deepStrictEqual(exec, { id: 1, side: 'long', limitPrice: 101, stopLoss: 99 });
+  assert.strictEqual(Math.abs(exec.limitPrice - exec.stopLoss) / 0.5, 4);
+
+  // level-offset limit-by-current uses the quote-derived entry and the same level anchor
+  const limitByCurrent = new LimitByCurrentStrategy({
+    price: 100,
+    side: 'long',
+    stoppLossRule: LEVEL_OFFSET,
+    tickSize: 0.5,
+    stopOffsetPts: 2,
+    historyBars: 1,
+    bars: [{ time: 1, open: 100, high: 101, low: 99.5, close: 101 }],
+    getQuote: async () => ({ bid: 101 })
+  });
+  const currentResult = await limitByCurrent.onBar({ time: 1, open: 100, high: 101, low: 99.5, close: 101 });
+  assert.deepStrictEqual(currentResult, { limitPrice: 101, stopLoss: 99 });
+  assert.strictEqual(Math.abs(currentResult.limitPrice - currentResult.stopLoss) / 0.5, 4);
+
+  // selecting level-offset requires both a usable tick size and card SL offset
+  const svcMissingOffset = createPendingOrderService({
+    strategyConfig: { consolidation: { stoppLossRule: 'LEVEL_OFFSET' } }
+  });
+  assert.throws(
+    () => svcMissingOffset.addOrder({ price: 100, side: 'long', tickSize: 0.5 }),
+    /stopOffsetPts > 0/
+  );
+  assert.throws(
+    () => svcMissingOffset.addOrder({ price: 100, side: 'long', stopOffsetPts: 2 }),
+    /tickSize > 0/
+  );
 
   // long order triggers within allowed range
   exec = undefined;

@@ -17,8 +17,16 @@ mkdir "$env:LOCALAPPDATA/ISCC/config"
 copy app/services/orderCards/config/order-cards.json "$env:LOCALAPPDATA/ISCC/config/order-cards.json"
 ```
 
-Changes in `config/order-cards.json` (and other files) take effect on the next
-application start. The `config` directory under the local data path is ignored
+Changes made by directly editing `config/order-cards.json` (and other override
+files) take effect on the next application start. Saves made through the in-app
+Settings panel are applied immediately for settings that can be changed without
+interrupting active trading work. The Settings button and panel show a restart
+notice when a saved field controls a startup resource such as a broker provider,
+listening port, proxy, tunnel, file watcher, or enabled service list. Existing
+pending strategies keep their trigger configuration, while the resulting order
+still uses the latest sizing and trade-rule safety settings.
+
+The `config` directory under the local data path is ignored
 by git so personal settings aren't tracked. To log which configuration files are
 used to `logs/app.txt` in the local data path, set the `CONFIG_LOG` environment
 variable to `1` or `true` (logging is disabled by default).
@@ -59,9 +67,8 @@ These descriptors are consumed by the in-app Settings panel to render editable f
 
 The `order-cards.json` file lists every source that can feed order cards into the
 application. The file contains a single object with a `sources` array and optional
-settings such as a default stop value in dollars for equity cards, how to treat
-events for cards already in a final state or which action buttons to show on
-each card:
+settings for how to treat events for cards already in a final state and which
+action buttons to show on each card:
 
 ```json
 {
@@ -69,7 +76,6 @@ each card:
     { "type": "webhook" },
     { "type": "file", "pathEnvVar": "ORDER_CARDS_PATH", "pollMs": 1000 }
   ],
-  "defaultEquityStopUsd": 50,
   "closedCardEventStrategy": "ignore",
   "buttons": [
     { "label": "BL",  "action": "BL",  "style": "bl" },
@@ -86,9 +92,14 @@ Each entry in `sources` is an object with a `type` field and additional options
 depending on the type. Multiple sources can be defined and their orders are
 merged together.
 
-If `defaultEquityStopUsd` is present, its numeric value (in dollars) is used as a
-pre-filled Risk $ field for new equity order cards. The
-`DEFAULT_EQUITY_STOP_USD` environment variable (if set) overrides this value.
+Default Risk $ values for regular and level-order cards are configured in
+`order-calculator.json`, including instrument-type defaults and symbol overrides.
+The `DEFAULT_EQUITY_STOP_USD` and `DEFAULT_CX_STOP_USD` environment variables
+override their corresponding instrument-type defaults.
+
+Older overrides containing those risk fields in `order-cards.json` are migrated
+to `order-calculator.json` automatically on startup. Existing new-format values
+are preserved.
 
 `closedCardEventStrategy` determines how the app handles a new order event for a
 ticker whose card is already closed (`take`/`stop`). When set to `"ignore"`
@@ -118,7 +129,10 @@ a built‑in helper function:
     "dealPriceRule": "KNOWN_EXTREMUM",
     "stoppLossRule": "B1_TAIL"
   },
-  "falseBreak": { "tickSize": 0.01 }
+  "falseBreak": { "tickSize": 0.01 },
+  "limitByCurrent": {
+    "stoppLossRule": "B1_TAIL"
+  }
 }
 ```
 
@@ -130,9 +144,31 @@ Built-in helper functions:
   shorts) from the observed bars as the target price.
 - `B1_TAIL` – uses the opposite-direction extremum of the bar that pierced the
   level as the stop price.
+- `LEVEL_OFFSET` – anchors the stop beyond the card level using the normalized
+  order-card `SL` value as an extra offset in points. For longs the stop is
+  `level - SL * tickSize`; for shorts it is `level + SL * tickSize`. The final
+  risk distance is measured from the strategy's actual entry to that stop.
 - `B1_10p_GAP` – sets the limit price at the entry level plus 10% of the
   breakout bar's range (at least 0.01) and an extra 0.02 for longs (subtracts
   for shorts).
+
+`LEVEL_OFFSET` is opt-in for the `consolidation` (`BC`/`SC`) and
+`limitByCurrent` (`BP`/`SP`) strategies:
+
+```json
+{
+  "consolidation": {
+    "stoppLossRule": "LEVEL_OFFSET"
+  },
+  "limitByCurrent": {
+    "stoppLossRule": "LEVEL_OFFSET"
+  }
+}
+```
+
+With this rule selected, `SL` remains a normal stop distance for direct
+`BL`/`SL` orders, but pending buttons use it as the extra offset beyond the
+watched card level.
 
 Override this file in `config/pending-strategies.json` to customize the defaults.
 
@@ -223,4 +259,3 @@ overridden for specific instrument types:
 
 Additional rules can be added over time and wired up in `trade-rules.json`
 without requiring changes to callers.
-

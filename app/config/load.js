@@ -52,6 +52,7 @@ function deepMerge(target, source, desc) {
   if (!source || typeof source !== 'object') return target;
   const allowUnknown = desc && desc.__allowUnknown;
   for (const key of Object.keys(source)) {
+    if (String(key).startsWith('__')) continue;
     const srcVal = source[key];
     if (!(key in target)) {
       if (allowUnknown) {
@@ -70,6 +71,10 @@ function deepMerge(target, source, desc) {
     if (Array.isArray(srcVal)) {
       if (Array.isArray(tgtVal)) target[key] = srcVal.slice();
     } else if (srcVal && typeof srcVal === 'object' && !Array.isArray(srcVal)) {
+      if (childDesc && childDesc.__replace) {
+        target[key] = JSON.parse(JSON.stringify(srcVal));
+        continue;
+      }
       if (tgtVal && typeof tgtVal === 'object' && !Array.isArray(tgtVal)) {
         target[key] = deepMerge(tgtVal, srcVal, childDesc);
       }

@@ -1,6 +1,6 @@
 const assert = require('assert');
 const orderCalc = require('../app/services/orderCalculator');
-const { resolveTickSize } = require('../app/services/points');
+const { resolveTickSize } = require('../app/services/instrumentInfo/points');
 
 function run() {
   assert.strictEqual(resolveTickSize({ symbol: 'UNKNOWNUSDT.P' }), 0.01);

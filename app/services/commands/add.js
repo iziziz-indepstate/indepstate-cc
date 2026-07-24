@@ -1,5 +1,5 @@
 const { Command } = require('./base');
-const { digitsFallbackPoints } = require('../points');
+const { digitsFallbackPoints } = require('../instrumentInfo/points');
 
 function _normNum(val) {
   if (val == null) return null;

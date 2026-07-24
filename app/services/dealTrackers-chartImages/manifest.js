@@ -13,6 +13,7 @@ settings.register(
  */
 function initService(servicesApi = {}) {
   servicesApi.dealTrackersChartImages = chartImages;
+  settings.onApply('chart-images', ({ config }) => chartImages.configure(config));
 }
 
 module.exports = { initService };

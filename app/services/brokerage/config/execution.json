@@ -7,6 +7,7 @@
         "CFD": "dwx",
         "OPT": "optionstrat"
     },
+    "bySymbol": {},
     "providers": {
         "simulated": {
             "adapter": "simulated"
@@ -28,26 +29,71 @@
         },
         "dwx": {
             "adapter": "dwx",
-            "metatraderDirPath" : "${ENV:DWX_SOCKET_DIR}",
+            "metatraderDirPath": "${ENV:DWX_SOCKET_DIR}",
             "openOrderRetryDelayMs": 500
         },
         "ccxt-binance-futures": {
-          "adapter": "ccxt",
-          "exchangeId": "binance",
-          "apiKey": "${ENV:BINANCE_API_KEY}",
-          "secret": "${ENV:BINANCE_API_SECRET}",
-          "sandbox": true,
-          "enableRateLimit": true,
-          "options": {
-            "defaultType": "future"
+            "adapter": "ccxt",
+            "exchangeId": "binance",
+            "apiKey": "${ENV:BINANCE_API_KEY}",
+            "secret": "${ENV:BINANCE_API_SECRET}",
+            "sandbox": true,
+            "enableRateLimit": true,
+            "options": {
+                "defaultType": "future"
+            },
+            "protectiveOrders": {
+            "manualModificationStrategy": "adopt"
           },
           "params": {
-            "recvWindow": 5000
-          },
-          "symbolMap": {
-            "BTCUSDT": "BTC/USDT:USDT",
-            "ETHUSDT": "ETH/USDT:USDT"
-          }
+                "recvWindow": 5000
+            },
+            "symbolMap": {
+                "BTCUSDT": "BTC/USDT:USDT",
+                "ETHUSDT": "ETH/USDT:USDT"
+            }
+        },
+        "ibkr": {
+            "adapter": "ibkr",
+            "enabled": false,
+            "mode": "paper",
+            "debug": false,
+            "host": "127.0.0.1",
+            "port": 4002,
+            "clientId": 0,
+            "accountId": "",
+            "defaultTif": "DAY",
+            "instruments": {},
+            "quoteTimeoutMs": 5000,
+            "marketDataType": 3,
+            "defaultTickSize": "",
+            "contractResolveTimeoutMs": 5000,
+            "commissionReportTimeoutMs": 10000,
+            "trackExternalExecutions": true,
+            "contractResolution": {
+                "enabled": true,
+                "profiles": {
+                    "STK": {
+                        "secType": "STK",
+                        "exchange": "SMART",
+                        "currency": "USD",
+                        "preferredPrimaryExchanges": [
+                            "NASDAQ",
+                            "NYSE",
+                            "ARCA",
+                            "AMEX"
+                        ]
+                    },
+                    "CFD": {
+                        "secType": "CFD",
+                        "exchange": "SMART",
+                        "currency": "USD",
+                        "preferredPrimaryExchanges": []
+                    }
+                },
+                "profileBySymbol": {},
+                "defaultProfile": "STK"
+            }
         }
     }
 }

@@ -1,7 +1,14 @@
 {
   "properties": {
     "group": "automation",
-    "name": "Actions bus"
+    "name": "Actions bus",
+    "rawEditor": {
+      "path": "actions",
+      "type": "array",
+      "label": "Actions JSON",
+      "snippets": true,
+      "snippetLabel": "Add action JSON"
+    }
   },
   "options": {
     "enabled": {
@@ -26,6 +33,10 @@
         "label": {
           "type": "string",
           "description": "Toggle label (optional, defaults to key)"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Initial toggle state when no saved state exists (optional, defaults to true)"
         },
         "bindings": {
           "description": "Grouped event bindings",

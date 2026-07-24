@@ -5,6 +5,20 @@ const crypto = require('crypto');
 const events = require('../../events');
 const orderCalc = require('../../orderCalculator');
 
+function positiveFiniteNumber(value) {
+  if (value == null || value === '') return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : undefined;
+}
+
+function firstPositiveFiniteNumber(...values) {
+  for (const value of values) {
+    const number = positiveFiniteNumber(value);
+    if (number !== undefined) return number;
+  }
+  return undefined;
+}
+
 class CCXTExecutionAdapter extends ExecutionAdapter {
   /**
    * @param {Object} cfg
@@ -65,6 +79,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     // Трекінг позицій/замовлень для подій як у DWX
     this._ticketToSymbol = new Map(); // ticket(providerOrderId) -> mappedSymbol
     this._ticketOpened = new Set();   // ticket -> boolean (позиція відкрита)
+    this._positionClosedTickets = new Set(); // ticket -> terminal close event already emitted
     this.watchIntervalMs = Number.isFinite(cfg.watchIntervalMs) ? cfg.watchIntervalMs : 2000;
     this._watchTimer = null;
     this._startWatchLoop();
@@ -93,6 +108,11 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     this._entryClientToBracket = new Map();
     this._algoClientToBracket = new Map();
     this._bracketEntryWatchers = new Map();
+    this.protectiveOrders = {
+      manualModificationStrategy: ['adopt', 'stop-managing'].includes(String(cfg.protectiveOrders?.manualModificationStrategy || '').toLowerCase())
+        ? String(cfg.protectiveOrders.manualModificationStrategy).toLowerCase()
+        : 'adopt'
+    };
     this._reconcileTimer = setInterval(() => { this._reconcileBrackets().catch(() => {}); }, Math.max(5000, Number(cfg.bracketReconcileMs) || 10000));
 
     // Binance USDⓈ-M REST helpers
@@ -100,6 +120,8 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     this._binanceTimeOffsetUpdatedAt = 0;
     this._binanceExchangeInfoCache = null;
     this._binanceExchangeInfoLoadedAt = 0;
+    this._binanceExchangeInfoPromise = null;
+    this._binanceMetadataBySymbol = new Map();
 
     // Автоматичне забезпечення/скасування SL/TP по подіях позицій
     this.on('position:opened', async ({ ticket }) => {
@@ -196,13 +218,38 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
   async _getBinanceSymbolFilters(symbol) {
     const info = await this._getBinanceExchangeInfo();
-    const row = (info?.symbols || []).find((s) => String(s?.symbol || '').toUpperCase() === String(symbol || '').toUpperCase());
+    const key = String(symbol || '').toUpperCase();
+    if (this._binanceMetadataBySymbol?.has(key)) return this._binanceMetadataBySymbol.get(key);
+    const row = (info?.symbols || []).find((s) => String(s?.symbol || '').toUpperCase() === key);
     if (!row) throw new Error(`Symbol ${symbol} not found in exchangeInfo`);
+    const metadata = this._parseBinanceSymbolMetadata(row);
+    if (!this._binanceMetadataBySymbol) this._binanceMetadataBySymbol = new Map();
+    this._binanceMetadataBySymbol.set(key, metadata);
+    return metadata;
+  }
+
+  _parseBinanceSymbolMetadata(row) {
     const filters = row.filters || [];
     const pf = filters.find((f) => f.filterType === 'PRICE_FILTER') || {};
     const lf = filters.find((f) => f.filterType === 'LOT_SIZE') || {};
     const mn = filters.find((f) => f.filterType === 'MIN_NOTIONAL') || {};
-    return { tickSize: Number(pf.tickSize || 0), stepSize: Number(lf.stepSize || 0), minNotional: Number(mn.notional || mn.minNotional || 0) };
+    return {
+      tickSize: Number(pf.tickSize || 0),
+      stepSize: Number(lf.stepSize || 0),
+      minQty: Number(lf.minQty || 0),
+      maxQty: Number(lf.maxQty || 0),
+      minNotional: Number(mn.notional || mn.minNotional || 0)
+    };
+  }
+
+  _cacheBinanceInstrumentMetadata(info) {
+    const next = new Map();
+    for (const row of info?.symbols || []) {
+      const key = String(row?.symbol || '').toUpperCase();
+      if (key) next.set(key, this._parseBinanceSymbolMetadata(row));
+    }
+    this._binanceMetadataBySymbol = next;
+    return next;
   }
 
   async _waitBinanceOrderFilled(symbol, clientOrderId, timeoutMs = 120000) {
@@ -647,10 +694,24 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     if (this._binanceExchangeInfoCache && now - this._binanceExchangeInfoLoadedAt < 5 * 60 * 1000) {
       return this._binanceExchangeInfoCache;
     }
-    const info = await this._binancePublicRequest('/fapi/v1/exchangeInfo');
-    this._binanceExchangeInfoCache = info;
-    this._binanceExchangeInfoLoadedAt = now;
-    return info;
+    if (this._binanceExchangeInfoPromise) return this._binanceExchangeInfoPromise;
+    this._binanceExchangeInfoPromise = this._binancePublicRequest('/fapi/v1/exchangeInfo')
+      .then(info => {
+        this._binanceExchangeInfoCache = info;
+        this._binanceExchangeInfoLoadedAt = Date.now();
+        this._cacheBinanceInstrumentMetadata(info);
+        return info;
+      })
+      .finally(() => {
+        this._binanceExchangeInfoPromise = null;
+      });
+    return this._binanceExchangeInfoPromise;
+  }
+
+  async preloadInstrumentMetadata() {
+    if (!this._isBinanceUsdmLike()) return null;
+    await this._getBinanceExchangeInfo();
+    return { symbols: this._binanceMetadataBySymbol.size };
   }
 
   async normalizeBinanceUsdmSymbol(input) {
@@ -795,11 +856,9 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
   _shouldUseBinanceBracketFlow({ ccxtType, order }) {
     if (!this._isBinanceUsdmLike() || ccxtType !== 'limit') return false;
-    const hasAbsTp = Number.isFinite(Number(order.takeProfitPrice ?? order.tpPrice));
-    const hasAbsSl = Number.isFinite(Number(order.stopLossPrice ?? order.slPrice));
-    const hasPtsTp = Number.isFinite(Number(order.tp ?? order.takePts ?? order?.meta?.takePts));
-    const hasPtsSl = Number.isFinite(Number(order.sl ?? order.stopPts ?? order?.meta?.stopPts));
-    return (hasAbsTp && hasAbsSl) || (hasPtsTp && hasPtsSl);
+    const absSl = firstPositiveFiniteNumber(order.stopLossPrice, order.slPrice);
+    const slPts = firstPositiveFiniteNumber(order.sl, order.stopPts, order?.meta?.stopPts);
+    return absSl !== undefined || slPts !== undefined;
   }
 
   _makeBracketIds(bracketId) {
@@ -813,22 +872,92 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
 
   _resolveBinanceBracketPrices({ order, direction, entryPrice, tickSize }) {
-    const absTp = Number(order.takeProfitPrice ?? order.tpPrice);
-    const absSl = Number(order.stopLossPrice ?? order.slPrice);
-    if (Number.isFinite(absTp) && Number.isFinite(absSl)) {
+    const absTp = firstPositiveFiniteNumber(order.takeProfitPrice, order.tpPrice);
+    const absSl = firstPositiveFiniteNumber(order.stopLossPrice, order.slPrice);
+    const tpPts = firstPositiveFiniteNumber(order.tp, order.takePts, order?.meta?.takePts);
+    const slPts = firstPositiveFiniteNumber(order.sl, order.stopPts, order?.meta?.stopPts);
+    if (absSl === undefined && slPts === undefined) throw new Error('Missing SL value (absolute or points)');
+
+    const usesPointStop = absSl === undefined;
+    const usesPointTp = absTp === undefined && tpPts !== undefined;
+    if (!usesPointStop && !usesPointTp) {
       return { takeProfitPrice: absTp, stopLossPrice: absSl, source: 'absolute' };
     }
-    const tpPts = Number(order.tp ?? order.takePts ?? order?.meta?.takePts);
-    const slPts = Number(order.sl ?? order.stopPts ?? order?.meta?.stopPts);
-    if (!Number.isFinite(tpPts) || !Number.isFinite(slPts)) throw new Error('Missing TP/SL values (absolute or points)');
+
     const tick = Number(tickSize) > 0 ? Number(tickSize) : 0.01;
     const entry = Number(entryPrice);
     if (!Number.isFinite(entry) || entry <= 0) throw new Error('Invalid entry price for TP/SL resolver');
-    if (direction === 'LONG') {
-      return { takeProfitPrice: entry + tpPts * tick, stopLossPrice: entry - slPts * tick, source: 'points' };
-    }
-    return { takeProfitPrice: entry - tpPts * tick, stopLossPrice: entry + slPts * tick, source: 'points' };
+    const isLong = direction === 'LONG';
+    const takeProfitPrice = absTp !== undefined
+      ? absTp
+      : tpPts !== undefined
+        ? entry + (isLong ? 1 : -1) * tpPts * tick
+        : undefined;
+    const stopLossPrice = absSl !== undefined
+      ? absSl
+      : entry + (isLong ? -1 : 1) * slPts * tick;
+    const source = (absTp !== undefined || absSl !== undefined) ? 'mixed' : 'points';
+    return { takeProfitPrice, stopLossPrice, source };
   }
+
+  _extractProtectiveOrderPrice(order = {}) {
+    const raw = order.triggerPrice ?? order.stopPrice ?? order.price ?? order.info?.triggerPrice ?? order.info?.stopPrice ?? order.info?.price;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : undefined;
+  }
+
+  _protectiveOrderPriceMatches(expected, actual, tickSize) {
+    const exp = Number(expected);
+    const act = Number(actual);
+    if (!Number.isFinite(exp) || !Number.isFinite(act)) return true;
+    const tick = Number(tickSize);
+    const tolerance = Number.isFinite(tick) && tick > 0 ? tick / 2 : 1e-9;
+    return Math.abs(exp - act) <= tolerance;
+  }
+
+  _handleManualProtectiveOrderModification(bracket, leg, openOrder, actualPrice) {
+    const expectedKey = leg === 'tp' ? 'takeProfitPrice' : 'stopLossPrice';
+    const expectedPrice = bracket?.[expectedKey];
+    const strategy = this.protectiveOrders?.manualModificationStrategy || 'adopt';
+    const log = {
+      bracketId: bracket.bracketId,
+      symbol: bracket.symbol,
+      leg,
+      clientAlgoId: leg === 'tp' ? bracket.tpClientAlgoId : bracket.slClientAlgoId,
+      expectedPrice,
+      brokerPrice: String(actualPrice),
+      strategy
+    };
+    if (strategy === 'stop-managing') {
+      bracket.status = 'EXTERNALLY_MODIFIED';
+      bracket.externalModification = { leg, expectedPrice, brokerPrice: String(actualPrice), clientAlgoId: log.clientAlgoId, detectedAt: Date.now() };
+      bracket.updatedAt = Date.now();
+      console.warn(`[${this.provider}] Protective order manually modified; stopping bracket auto-management`, log);
+      this.events.emit('bracket:protection_modified', { provider: this.provider, ...log, action: 'stop-managing' });
+      return;
+    }
+    bracket[expectedKey] = String(actualPrice);
+    bracket.externalModification = { leg, previousExpectedPrice: expectedPrice, brokerPrice: String(actualPrice), clientAlgoId: log.clientAlgoId, detectedAt: Date.now(), adopted: true };
+    bracket.updatedAt = Date.now();
+    console.warn(`[${this.provider}] Protective order manually modified; adopting broker price`, log);
+    this.events.emit('bracket:protection_modified', { provider: this.provider, ...log, action: 'adopt' });
+  }
+
+  _detectManualProtectiveOrderModifications(bracket, openOrders = []) {
+    const byId = new Map((Array.isArray(openOrders) ? openOrders : []).map((x) => [String(x?.clientAlgoId || ''), x]));
+    for (const leg of ['tp', 'sl']) {
+      const id = leg === 'tp' ? bracket.tpClientAlgoId : bracket.slClientAlgoId;
+      if (!id) continue;
+      const openOrder = byId.get(String(id));
+      if (!openOrder) continue;
+      const actualPrice = this._extractProtectiveOrderPrice(openOrder);
+      const expectedPrice = leg === 'tp' ? bracket.takeProfitPrice : bracket.stopLossPrice;
+      if (!this._protectiveOrderPriceMatches(expectedPrice, actualPrice, bracket.tickSize)) {
+        this._handleManualProtectiveOrderModification(bracket, leg, openOrder, actualPrice);
+      }
+    }
+  }
+
   async _placeBinanceBracketEntry({ order, symbol, side, amount, price, params, cid }) {
     const now = Date.now();
     const bracketId = String(order.bracketId || order.strategyId || cid || crypto.randomBytes(6).toString('hex'));
@@ -866,16 +995,22 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     console.log('[EXEC][BINANCE_SIZE]', { symbol: nativeSymbol, riskUsd, stopPts, exchangeTickSize: tickSize, stepSize, inputAmount: amount, effectiveAmount, qtyRounded, priceRounded, source: 'exchangeInfo' });
     if ((qtyRounded * priceRounded) < minNotional) return { status: 'rejected', provider: this.provider, reason: 'MIN_NOTIONAL validation failed' };
     const { takeProfitPrice, stopLossPrice, source } = this._resolveBinanceBracketPrices({ order, direction, entryPrice: priceRounded, tickSize });
-    const tp = String(this._roundToStep(takeProfitPrice, tickSize || 0.01, 'round'));
+    const tp = takeProfitPrice === undefined
+      ? undefined
+      : String(this._roundToStep(takeProfitPrice, tickSize || 0.01, 'round'));
     const sl = String(this._roundToStep(stopLossPrice, tickSize || 0.01, 'round'));
 
     const entryReq = { symbol: nativeSymbol, side: direction === 'LONG' ? 'BUY' : 'SELL', type: 'LIMIT', timeInForce: 'GTC', quantity: String(qtyRounded), price: String(priceRounded), newClientOrderId: ids.entryClientOrderId };
     if (hedgeMode) entryReq.positionSide = positionSide;
     const entryRes = await this._binanceSignedRequest('POST', '/fapi/v1/order', entryReq);
 
-    this._brackets.set(bracketId, { bracketId, symbol: nativeSymbol, positionSide, direction, entryClientOrderId: ids.entryClientOrderId, tpClientAlgoId: null, slClientAlgoId: null, entryOrderId: Number(entryRes?.orderId || 0) || null, status: 'ENTRY_PLACED', expectedQty: String(qtyRounded), actualQty: null, entryPrice: String(priceRounded), takeProfitPrice: tp, stopLossPrice: sl, protectionPriceSource: source, tickSize: String(tickSize), pendingId: cid, origOrder: order, uiConfirmed: false, uiRejected: false, createdAt: now, updatedAt: now });
+    this._brackets.set(bracketId, { bracketId, symbol: nativeSymbol, mappedSymbol: symbol, positionSide, direction, entryClientOrderId: ids.entryClientOrderId, tpClientAlgoId: null, slClientAlgoId: null, entryOrderId: Number(entryRes?.orderId || 0) || null, status: 'ENTRY_PLACED', expectedQty: String(qtyRounded), actualQty: null, entryPrice: String(priceRounded), takeProfitPrice: tp, stopLossPrice: sl, protectionPriceSource: source, tickSize: String(tickSize), pendingId: cid, origOrder: order, uiConfirmed: false, uiRejected: false, createdAt: now, updatedAt: now });
     this._entryClientToBracket.set(ids.entryClientOrderId, bracketId);
     this.pending.set(cid, { order, createdAt: now });
+    setImmediate(() => {
+      const bracket = this._brackets.get(bracketId);
+      if (bracket && !['CANCELED','CLOSED'].includes(bracket.status)) this._confirmBracketPending(bracket, entryRes);
+    });
     this._startBracketEntryWatcher(bracketId).catch(() => {});
     return { status: 'ok', provider: this.provider, providerOrderId: `pending:${cid}`, raw: { enqueued: true, bracketId, entry: entryRes } };
   }
@@ -889,9 +1024,14 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     bracket.uiConfirmed = true;
     bracket.confirmedAt = Date.now();
     this.pending.delete(pendingId);
+    const ticket = String(bracket.entryOrderId || entryOrder?.orderId || bracket.entryClientOrderId || '');
+    const mappedSymbol = bracket.mappedSymbol || this.mapSymbol?.(bracket.origOrder?.symbol || bracket.symbol) || bracket.symbol;
+    bracket.lifecycleTicket = ticket;
+    bracket.mappedSymbol = mappedSymbol;
+    this._registerTrackedTicket(ticket, mappedSymbol);
     this.events.emit('order:confirmed', {
       pendingId,
-      ticket: String(bracket.entryOrderId || entryOrder?.orderId || bracket.entryClientOrderId || ''),
+      ticket,
       mtOrder: {
         ...entryOrder,
         bracketId: bracket.bracketId,
@@ -904,6 +1044,20 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       },
       origOrder: pending?.order || bracket.origOrder
     });
+  }
+
+  _markBracketOpened(bracket, entryOrder = {}) {
+    if (!bracket) return false;
+    const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || entryOrder?.orderId || bracket.entryClientOrderId || '');
+    const mappedSymbol = bracket.mappedSymbol || this.mapSymbol?.(bracket.origOrder?.symbol || bracket.symbol) || bracket.symbol;
+    bracket.lifecycleTicket = ticket;
+    bracket.mappedSymbol = mappedSymbol;
+    this._registerTrackedTicket(ticket, mappedSymbol);
+    return this._emitPositionOpened(ticket, {
+      symbol: mappedSymbol,
+      size: Number(bracket.actualQty || entryOrder?.executedQty || entryOrder?.cumQty || bracket.expectedQty || 0),
+      bracketId: bracket.bracketId
+    }, bracket.origOrder);
   }
 
   _rejectBracketPending(bracket, reason, raw = undefined) {
@@ -920,7 +1074,28 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       origOrder: pending?.order || bracket.origOrder
     });
   }
+
   async _placeBracketProtection(bracket) {
+    if (bracket?.protectionPromise) return bracket.protectionPromise;
+    const visibilityGraceMs = Math.max(
+      0,
+      Number(this.exchange?.options?.protectionVisibilityGraceMs) || 15000
+    );
+    if (
+      bracket?.status === 'PROTECTED'
+      && Number.isFinite(bracket.protectionPlacedAt)
+      && Date.now() - bracket.protectionPlacedAt < visibilityGraceMs
+    ) return;
+    const task = this._placeBracketProtectionOnce(bracket);
+    bracket.protectionPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (bracket.protectionPromise === task) bracket.protectionPromise = null;
+    }
+  }
+
+  async _placeBracketProtectionOnce(bracket) {
     try {
       const qty = String(bracket.actualQty || bracket.expectedQty);
       const closeSide = bracket.direction === 'LONG' ? 'SELL' : 'BUY';
@@ -931,22 +1106,39 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       const open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: bracket.symbol }).catch(() => []);
       const mark = await this._binancePublicRequest('/fapi/v1/premiumIndex', { symbol: bracket.symbol }).catch(() => ({}));
       const markPrice = Number(mark?.markPrice);
-      const tpNum = Number(bracket.takeProfitPrice); const slNum = Number(bracket.stopLossPrice);
+      const tpNum = positiveFiniteNumber(bracket.takeProfitPrice);
+      const slNum = positiveFiniteNumber(bracket.stopLossPrice);
+      const hasTp = tpNum !== undefined;
+      if (slNum === undefined) throw new Error('Missing stop-loss price for Binance protection');
       if (Number.isFinite(markPrice)) {
-        const ok = bracket.direction === 'LONG' ? (tpNum > markPrice && slNum < markPrice) : (tpNum < markPrice && slNum > markPrice);
-        if (!ok) throw new Error(`Invalid protection prices: ${bracket.direction} requires TP/SL around mark, got TP=${tpNum}, SL=${slNum}, mark=${markPrice}`);
+        const slOk = bracket.direction === 'LONG' ? slNum < markPrice : slNum > markPrice;
+        const tpOk = !hasTp || (bracket.direction === 'LONG' ? tpNum > markPrice : tpNum < markPrice);
+        if (!slOk || !tpOk) {
+          const tpDescription = hasTp ? `TP=${tpNum}, ` : '';
+          throw new Error(`Invalid protection prices: ${bracket.direction} requires protection around mark, got ${tpDescription}SL=${slNum}, mark=${markPrice}`);
+        }
       }
       const openIds = new Set((Array.isArray(open) ? open : []).map((x) => String(x.clientAlgoId || '')));
       let createdTp = false;
-      const tpReq = { ...common, type: 'TAKE_PROFIT_MARKET', triggerPrice: bracket.takeProfitPrice, clientAlgoId: tpId };
+      const tpReq = hasTp
+        ? { ...common, type: 'TAKE_PROFIT_MARKET', triggerPrice: bracket.takeProfitPrice, clientAlgoId: tpId }
+        : null;
       const slReq = { ...common, type: 'STOP_MARKET', triggerPrice: bracket.stopLossPrice, clientAlgoId: slId };
-      console.log(`[${this.provider}] Binance bracket protection request`, { bracketId: bracket.bracketId, direction: bracket.direction, entryPrice: bracket.entryPrice, markPrice, tickSize: bracket.tickSize, source: bracket.protectionPriceSource, tpReq, slReq });
-      if (!openIds.has(tpId)) {
+      const protectionLog = { bracketId: bracket.bracketId, direction: bracket.direction, entryPrice: bracket.entryPrice, markPrice, tickSize: bracket.tickSize, source: bracket.protectionPriceSource };
+      if (tpReq) protectionLog.tpReq = tpReq;
+      protectionLog.slReq = slReq;
+      console.log(`[${this.provider}] Binance bracket protection request`, protectionLog);
+      if (tpReq && !openIds.has(tpId)) {
         await this._binanceSignedRequest('POST', '/fapi/v1/algoOrder', tpReq);
         createdTp = true;
       }
-      bracket.tpClientAlgoId = tpId;
-      this._algoClientToBracket.set(tpId, bracket.bracketId);
+      if (tpReq) {
+        bracket.tpClientAlgoId = tpId;
+        this._algoClientToBracket.set(tpId, bracket.bracketId);
+      } else {
+        bracket.tpClientAlgoId = null;
+        this._algoClientToBracket.delete(tpId);
+      }
       if (!openIds.has(slId)) {
         try {
           await this._binanceSignedRequest('POST', '/fapi/v1/algoOrder', slReq);
@@ -963,6 +1155,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       bracket.slClientAlgoId = slId;
       this._algoClientToBracket.set(slId, bracket.bracketId);
       bracket.status = 'PROTECTED';
+      bracket.protectionPlacedAt = Date.now();
       bracket.lastError = undefined;
       bracket.updatedAt = Date.now();
     } catch (error) {
@@ -986,17 +1179,22 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     const bracket = this._brackets.get(bracketId);
     const watcher = this._bracketEntryWatchers.get(bracketId);
     if (!bracket || !watcher) return;
-    const timeoutMs = Number(this.exchange?.options?.bracketEntryFillTimeoutMs || 120000);
-    if (Date.now() - watcher.startedAt > timeoutMs) { clearInterval(watcher.timer); this._bracketEntryWatchers.delete(bracketId); return; }
+    const timeoutMs = Number(this.exchange?.options?.bracketEntryFillTimeoutMs || 0);
+    if (Number.isFinite(timeoutMs) && timeoutMs > 0 && Date.now() - watcher.startedAt > timeoutMs) {
+      clearInterval(watcher.timer);
+      this._bracketEntryWatchers.delete(bracketId);
+      return;
+    }
     const o = await this._binanceSignedRequest('GET', '/fapi/v1/order', { symbol: bracket.symbol, origClientOrderId: bracket.entryClientOrderId });
     const st = String(o?.status || '').toUpperCase();
     if (st === 'FILLED') {
       bracket.status = 'ENTRY_FILLED';
       bracket.actualQty = String(o?.executedQty || o?.cumQty || bracket.expectedQty);
       bracket.updatedAt = Date.now();
+      this._confirmBracketPending(bracket, o);
+      this._markBracketOpened(bracket, o);
       try {
         await this._placeBracketProtection(bracket);
-        this._confirmBracketPending(bracket, o);
       } catch (error) {
         bracket.status = 'ERROR';
         bracket.lastError = error?.message || String(error);
@@ -1005,9 +1203,48 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       clearInterval(watcher.timer); this._bracketEntryWatchers.delete(bracketId);
       return;
     }
-    if (st === 'PARTIALLY_FILLED') { bracket.status = 'ENTRY_PARTIALLY_FILLED'; bracket.actualQty = String(o?.executedQty || o?.cumQty || ''); bracket.updatedAt = Date.now(); return; }
+    if (st === 'PARTIALLY_FILLED') { bracket.status = 'ENTRY_PARTIALLY_FILLED'; bracket.actualQty = String(o?.executedQty || o?.cumQty || ''); bracket.updatedAt = Date.now(); this._confirmBracketPending(bracket, o); this._markBracketOpened(bracket, o); return; }
     if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { bracket.status = 'CANCELED'; bracket.updatedAt = Date.now(); this._rejectBracketPending(bracket, `Entry order finished with status ${st}`, o); clearInterval(watcher.timer); this._bracketEntryWatchers.delete(bracketId); }
   }
+
+  _registerTrackedTicket(ticket, symbol) {
+    const normalizedTicket = String(ticket || '').trim();
+    if (!normalizedTicket || !symbol) return false;
+    this._ticketToSymbol.set(normalizedTicket, symbol);
+    this._positionClosedTickets.delete(normalizedTicket);
+    return true;
+  }
+
+  _emitPositionOpened(ticket, order = {}, origOrder = undefined) {
+    const normalizedTicket = String(ticket || '').trim();
+    if (!normalizedTicket || this._ticketOpened.has(normalizedTicket)) return false;
+    this._ticketOpened.add(normalizedTicket);
+    this.events.emit('position:opened', { ticket: normalizedTicket, order, origOrder });
+    return true;
+  }
+
+  _emitPositionClosed(ticket, trade = {}) {
+    const normalizedTicket = String(ticket || '').trim();
+    if (!normalizedTicket || this._positionClosedTickets.has(normalizedTicket)) return false;
+    this._positionClosedTickets.add(normalizedTicket);
+    this._ticketOpened.delete(normalizedTicket);
+    const profit = Number(trade?.profit);
+    const normalizedTrade = Number.isFinite(profit)
+      ? { ...trade, profit, pnlStatus: 'reported' }
+      : { ...trade, profit: undefined, pnlStatus: trade?.pnlStatus || 'unavailable' };
+    this.events.emit('position:closed', { ticket: normalizedTicket, trade: normalizedTrade });
+    return true;
+  }
+
+  _markBracketClosed(bracket) {
+    if (!bracket) return false;
+    const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || bracket.entryClientOrderId || '');
+    if (!this._ticketOpened.has(ticket)) return false;
+    bracket.status = 'CLOSED';
+    bracket.updatedAt = Date.now();
+    return this._emitPositionClosed(ticket, { pnlStatus: 'unavailable' });
+  }
+
   _startWatchLoop() {
     if (this._watchTimer || typeof this.exchange.fetchPositions !== 'function') return;
     this._watchTimer = setInterval(() => {
@@ -1023,8 +1260,8 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       if (this._ticketToSymbol.size === 0) return;
 
       // 1) Позиції: будуємо map символ -> net size
-      let positions = [];
-      try { positions = await this.exchange.fetchPositions(); } catch { positions = []; }
+      let positions;
+      try { positions = await this.exchange.fetchPositions(); } catch { return; }
       const sizeBySymbol = new Map();
       const pnlBySymbol = new Map();
 
@@ -1045,13 +1282,11 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
         const wasOpen = this._ticketOpened.has(ticket);
         if (!wasOpen && szNow !== 0) {
           // відкрилася позиція
-          this._ticketOpened.add(ticket);
-          this.events.emit('position:opened', { ticket, order: { symbol: sym, size: szNow } });
+          this._emitPositionOpened(ticket, { symbol: sym, size: szNow });
         } else if (wasOpen && szNow === 0) {
           // позиція закрилась
-          this._ticketOpened.delete(ticket);
           const profit = pnlBySymbol.has(sym) ? Number(pnlBySymbol.get(sym)) : undefined;
-          this.events.emit('position:closed', { ticket, trade: { profit } });
+          this._emitPositionClosed(ticket, { profit });
         }
       }
     } catch {
@@ -1762,7 +1997,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
             this.pending.delete(cid);
 
             // збережемо прив'язку ticket -> symbol для подальшого трекінгу позиції
-            if (providerOrderId) this._ticketToSymbol.set(providerOrderId, symbol);
+            if (providerOrderId) this._registerTrackedTicket(providerOrderId, symbol);
 
             this.events.emit('order:confirmed', {
               pendingId: cid,
@@ -1813,28 +2048,77 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
         try {
           const o = await this._binanceSignedRequest('GET', '/fapi/v1/order', { symbol: b.symbol, origClientOrderId: b.entryClientOrderId });
           const st = String(o?.status || '').toUpperCase();
-          if (st === 'FILLED') { b.status = 'ENTRY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || b.expectedQty); try { await this._placeBracketProtection(b); this._confirmBracketPending(b, o); } catch (error) { b.status = 'ERROR'; b.lastError = error?.message || String(error); this._rejectBracketPending(b, `Entry filled but protection failed: ${b.lastError}`, error); } }
-          else if (st === 'PARTIALLY_FILLED') { b.status = 'ENTRY_PARTIALLY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || ''); }
+          if (st === 'FILLED') { b.status = 'ENTRY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || b.expectedQty); this._confirmBracketPending(b, o); this._markBracketOpened(b, o); try { await this._placeBracketProtection(b); } catch (error) { b.status = 'ERROR'; b.lastError = error?.message || String(error); this._rejectBracketPending(b, `Entry filled but protection failed: ${b.lastError}`, error); } }
+          else if (st === 'PARTIALLY_FILLED') { b.status = 'ENTRY_PARTIALLY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || ''); this._confirmBracketPending(b, o); this._markBracketOpened(b, o); }
           else if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { b.status = 'CANCELED'; this._rejectBracketPending(b, `Entry order finished with status ${st}`, o); }
           b.updatedAt = Date.now();
-        } catch {}
+        } catch (orderError) {
+          try {
+            const trades = await this._binanceSignedRequest('GET', '/fapi/v1/userTrades', {
+              symbol: b.symbol,
+              orderId: b.entryOrderId
+            });
+            const entryTrades = (Array.isArray(trades) ? trades : []).filter((trade) => (
+              String(trade?.orderId || '') === String(b.entryOrderId || '')
+            ));
+            const executedQty = entryTrades.reduce((sum, trade) => {
+              const qty = Number(trade?.qty ?? trade?.quantity ?? 0);
+              return sum + (Number.isFinite(qty) ? Math.abs(qty) : 0);
+            }, 0);
+            if (executedQty > 0) {
+              const expectedQty = Number(b.expectedQty);
+              const fullyFilled = Number.isFinite(expectedQty) && executedQty + 1e-12 >= expectedQty;
+              b.actualQty = String(executedQty);
+              b.status = fullyFilled ? 'ENTRY_FILLED' : 'ENTRY_PARTIALLY_FILLED';
+              b.updatedAt = Date.now();
+              this._confirmBracketPending(b, { orderId: b.entryOrderId, executedQty: b.actualQty });
+              this._markBracketOpened(b, { orderId: b.entryOrderId, executedQty: b.actualQty });
+              if (fullyFilled) {
+                try { await this._placeBracketProtection(b); } catch (error) {
+                  b.status = 'ERROR';
+                  b.lastError = error?.message || String(error);
+                }
+              }
+            }
+          } catch (tradesError) {
+            const now = Date.now();
+            if (!b.lastEntryReconcileWarningAt || now - b.lastEntryReconcileWarningAt >= 60000) {
+              b.lastEntryReconcileWarningAt = now;
+              console.warn(`[${this.provider}] Unable to reconcile Binance bracket entry`, {
+                bracketId: b.bracketId,
+                entryOrderId: b.entryOrderId,
+                orderError: orderError?.message || String(orderError),
+                tradesError: tradesError?.message || String(tradesError)
+              });
+            }
+          }
+        }
         continue;
       }
 
       let posAmt = 0;
+      let positionKnown = false;
       try {
         const all = await this._binanceSignedRequest('GET', '/fapi/v2/positionRisk', {});
         const row = (all || []).find((r) => String(r.symbol) === b.symbol && String(r.positionSide || 'BOTH') === b.positionSide);
         posAmt = Math.abs(Number(row?.positionAmt || 0));
+        positionKnown = Array.isArray(all);
       } catch {}
       let open = [];
       try { open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: b.symbol }); } catch {}
+      this._detectManualProtectiveOrderModifications(b, open);
+      if (b.status === 'EXTERNALLY_MODIFIED') continue;
+
       const set = new Set((open || []).map((x) => String(x.clientAlgoId || '')));
 
-      if (['PROTECTED','CLOSING','ENTRY_FILLED','ERROR'].includes(b.status) && posAmt === 0) { await this.cancelBracketProtection(b.bracketId); b.status = 'CLOSED'; b.updatedAt = Date.now(); continue; }
+      const lifecycleTicket = String(b.lifecycleTicket || b.entryOrderId || b.entryClientOrderId || '');
+      const lifecycleOpened = this._ticketOpened.has(lifecycleTicket);
+      if (['PROTECTED','CLOSING','ENTRY_FILLED','ERROR'].includes(b.status) && lifecycleOpened && positionKnown && posAmt === 0) { await this.cancelBracketProtection(b.bracketId); this._markBracketClosed(b); continue; }
 
-      const hasTp = b.tpClientAlgoId && set.has(b.tpClientAlgoId);
-      const hasSl = b.slClientAlgoId && set.has(b.slClientAlgoId);
+      const expectsTp = positiveFiniteNumber(b.takeProfitPrice) !== undefined;
+      const expectsSl = positiveFiniteNumber(b.stopLossPrice) !== undefined;
+      const hasTp = !expectsTp || (b.tpClientAlgoId && set.has(b.tpClientAlgoId));
+      const hasSl = !expectsSl || (b.slClientAlgoId && set.has(b.slClientAlgoId));
       if (posAmt > 0 && ['ENTRY_FILLED','PROTECTED','ERROR'].includes(b.status) && (!hasTp || !hasSl)) {
         try { await this._placeBracketProtection(b); } catch {}
       }
@@ -1857,7 +2141,13 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     const status = String(o?.X || '').toUpperCase();
     if (status === 'FILLED') {
       bracket.status = 'ENTRY_FILLED'; bracket.actualQty = String(o?.z || o?.q || bracket.expectedQty); bracket.updatedAt = Date.now();
-      try { await this._placeBracketProtection(bracket); this._confirmBracketPending(bracket, o); } catch (error) { bracket.status = 'ERROR'; bracket.lastError = error?.message || String(error); this._rejectBracketPending(bracket, `Entry filled but protection failed: ${bracket.lastError}`, error); }
+      this._confirmBracketPending(bracket, o);
+      this._markBracketOpened(bracket, o);
+      try { await this._placeBracketProtection(bracket); } catch (error) { bracket.status = 'ERROR'; bracket.lastError = error?.message || String(error); this._rejectBracketPending(bracket, `Entry filled but protection failed: ${bracket.lastError}`, error); }
+    } else if (status === 'PARTIALLY_FILLED') {
+      bracket.status = 'ENTRY_PARTIALLY_FILLED'; bracket.actualQty = String(o?.z || o?.q || ''); bracket.updatedAt = Date.now();
+      this._confirmBracketPending(bracket, o);
+      this._markBracketOpened(bracket, o);
     } else if (['CANCELED','EXPIRED','REJECTED'].includes(status)) {
       bracket.status = 'CANCELED'; bracket.updatedAt = Date.now();
       this._rejectBracketPending(bracket, `Entry order finished with status ${status}`, o);
@@ -1870,10 +2160,12 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       const symbol = String(p?.s || ''); const ps = String(p?.ps || 'BOTH'); const pa = Number(p?.pa || 0);
       if (pa !== 0) continue;
       for (const b of this._brackets.values()) {
-        if (b.symbol === symbol && b.positionSide === ps && !['CLOSED','CANCELED'].includes(b.status)) {
+        const lifecycleTicket = String(b.lifecycleTicket || b.entryOrderId || b.entryClientOrderId || '');
+        const lifecycleOpened = this._ticketOpened.has(lifecycleTicket);
+        if (b.symbol === symbol && b.positionSide === ps && lifecycleOpened && !['CLOSED','CANCELED'].includes(b.status)) {
           b.status = 'CLOSING'; b.updatedAt = Date.now();
           await this.cancelBracketProtection(b.bracketId);
-          b.status = 'CLOSED'; b.updatedAt = Date.now();
+          this._markBracketClosed(b);
         }
       }
     }
@@ -1967,7 +2259,39 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     }
   }
 
-  /** @returns {Promise<any[]>} історія закритих ордерів (як аналог позицій) */
+  /** @returns {Promise<any[]>} App-tracked open position records for lifecycle recovery. */
+  async listOpenPositions(symbol) {
+    const requestedSymbol = String(symbol || '').trim().toUpperCase();
+    const positions = [];
+    for (const bracket of this._brackets.values()) {
+      const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || bracket.entryClientOrderId || '');
+      if (!ticket || !this._ticketOpened.has(ticket) || ['CLOSED','CANCELED'].includes(bracket.status)) continue;
+      const originalSymbol = String(bracket.origOrder?.symbol || bracket.origOrder?.ticker || bracket.mappedSymbol || bracket.symbol || '');
+      const symbolAliases = [
+        originalSymbol,
+        bracket.mappedSymbol,
+        bracket.symbol
+      ].map(value => String(value || '').trim().toUpperCase());
+      if (requestedSymbol && !symbolAliases.includes(requestedSymbol)) continue;
+      const cid = String(bracket.pendingId || bracket.origOrder?.meta?.cid || '').trim();
+      const qty = Number(bracket.actualQty || bracket.expectedQty || 0);
+      positions.push({
+        ticket,
+        id: ticket,
+        orderId: ticket,
+        symbol: originalSymbol,
+        qty,
+        contracts: qty,
+        clientOrderId: cid,
+        comment: bracket.origOrder?.comment || (cid ? `cid:${cid}` : ''),
+        side: bracket.origOrder?.side,
+        __isPosition: true
+      });
+    }
+    return positions;
+  }
+
+  /** @returns {Promise<any[]>} Closed order history used as a position-history fallback. */
   async listClosedPositions() {
     try {
       if (typeof this.exchange.fetchClosedOrders === 'function') {
@@ -1985,6 +2309,67 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
    * @param {string} symbol - у форматі ccxt або локальний (буде змаплено)
    * @returns {Promise<{bid?:number, ask?:number, price?:number}|null>}
    */
+  async getInstrumentMetadata(symbol) {
+    try {
+      if (this._isBinanceUsdmLike()) {
+        const normalized = await this.normalizeBinanceUsdmSymbol(symbol);
+        const filters = await this._getBinanceSymbolFilters(normalized);
+        return {
+          tickSize: filters.tickSize,
+          quantityStep: filters.stepSize,
+          minQty: filters.minQty,
+          maxQty: filters.maxQty,
+          minNotional: filters.minNotional,
+          sources: {
+            tickSize: 'binance-exchangeInfo',
+            quantityStep: 'binance-exchangeInfo',
+            minQty: 'binance-exchangeInfo',
+            maxQty: 'binance-exchangeInfo',
+            minNotional: 'binance-exchangeInfo'
+          }
+        };
+      }
+
+      await this.ensureReady();
+      const mapped = this.mapSymbol(symbol);
+      let market;
+      try {
+        market = (this.exchange.markets && this.exchange.markets[mapped]) || this.exchange.market(mapped);
+      } catch {}
+
+      const amountPrecision = market?.precision?.amount;
+      let quantityStep;
+      if (this.exchange?.precisionMode === ccxt.TICK_SIZE && Number(amountPrecision) > 0) {
+        quantityStep = Number(amountPrecision);
+      } else if (Number.isInteger(amountPrecision) && amountPrecision >= 0 && amountPrecision <= 18) {
+        quantityStep = 10 ** (-amountPrecision);
+      } else if (Number.isFinite(Number(amountPrecision)) && Number(amountPrecision) > 0) {
+        quantityStep = Number(amountPrecision);
+      }
+
+      const source = 'ccxt-market';
+      return {
+        tickSize: this._getTickSizeFromMarket(mapped),
+        quantityStep,
+        minQty: Number(market?.limits?.amount?.min),
+        maxQty: Number(market?.limits?.amount?.max),
+        minNotional: Number(market?.limits?.cost?.min),
+        contractSize: Number(market?.contractSize),
+        sources: {
+          tickSize: source,
+          quantityStep: source,
+          minQty: source,
+          maxQty: source,
+          minNotional: source,
+          contractSize: 'ccxt-market'
+        }
+      };
+    } catch (err) {
+      console.error(`[${this.provider}] getInstrumentMetadata:error`, { symbol, message: err?.message || String(err) });
+      return null;
+    }
+  }
+
   async getQuote(symbol, quoteType = 'book') {
     let normalizedSymbol;
     let endpoint = this._binanceQuoteTypeToEndpoint(quoteType);

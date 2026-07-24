@@ -31,6 +31,10 @@ class SimulatedAdapter extends ExecutionAdapter {
     return { bid: 100, ask: 100, price: 100, tickSize: 0.01 };
   }
 
+  async getInstrumentMetadata() {
+    return { tickSize: 0.01, quantityStep: 1, minQty: 1, contractSize: 1, sources: { tickSize: 'simulated' } };
+  }
+
   async cancelOrder() {
     return { status: 'ok', provider: this.provider };
   }

@@ -16,14 +16,21 @@ function buildChartComposer(cfg = {}) {
 let defaultComposer = null;
 let layout1D;
 let layout5M;
-try {
-  const cfg = loadConfig('../services/dealTrackers-chartImages/config/chart-images.json');
+function configure(cfg = {}) {
   const def = cfg && cfg.default;
   if (def) {
     ({ layout1D, layout5M } = def);
     const { layout1D: _1, layout5M: _5, ...svcCfg } = def;
     defaultComposer = buildChartComposer(svcCfg);
+  } else {
+    defaultComposer = null;
+    layout1D = undefined;
+    layout5M = undefined;
   }
+  return defaultComposer;
+}
+try {
+  configure(loadConfig('../services/dealTrackers-chartImages/config/chart-images.json'));
 } catch (e) {
   defaultComposer = null;
 }
@@ -48,4 +55,5 @@ function compose5M(symbol) {
   }
 }
 
-module.exports = { buildChartComposer, defaultComposer, compose1D, compose5M };
+module.exports = { buildChartComposer, configure, compose1D, compose5M };
+Object.defineProperty(module.exports, 'defaultComposer', { enumerable: true, get: () => defaultComposer });

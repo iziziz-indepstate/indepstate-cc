@@ -1,0 +1,35 @@
+{
+  "properties": {
+    "name": "Outbound Webhooks",
+    "group": "Automation"
+  },
+  "options": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Enable outbound webhook sender"
+    },
+    "trace": {
+      "description": "Outbound webhook trace logging",
+      "enabled": {
+        "type": "boolean",
+        "description": "Write trace logs to console"
+      },
+      "includePayload": {
+        "type": "boolean",
+        "description": "Include rendered event payload in trace logs"
+      },
+      "includeBody": {
+        "type": "boolean",
+        "description": "Include rendered request body in trace logs"
+      }
+    },
+    "targets": {
+      "__allowUnknown": true,
+      "description": "Webhook targets keyed by name. Each target may set dryRun=true to log the rendered request without sending it."
+    },
+    "groups": {
+      "__allowUnknown": true,
+      "description": "Named target groups; each value is an array of target names"
+    }
+  }
+}
