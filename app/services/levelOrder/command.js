@@ -1,7 +1,9 @@
 const { Command } = require('../commands/base');
+const { resolveLevelOrderDefaults } = require('./strategy');
 
 const RESERVED_ROW_PROPS = new Set(['cardType', 'ticker', 'level', 'event', 'time']);
 const PROPS_USAGE = 'Usage: levelOrder {ticker} {level} [props=key:value;key2:value2]';
+const PLACE_USAGE = 'Usage: levelOrder-{buy|sell} {ticker} {level} {levelOffset} {risk}';
 
 function normalizeTicker(ticker) {
   const raw = String(ticker || '').trim();
@@ -80,8 +82,70 @@ class LevelOrderCommand extends Command {
   }
 }
 
+class LevelOrderPlaceCommand extends Command {
+  constructor(action, opts = {}) {
+    const normalizedAction = String(action || '').toUpperCase() === 'LS' ? 'LS' : 'LB';
+    super(normalizedAction === 'LB' ? ['levelOrder-buy', 'lo-lb'] : ['levelOrder-sell', 'lo-ls']);
+    this.action = normalizedAction;
+    this.servicesApi = opts.servicesApi || {};
+    this.getConfig = typeof opts.getConfig === 'function' ? opts.getConfig : () => ({});
+    this.now = opts.now || Date.now;
+  }
+
+  async run(args) {
+    const [tickerRaw, levelRaw, offsetRaw, riskRaw] = Array.isArray(args) ? args : [];
+    const ticker = normalizeTicker(tickerRaw);
+    const level = parseNumber(levelRaw);
+    const stopOffsetPts = parseNumber(offsetRaw);
+    const riskUsd = parseNumber(riskRaw);
+    if (
+      !ticker ||
+      !Number.isFinite(level) || level <= 0 ||
+      !Number.isFinite(stopOffsetPts) || stopOffsetPts <= 0 ||
+      !Number.isFinite(riskUsd) || riskUsd <= 0
+    ) {
+      return { ok: false, error: PLACE_USAGE };
+    }
+
+    const queueLevelOrder = this.servicesApi.execution?.queueLevelOrder;
+    if (typeof queueLevelOrder !== 'function') {
+      return { ok: false, error: 'Level order execution queue is not available' };
+    }
+
+    const cfg = this.getConfig() || {};
+    const defaults = resolveLevelOrderDefaults(cfg, ticker);
+    const requestId = `${this.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const strategyId = `${requestId}_${this.action.toLowerCase()}`;
+    const payload = {
+      ticker,
+      action: this.action,
+      level,
+      riskUsd,
+      stopOffsetPts,
+      maxLot: defaults.maxLot,
+      minLot: defaults.minLot,
+      takeProfitPts: defaults.takeProfitPts,
+      buyPriceSource: defaults.buyPriceSource,
+      sellPriceSource: defaults.sellPriceSource,
+      requestId,
+      strategyId,
+      meta: {
+        source: 'commandLine',
+        command: this.name
+      }
+    };
+
+    const result = await queueLevelOrder(payload);
+    if (!result || result.status === 'rejected' || result.status === 'error') {
+      return { ok: false, error: result?.reason || 'Level order rejected', result };
+    }
+    return { ok: true, result };
+  }
+}
+
 module.exports = {
   LevelOrderCommand,
+  LevelOrderPlaceCommand,
   buildLevelOrderRow,
   normalizeTicker,
   parsePropsToken

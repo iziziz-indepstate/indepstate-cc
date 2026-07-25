@@ -60,6 +60,25 @@ Creates a level-order card for trading from a price level. The card exposes `LB`
 
 See [level-order.md](level-order.md) for settings and execution details.
 
+### levelOrder-buy / levelOrder-sell (aliases: lo-lb / lo-ls)
+
+```
+levelOrder-buy {ticker} {level} {levelOffset} {risk}
+levelOrder-sell {ticker} {level} {levelOffset} {risk}
+```
+
+Immediately places the LB or LS level-order strategy for the specified ticker. Unlike `levelOrder`,
+this command does not create a card; it sends the same grouped orders that the level-order card's
+LB/LS buttons would send. `level` is the traded level, `levelOffset` is the stop offset in points,
+and `risk` is risk in dollars. The command applies the same `level-order` settings defaults for max
+lot, min lot, take profit, and price sources.
+
+Example:
+
+```
+levelOrder-sell MNQ 28125 1 500
+```
+
 ### rm
 
 ```

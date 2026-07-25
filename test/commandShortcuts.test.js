@@ -44,14 +44,29 @@ async function run() {
 
   const cmd = document.getElementById('cmdline');
 
-  // shortcut executed when no input is focused
+  // one-letter shortcuts are delayed so they do not steal longer typed commands
   const evt1 = new dom.window.KeyboardEvent('keydown', { key: 'l' });
   document.dispatchEvent(evt1);
+  assert.deepStrictEqual(ran, []);
+  assert.strictEqual(document.activeElement, cmd);
+  assert.strictEqual(cmd.value, 'l');
+  await new Promise(r => setTimeout(r, 300));
   assert.deepStrictEqual(ran, ['l']);
-  assert.notStrictEqual(document.activeElement, cmd);
+  assert.strictEqual(cmd.value, '');
+
+  // typing a longer command starting with the shortcut cancels the delayed run
+  ran.length = 0;
+  cmd.blur();
+  const evtLong = new dom.window.KeyboardEvent('keydown', { key: 'l' });
+  document.dispatchEvent(evtLong);
+  cmd.value = 'lo-ls';
+  cmd.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await new Promise(r => setTimeout(r, 300));
+  assert.deepStrictEqual(ran, []);
 
   // shortcut ignored when command line input is focused
   ran.length = 0;
+  cmd.value = '';
   cmd.focus();
   const evt2 = new dom.window.KeyboardEvent('keydown', { key: 'l' });
   cmd.dispatchEvent(evt2);

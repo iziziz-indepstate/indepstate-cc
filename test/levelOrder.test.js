@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { LevelOrderCommand, buildLevelOrderRow } = require('../app/services/levelOrder/command');
+const { LevelOrderCommand, LevelOrderPlaceCommand, buildLevelOrderRow } = require('../app/services/levelOrder/command');
 const {
   resolveLevelOrderDefaults,
   splitQuantity,
@@ -58,6 +58,57 @@ const orderCalculator = {
   assert.strictEqual(buildLevelOrderRow(['SPX', '7500', 'props=bad-key:value']).ok, false);
   assert.strictEqual(buildLevelOrderRow(['SPX', '7500', 'extra']).ok, false);
 })();
+
+(async function testImmediateCommand() {
+  const queued = [];
+  const servicesApi = {
+    execution: {
+      async queueLevelOrder(payload) {
+        queued.push(payload);
+        return { status: 'ok', provider: 'simulated', providerOrderId: 'level:test' };
+      }
+    }
+  };
+  const cfg = {
+    defaults: { maxLot: 10, minLot: 1, stopOffsetPts: 3, takeProfitPts: 20, buyPriceSource: 'ask', sellPriceSource: 'bid' }
+  };
+  const buy = new LevelOrderPlaceCommand('LB', {
+    servicesApi,
+    getConfig: () => cfg,
+    now: () => 123456
+  });
+  let res = await buy.run(['upRo', '100', '4', '50']);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(queued.length, 1);
+  assert.strictEqual(queued[0].ticker, 'UPRO');
+  assert.strictEqual(queued[0].action, 'LB');
+  assert.strictEqual(queued[0].level, 100);
+  assert.strictEqual(queued[0].stopOffsetPts, 4);
+  assert.strictEqual(queued[0].riskUsd, 50);
+  assert.strictEqual(queued[0].maxLot, 10);
+  assert.strictEqual(queued[0].takeProfitPts, 20);
+  assert.strictEqual(queued[0].buyPriceSource, 'ask');
+  assert.strictEqual(queued[0].requestId.startsWith('123456_'), true);
+  assert.strictEqual(queued[0].strategyId.endsWith('_lb'), true);
+  assert.strictEqual(queued[0].meta.source, 'commandLine');
+
+  const sell = new LevelOrderPlaceCommand('LS', { servicesApi, getConfig: () => cfg, now: () => 123457 });
+  res = await sell.run(['MNQ', '101', '5', '60']);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(queued[1].ticker, 'MNQ');
+  assert.strictEqual(queued[1].action, 'LS');
+  assert.strictEqual(queued[1].strategyId.endsWith('_ls'), true);
+
+  res = await buy.run(['UPRO', '100', '0', '50']);
+  assert.strictEqual(res.ok, false);
+
+  res = await buy.run(['100', '4', '50']);
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, 'Usage: levelOrder-{buy|sell} {ticker} {level} {levelOffset} {risk}');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
 
 (function testDefaults() {
   const cfg = {

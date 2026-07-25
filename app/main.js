@@ -1165,7 +1165,7 @@ function setupIpc(orderSvc) {
   });
   servicesApi.settings?.onApply?.('pending-strategies', ({ config }) => pendingHub.configureStrategies(config));
 
-  ipcMain.handle('level-order:place', async (_evt, payload = {}) => {
+  async function queueLevelOrderInternal(payload = {}) {
     const symbol = String(payload.ticker || payload.symbol || '').trim();
     const instrumentType = payload.instrumentType || detectInstrumentType(symbol);
     const providerName = resolveProviderName({ payload, symbol, instrumentType, meta: payload.meta });
@@ -1278,7 +1278,11 @@ function setupIpc(orderSvc) {
       appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, payload, error: reason });
       return { status: 'rejected', provider: providerName, reason };
     }
-  });
+  }
+
+  servicesApi.execution.queueLevelOrder = queueLevelOrderInternal;
+
+  ipcMain.handle('level-order:place', async (_evt, payload = {}) => queueLevelOrderInternal(payload));
 
   ipcMain.handle('execution:stop-retry', async (_evt, reqId) => {
     const matches = collectRetryStopEntries(pendingIndex, reqId);

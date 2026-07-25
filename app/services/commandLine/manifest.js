@@ -52,6 +52,28 @@ function initService(servicesApi = {}) {
 
 function hookRenderer(ipcRenderer) {
   let shortcuts = new Set();
+  let pendingShortcutTimer = null;
+  const shortcutDelayMs = 250;
+
+  function clearPendingShortcut() {
+    if (pendingShortcutTimer) {
+      clearTimeout(pendingShortcutTimer);
+      pendingShortcutTimer = null;
+    }
+  }
+
+  function runShortcut(cmd, cmdline) {
+    clearPendingShortcut();
+    ipcRenderer.invoke('cmdline:run', cmd)
+      .then((res) => {
+        if (!res?.ok && res?.error) window.toast?.(res.error);
+        if (cmdline && cmdline.value.trim() === cmd) cmdline.value = '';
+      })
+      .catch((err) => {
+        window.toast?.(err.message || String(err));
+      });
+  }
+
   ipcRenderer
     .invoke('cmdline:shortcuts')
     .then((list = []) => {
@@ -75,16 +97,22 @@ function hookRenderer(ipcRenderer) {
     if (!isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const cmdline = document.getElementById('cmdline');
       if (shortcuts.has(e.key)) {
-        ipcRenderer.invoke('cmdline:run', e.key)
-          .then((res) => {
-            if (!res?.ok && res?.error) window.toast?.(res.error);
-          })
-          .catch((err) => {
-            window.toast?.(err.message || String(err));
-          });
-        if (cmdline) cmdline.value = '';
+        if (cmdline && e.key.length === 1) {
+          clearPendingShortcut();
+          cmdline.focus();
+          cmdline.value = e.key;
+          pendingShortcutTimer = setTimeout(() => {
+            pendingShortcutTimer = null;
+            if (document.activeElement === cmdline && cmdline.value.trim() === e.key) {
+              runShortcut(e.key, cmdline);
+            }
+          }, shortcutDelayMs);
+        } else {
+          runShortcut(e.key, cmdline);
+        }
         e.preventDefault();
       } else {
+        clearPendingShortcut();
         cmdline?.focus();
         if (e.key.length === 1) {
           if (cmdline) cmdline.value += e.key;
@@ -95,6 +123,11 @@ function hookRenderer(ipcRenderer) {
         }
       }
     }
+  });
+
+  document.addEventListener('input', (e) => {
+    const target = e.target;
+    if (target && target.id === 'cmdline') clearPendingShortcut();
   });
 }
 
