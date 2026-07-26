@@ -5,6 +5,7 @@ dist/
 /config/
 node_modules/
 *.pyc
+extensions/mitmproxy/**/__pycache__/
 .env
 *-lock.json
 *.log
