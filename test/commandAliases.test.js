@@ -23,7 +23,7 @@ function createService(aliases) {
   assert.strictEqual(res.ok, true);
   assert.deepStrictEqual(cmd.row, {
     cardType: 'levelOrder',
-    ticker: 'USTEC',
+    ticker: 'ustec',
     level: 28900,
     event: 'levelOrder',
     time: 123
@@ -36,7 +36,7 @@ function createService(aliases) {
   ]);
   const res = cmd.run('up 28900 props=source:test');
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(cmd.row.ticker, 'USTEC');
+  assert.strictEqual(cmd.row.ticker, 'ustec');
   assert.strictEqual(cmd.row.level, 28900);
   assert.strictEqual(cmd.row.source, 'test');
 })();
@@ -47,7 +47,7 @@ function createService(aliases) {
   ]);
   const res = cmd.run('u 28900');
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(cmd.row.ticker, 'USTEC');
+  assert.strictEqual(cmd.row.ticker, 'ustec');
   assert.strictEqual(cmd.row.level, 28900);
 })();
 
@@ -74,7 +74,7 @@ function createService(aliases) {
   const cmd = createService([]);
   const res = cmd.run('lo ustec 28900');
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(cmd.row.ticker, 'USTEC');
+  assert.strictEqual(cmd.row.ticker, 'ustec');
   assert.strictEqual(cmd.row.level, 28900);
 })();
 

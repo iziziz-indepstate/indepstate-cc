@@ -20,15 +20,15 @@ async function run() {
   assert.strictEqual(res.ok, true);
   assert.strictEqual(row.sl, 25);
 
-  // ticker capitalization without dot
+  // ticker preserves case without dot
   res = cmd.run(['bbb', '100', '20']);
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(row.ticker, 'BBB');
+  assert.strictEqual(row.ticker, 'bbb');
 
-  // ticker capitalization up to dot
+  // ticker preserves case with dot suffix
   res = cmd.run(['ccc.def', '100', '20']);
   assert.strictEqual(res.ok, true);
-  assert.strictEqual(row.ticker, 'CCC.def');
+  assert.strictEqual(row.ticker, 'ccc.def');
 
   console.log('addCommand tests passed');
 }

@@ -10,9 +10,7 @@ lo {ticker} {level}
 lo {ticker} {level} props=key:value;key2:value2
 ```
 
-The command creates a row with `cardType: "levelOrder"`, the normalized ticker, the level, `event: "levelOrder"`, and the current timestamp.
-
-Ticker normalization follows the existing command style: the base ticker is uppercased, while suffixes such as `.cfd` are preserved.
+The command creates a row with `cardType: "levelOrder"`, the trimmed ticker, the level, `event: "levelOrder"`, and the current timestamp. Ticker letter case is preserved.
 
 The optional `props=` argument attaches custom string properties to the created card row. It accepts
 semicolon-delimited `key:value` pairs without spaces. Core row fields such as `ticker`, `level`,

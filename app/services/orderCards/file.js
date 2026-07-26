@@ -13,8 +13,7 @@ function parseLine(line) {
   const [t, priceStr, slStr = '', tpStr = '', qtyStr = ''] = parts;
   const price = Number(priceStr);
   if (!Number.isFinite(price)) return null;
-  //EURUSD.c case (but maybe move to dwx)
-  const ticker = t.includes('.') ? t : t.toUpperCase();
+  const ticker = String(t).trim();
   const row = { ticker, price };
   if (slStr !== '') {
     const sl = parseInt(slStr, 10);
@@ -98,4 +97,4 @@ class FileOrderCardsSource extends OrderCardsSource {
   }
 }
 
-module.exports = { FileOrderCardsSource };
+module.exports = { FileOrderCardsSource, parseLine };

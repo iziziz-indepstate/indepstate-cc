@@ -21,7 +21,7 @@ const orderCalculator = {
   assert.strictEqual(res.ok, true);
   assert.deepStrictEqual(row, {
     cardType: 'levelOrder',
-    ticker: 'SPX.cfd',
+    ticker: 'spx.cfd',
     level: 7500,
     event: 'levelOrder',
     time: 123
@@ -46,7 +46,7 @@ const orderCalculator = {
   assert.strictEqual(res.ok, true);
   assert.deepStrictEqual(row, {
     cardType: 'levelOrder',
-    ticker: 'SPX.cfd',
+    ticker: 'spx.cfd',
     level: 7500,
     event: 'levelOrder',
     time: 123,
@@ -80,7 +80,7 @@ const orderCalculator = {
   let res = await buy.run(['upRo', '100', '4', '50']);
   assert.strictEqual(res.ok, true);
   assert.strictEqual(queued.length, 1);
-  assert.strictEqual(queued[0].ticker, 'UPRO');
+  assert.strictEqual(queued[0].ticker, 'upRo');
   assert.strictEqual(queued[0].action, 'LB');
   assert.strictEqual(queued[0].level, 100);
   assert.strictEqual(queued[0].stopOffsetPts, 4);

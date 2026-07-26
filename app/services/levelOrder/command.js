@@ -7,13 +7,7 @@ const PLACE_USAGE = 'Usage: levelOrder-{buy|sell} {ticker} {level} {levelOffset}
 const LEVEL_FUNCTION_PREFIX = 'f:';
 
 function normalizeTicker(ticker) {
-  const raw = String(ticker || '').trim();
-  if (!raw) return '';
-  const dot = raw.indexOf('.');
-  if (dot >= 0) {
-    return raw.slice(0, dot).toUpperCase() + raw.slice(dot);
-  }
-  return raw.toUpperCase();
+  return String(ticker || '').trim();
 }
 
 function parseNumber(value) {
