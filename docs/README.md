@@ -3,6 +3,8 @@
 This directory contains high-level notes about the codebase.
 
 ## Overview
+- [architecture-layers.md](architecture-layers.md) - domain/application/infrastructure/interfaces boundaries and extension-service layering rules.
+- [target-architecture.md](target-architecture.md) - target Position, command/event, provider, and composite card architecture.
 - `app/main.js` – Electron main process wiring adapters and relaying events to the renderer
 - `app/renderer.js` – UI layer showing order cards and status indicators
 - `app/services/events.js` – lightweight event bus for `order:placed`, `position:opened`, `position:closed` and `order:cancelled`

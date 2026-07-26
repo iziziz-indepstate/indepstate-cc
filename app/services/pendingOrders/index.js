@@ -11,6 +11,7 @@ const { FalseBreakStrategy } = require('./strategies/falseBreak');
 const { LimitByCurrentStrategy } = require('./strategies/limitByCurrent');
 const { PendingOrderHub, createPendingOrderHub } = require('./hub');
 const { createStrategyFactory } = require('./factory');
+const { registerPendingOrdersIpcHandlers } = require('./infrastructure');
 
 function createPendingOrderService(opts = {}) {
   const createStrategy = opts.strategyFactory || createStrategyFactory(opts.strategyConfig, opts.strategies);
@@ -30,5 +31,6 @@ module.exports = {
   LimitByCurrentStrategy,
   PendingOrderHub,
   createPendingOrderHub,
-  createStrategyFactory
+  createStrategyFactory,
+  registerPendingOrdersIpcHandlers
 };

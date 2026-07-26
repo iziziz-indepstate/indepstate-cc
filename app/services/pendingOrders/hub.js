@@ -78,7 +78,7 @@ async function fetchAdapterHistory(adapter, symbol, timeframe = 'M1', limit = 15
 }
 
 class PendingOrderHub {
-  constructor({ strategies = {}, strategyConfig, subscribe, ipcMain, queuePlaceOrder, wireAdapter, mainWindow, getAdapter, resolveProvider, instrumentInfo } = {}) {
+  constructor({ strategies = {}, strategyConfig, subscribe, queuePlaceOrder, wireAdapter, mainWindow, getAdapter, resolveProvider, instrumentInfo } = {}) {
     this.strategies = strategies;
     this.subscribe = subscribe;
     this.createStrategy = createStrategyFactory(strategyConfig, strategies);
@@ -106,14 +106,6 @@ class PendingOrderHub {
       const barTime = time ?? timestamp;
       if (svc) svc.onBar({ open, high, low, close, time: barTime });
     });
-
-    if (ipcMain) {
-      if (queuePlaceOrder) {
-        ipcMain.handle('queue-place-order', async (_evt, payload) => queuePlaceOrder(payload));
-      }
-      ipcMain.handle('queue-place-pending', async (_evt, payload) => this.queuePlacePending(payload));
-      ipcMain.handle('pending:cancel', async (_evt, pendingId) => this.cancelPending(pendingId));
-    }
   }
 
   configureStrategies(strategyConfig) {

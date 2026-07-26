@@ -4,7 +4,6 @@
 const { app, BrowserWindow, ipcMain, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const crypto = require('crypto');
 
 require('dotenv').config({ path: path.resolve(__dirname, '..','.env') });
 
@@ -12,20 +11,29 @@ const servicesApi = require('./services/servicesApi');
 const { createOrderCardService } = require('./services/orderCards');
 const { detectInstrumentType } = require('./services/instruments');
 const events = require('./services/events');
-const { createPendingOrderHub } = require('./services/pendingOrders');
+const { createPendingOrderHub, registerPendingOrdersIpcHandlers } = require('./services/pendingOrders');
 const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const loadConfig = require('./config/load');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
 const { GroupedOrderLifecycleRegistry } = require('./services/brokerage/comps/groupedOrderLifecycle');
-const { calculateLimitBidTradePlan } = require('./services/levelOrder/strategy');
-const { collectRetryStopEntries, getRetryStopParentIds } = require('./services/levelOrder/retryStop');
-const { normalizeOrderQty, isValidOrderQty } = require('./services/executionQuantity');
+const { legacyRowToCreateCommand } = require('./application/positions');
 const {
-  legacyRowToCreateCommand,
-  legacyOrderPayloadToCreateCommand
-} = require('./application/positions');
-const { createAdapterLifecycleBridge } = require('./application/execution');
+  createAdapterLifecycleBridge,
+  createExecutionApplicationService,
+  createProviderResolution,
+  normalizeOrderPayload
+} = require('./application/execution');
+const { registerExecutionIpcHandlers } = require('./infrastructure/execution');
+const {
+  createLevelOrderApplicationService,
+  createLevelOrderRuntime,
+  levelOrderChildCid
+} = require('./services/levelOrder');
+const {
+  registerOrderListIpcHandlers,
+  registerWindowStateIpcHandlers
+} = require('./infrastructure/electron');
 const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
 
@@ -52,6 +60,8 @@ function loadServices(servicesApi = {}) {
 loadServices(servicesApi);
 const { getAdapter, resolveProvider } = servicesApi.brokerage || {};
 const instrumentInfo = servicesApi.instrumentInfo;
+const providerResolution = createProviderResolution({ resolveProvider });
+const { resolveProviderName } = providerResolution;
 
 function envBool(name, fallback = false) {
   const v = process.env[name];
@@ -75,179 +85,6 @@ function resolveWebhookPort(candidate, fallback) {
   return port;
 }
 
-const CID_IN_COMMENT_RE = /cid[:=]\s*([a-z0-9]+)/i;
-
-function normalizeCid(candidate) {
-  if (candidate == null) return '';
-  let str = String(candidate).trim();
-  if (!str) return '';
-  const cidMatch = str.match(CID_IN_COMMENT_RE);
-  if (cidMatch) return cidMatch[1];
-  if (str.startsWith('pending:')) return str.slice('pending:'.length);
-  return str;
-}
-
-function generateCid() {
-  return crypto.randomBytes(6).toString('hex');
-}
-
-function ensureCommentHasCid(comment, cid) {
-  const base = comment == null ? '' : String(comment).trim();
-  if (!cid) return base;
-  if (base.includes(cid)) return base;
-  if (CID_IN_COMMENT_RE.test(base)) {
-    return base.replace(CID_IN_COMMENT_RE, `cid:${cid}`);
-  }
-  return base ? `${base} | cid:${cid}` : `cid:${cid}`;
-}
-
-function ensureOrderCid(order) {
-  if (!order || typeof order !== 'object') return '';
-  if (!order.meta) order.meta = {};
-  const candidates = [order.meta.cid, order.clientOrderId, order.cid];
-  let cid = '';
-  for (const candidate of candidates) {
-    const normalized = normalizeCid(candidate);
-    if (normalized) {
-      cid = normalized;
-      break;
-    }
-  }
-  if (!cid) cid = generateCid();
-  order.meta.cid = cid;
-  if (!normalizeCid(order.clientOrderId)) {
-    order.clientOrderId = cid;
-  }
-  order.comment = ensureCommentHasCid(order.comment, cid);
-  return cid;
-}
-
-function getTerminalPositionComment(position = {}) {
-  return String(position.comment || position.comment_string || position.clientOrderId || position.id || position.ticket || '');
-}
-
-function isTerminalPendingOrder(position = {}) {
-  if (position.__isPosition === true) return false;
-  const type = String(position.type || position.order_type || position.cmd || '').toLowerCase();
-  return type.includes('limit') || type.includes('stop') || type.includes('pending');
-}
-
-function terminalPositionQty(position = {}) {
-  const candidates = [
-    position.lots,
-    position.volume,
-    position.qty,
-    position.size,
-    position.contracts,
-    position.volume_current
-  ];
-  for (const candidate of candidates) {
-    const value = Math.abs(Number(candidate));
-    if (Number.isFinite(value) && value > 0) return value;
-  }
-  return 0;
-}
-
-function getTerminalPositionIdentifiers(position = {}) {
-  const values = [
-    position.ticket,
-    position.order,
-    position.order_id,
-    position.orderId,
-    position.position_id,
-    position.positionId,
-    position.id,
-    position.comment,
-    position.comment_string,
-    position.clientOrderId
-  ];
-  const ids = new Set();
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (!text) continue;
-    ids.add(text);
-    const cid = normalizeCid(text);
-    if (cid) ids.add(cid);
-  }
-  return ids;
-}
-
-function getTerminalPositionTicket(position = {}) {
-  const values = [
-    position.ticket,
-    position.position_id,
-    position.positionId,
-    position.order,
-    position.order_id,
-    position.orderId,
-    position.id
-  ];
-  for (const value of values) {
-    const text = String(value ?? '').trim();
-    if (text) return text;
-  }
-  return '';
-}
-
-function levelOrderChildCid(child = {}) {
-  const raw = child.result?.providerOrderId || child.result?.cid || child.result?.raw?.cid || '';
-  return normalizeCid(raw);
-}
-
-function levelOrderChildExpectedIds(child = {}) {
-  const ids = new Set();
-  const cid = levelOrderChildCid(child);
-  if (cid) ids.add(cid);
-  const ticket = String(child.providerOrderId || child.ticket || child.result?.ticket || '').trim();
-  if (ticket) ids.add(ticket);
-  return ids;
-}
-
-function normalizeSymbolForMatch(value) {
-  return String(value || '').trim().toUpperCase();
-}
-
-function scanLevelOrderPositions(openOrders, children, symbol) {
-  const expected = [];
-  const expectedIds = new Set();
-  for (const child of children || []) {
-    const ids = levelOrderChildExpectedIds(child);
-    const qty = Number(child.qty);
-    if (ids.size && Number.isFinite(qty) && qty > 0) {
-      expected.push({ ids, qty });
-      for (const id of ids) expectedIds.add(id);
-    }
-  }
-  const targetSymbol = normalizeSymbolForMatch(symbol);
-  const matchedPositions = [];
-  const foundIds = new Set();
-  for (const pos of openOrders || []) {
-    if (!pos || isTerminalPendingOrder(pos)) continue;
-    if (targetSymbol && normalizeSymbolForMatch(pos.symbol) !== targetSymbol) continue;
-    const posIds = getTerminalPositionIdentifiers(pos);
-    const qty = terminalPositionQty(pos);
-    const matchedIds = [...expectedIds].filter(id => posIds.has(id));
-    if (!matchedIds.length) continue;
-    matchedPositions.push(pos);
-    for (const id of matchedIds) foundIds.add(id);
-  }
-  let expectedQty = 0;
-  for (const exp of expected) expectedQty += exp.qty;
-  let foundQty = 0;
-  for (const pos of matchedPositions) foundQty += terminalPositionQty(pos);
-  const foundTickets = matchedPositions.map(getTerminalPositionTicket).filter(Boolean);
-  const anyCidFound = expectedIds.size > 0 && foundIds.size > 0;
-  const qtyOk = expectedQty > 0 && foundQty + 1e-9 >= expectedQty;
-  return {
-    ready: anyCidFound && qtyOk,
-    expectedQty,
-    foundQty,
-    expectedCids: expected.flatMap(exp => [...exp.ids]),
-    foundCids: [...foundIds],
-    foundTickets,
-    matchedPositions: matchedPositions.length
-  };
-}
 // ----------------- CONSTS -----------------
 const PORT = envInt("TV_WEBHOOK_PORT", 3210);
 const IS_ELECTRON_MENU_ENABLED = envBool("IS_ELECTRON_MENU_ENABLED", false);
@@ -280,87 +117,27 @@ const levelOrderPositionMonitors = new Map(); // parent requestId -> { timer, ch
 const levelOrderIntentRegistry = new Map(); // intentKey -> { status, promise, result, updatedAt }
 const groupedOrderLifecycles = new GroupedOrderLifecycleRegistry();
 
-function stableStringify(value) {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (value && typeof value === 'object') {
-    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function roundIntentNumber(value) {
-  const n = Number(value);
-  return Number.isFinite(n) ? Number(n.toFixed(12)) : null;
-}
-
-function buildLevelOrderIntentKey({ providerName, symbol, instrumentType, payload, plan }) {
-  return stableStringify({
-    provider: providerName,
-    symbol: String(symbol || '').trim().toUpperCase(),
-    instrumentType,
-    action: String(payload?.action || '').toUpperCase(),
-    level: roundIntentNumber(plan.level),
-    referencePrice: roundIntentNumber(plan.referencePrice),
-    tickSize: roundIntentNumber(plan.tickSize),
-    riskUsd: roundIntentNumber(plan.riskUsd),
-    stopPts: roundIntentNumber(plan.stopPts),
-    stopOffsetPts: roundIntentNumber(plan.stopOffsetPts),
-    takeProfitPts: roundIntentNumber(plan.takeProfitPts),
-    minLot: roundIntentNumber(plan.minLot),
-    childQtys: (plan.childQtys || []).map(roundIntentNumber),
-    priceSource: plan.priceSource
-  });
-}
-
-function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
-}
-
-function getActiveLevelOrderIntent(intentKey, ttlMs = 10 * 60 * 1000) {
-  const rec = levelOrderIntentRegistry.get(intentKey);
-  if (!rec) return null;
-  if (Date.now() - Number(rec.updatedAt || 0) > ttlMs) {
-    levelOrderIntentRegistry.delete(intentKey);
-    return null;
-  }
-  if (['placing', 'unknown', 'partial'].includes(rec.status)) return rec;
-  return null;
-}
-
-function emitLevelOrderPositionsReadyIfComplete(parentRequestId) {
-  const snapshot = groupedOrderLifecycles.takeReadySnapshot(parentRequestId);
-  if (!snapshot) return false;
-  const payload = {
-    requestId: parentRequestId,
-    parentRequestId,
-    provider: snapshot.provider,
-    symbol: snapshot.symbol,
-    expectedQty: snapshot.expectedQty,
-    foundQty: snapshot.foundQty,
-    expectedCids: snapshot.cids,
-    foundCids: snapshot.cids,
-    foundTickets: snapshot.openedTickets || snapshot.tickets || []
-  };
-  appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-positions-ready', source: 'lifecycle', ...payload });
-  console.log('[LEVEL][POSITIONS_READY]', {
-    requestId: parentRequestId,
-    symbol: snapshot.symbol,
-    foundQty: snapshot.foundQty,
-    expectedQty: snapshot.expectedQty,
-    source: 'lifecycle'
-  });
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('level-order:positions-ready', payload);
-  }
-  stopLevelOrderPositionMonitor(parentRequestId);
-  return true;
-}
-
 function appendJsonl(file, obj) {
   try { fs.appendFileSync(file, JSON.stringify(obj) + '\n'); }
   catch (e) { console.error('appendJsonl error:', e); }
 }
 const nowTs = () => Date.now();
+function sendToRenderer(channel, payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(channel, payload);
+  }
+}
+
+const levelOrderRuntime = createLevelOrderRuntime({
+  getAdapter,
+  wireAdapter,
+  groupedOrderLifecycles,
+  levelOrderPositionMonitors,
+  appendJsonl,
+  execLog: EXEC_LOG,
+  nowTs,
+  sendToRenderer
+});
 
 const adapterLifecycleBridge = createAdapterLifecycleBridge({
   servicesApi,
@@ -378,7 +155,7 @@ const adapterLifecycleBridge = createAdapterLifecycleBridge({
   groupedOrderLifecycles,
   levelOrderPositionMonitors,
   levelOrderChildCid,
-  emitLevelOrderPositionsReadyIfComplete
+  emitLevelOrderPositionsReadyIfComplete: levelOrderRuntime.emitLevelOrderPositionsReadyIfComplete
 });
 
 function wireAdapter(adapter, providerName) {
@@ -497,8 +274,11 @@ function createWindow() {
   // mainWindow.webContents.openDevTools();
 }
 
-ipcMain.handle('window:get-state', () => getWindowStateSnapshot());
-ipcMain.handle('window:set-state', (_evt, state) => setWindowState(state));
+registerWindowStateIpcHandlers({
+  ipcMain,
+  getWindowStateSnapshot,
+  setWindowState
+});
 
 app.whenReady().then(() => {
   ensureLogs({ truncateExecutionsOnStart: true });
@@ -562,1028 +342,87 @@ app.on('window-all-closed', () => {
 app.on('quit', () => {
 });
 
-// ----------------- IPC: queue-place-order -----------------
-
-// Поддерживаем 2 формата payload:
-// A) legacy: { ticker,event,price,kind,meta:{qty,stopPts,takePts,riskUsd?} }
-// B) new:    { symbol,side,qty,price,sl,tp,meta:{riskUsd?} }
-function normalizeOrderPayload(payload) {
-  if (payload?.instrumentType === 'OPT') {
-    const symbol = String(payload.symbol || payload.ticker || '');
-    return {
-      instrumentType: 'OPT',
-      symbol,
-      ticker: symbol,
-      root: payload.root,
-      provider: payload.provider,
-      name: payload.name,
-      description: payload.description,
-      expirationDte: payload.expirationDte || payload.expiration,
-      isCustomName: payload.isCustomName === true,
-      isCashSecured: payload.isCashSecured === true,
-      legs: Array.isArray(payload.legs) ? payload.legs : [],
-      side: payload.side || payload.action || 'OPEN',
-      type: payload.type || 'strategy',
-      qty: 1,
-      price: 1,
-      sl: 1,
-      meta: payload.meta || {}
-    };
-  }
-  // определим формат
-  const legacy = payload && payload.ticker && payload.meta;
-  if (legacy) {
-    const symbol = String(payload.ticker || '');
-    const instrumentType =  payload.instrumentType;
-    const comment = payload.comment ?? payload.meta?.comment;
-    return {
-        instrumentType ,                // 'CX' | 'EQ' | 'FX'
-      symbol,                        // 'BTCUSDT.P' | 'AAPL'
-      provider: payload.provider || payload.meta?.provider,
-      side: payload.kind,            // 'BL'|'BSL'|'SL'|'SSL'
-      type: payload.type,
-      tickSize: payload.tickSize,
-      qty: normalizeOrderQty(payload.meta.qty, instrumentType, payload.meta),
-      price: Number(payload.price || 0),
-      sl: Number(payload.meta.stopPts || 0),
-      tp: payload.meta.takePts == null ? undefined : Number(payload.meta.takePts),
-      comment: comment == null ? undefined : String(comment),
-      meta: payload.meta || {}
-    };
-  }
-
-  // новый формат
-  const symbol = String(payload.symbol || payload.ticker || '');
-  const instrumentType =  payload.instrumentType;
-  const comment = payload.comment ?? payload.meta?.comment;
-  const isHedgeMarket = payload?.meta?.hedge === true && String(payload.type || '').toLowerCase() === 'market';
-  return {
-    instrumentType,
-    symbol,
-    provider: payload.provider || payload.meta?.provider,
-    side: payload.side || payload.action, // 'BL'|'BSL'|'SL'|'SSL'
-    type: payload.type,
-    tickSize: payload.tickSize,
-    qty: normalizeOrderQty(payload.qty, instrumentType, payload.meta),
-    price: isHedgeMarket ? undefined : Number(payload.price || 0),
-    sl: isHedgeMarket ? undefined : Number(payload.sl || 0),
-    tp: isHedgeMarket || payload.tp === '' || payload.tp == null ? undefined : Number(payload.tp),
-    comment: comment == null ? undefined : String(comment),
-    meta: payload.meta || {}
-  };
-}
-
-function validateOrder(order) {
-  if (order.instrumentType === 'OPT') {
-    const hasSymbol = !!String(order.symbol || order.ticker || '').trim();
-    const hasLegs = Array.isArray(order.legs) && order.legs.length > 0;
-    return hasSymbol && hasLegs
-      ? { ok: true }
-      : { ok: false, reason: 'OPT: ticker and legs required' };
-  }
-  if (order.instrumentType === 'CX') {
-    const riskUsd = Number(order.meta?.riskUsd);
-    const hasRiskSizing = Number.isFinite(riskUsd) && riskUsd > 0;
-    const hasManualQty = Number(order.qty) > 0;
-    const ok = Number(order.price) > 0 && Number(order.sl) > 0 && (hasManualQty || hasRiskSizing);
-    return ok ? { ok: true } : { ok: false, reason: 'CX: price>0, sl>0 and qty>0 or riskUsd>0 required' };
-  } else if (order.instrumentType === 'FX') {
-    const ok = (order.meta?.riskUsd > 0) && order.sl > 0 && order.price > 0 && order.qty > 0;
-    return ok ? { ok: true } : { ok: false, reason: 'FX: riskUsd>0, sl>0, price>0, qty>0 required' };
-  } else {
-    const isHedge = order.meta?.hedge === true;
-    const type = String(order.type || '').toLowerCase();
-    const needsPrice = type !== 'market';
-    const hasPrice = Number(order.price) > 0 || !needsPrice;
-    const hasQty = isValidOrderQty(order.qty, order.instrumentType, order.meta);
-    const hasRiskShape = (order.meta?.riskUsd > 0) && order.sl > 0 && Number(order.price) > 0;
-    const ok = hasQty && (isHedge ? hasPrice : hasRiskShape);
-    return ok ? { ok: true } : { ok: false, reason: 'EQ: riskUsd>0, sl>0, price>0, valid qty required (or hedge qty with price/market)' };
-  }
-}
-
-
-function providerCanResolveRiskQty(providerName, adapter) {
-  const p = String(providerName || '').toLowerCase();
-  const id = String(adapter?.exchangeId || '').toLowerCase();
-  return p.includes('binance') || ['binance', 'binanceusdm', 'binance-futures', 'binancefutures'].includes(id);
-}
-
-function resolveProviderName(context = {}) {
-  if (typeof resolveProvider === 'function') {
-    return resolveProvider(context).provider;
-  }
-  const explicit = context.provider || context.payload?.provider || context.row?.provider || context.meta?.provider;
-  return String(explicit || 'simulated').trim().toLowerCase();
-}
-
-function resolveOrderProviderName(order) {
-  return resolveProviderName({
-    payload: order,
-    symbol: order?.symbol || order?.ticker,
-    instrumentType: order?.instrumentType,
-    meta: order?.meta
-  });
-}
-
-// --- EQ normalization: BL/BSL/SL/SSL -> buy/sell + limit/stoplimit (для адаптеров типа J2T)
-function normalizeQuoteForValidation(quote) {
-  if (!quote || typeof quote !== 'object') return quote;
-  if (Number.isFinite(Number(quote.price))) return quote;
-  const bid = Number(quote.bid);
-  const ask = Number(quote.ask);
-  if (Number.isFinite(bid) && Number.isFinite(ask)) return { ...quote, price: (bid + ask) / 2 };
-  if (Number.isFinite(bid)) return { ...quote, price: bid };
-  if (Number.isFinite(ask)) return { ...quote, price: ask };
-  return quote;
-}
-
-function stopLevelOrderPositionMonitor(requestId) {
-  const monitor = levelOrderPositionMonitors.get(requestId);
-  if (monitor?.timer) clearTimeout(monitor.timer);
-  levelOrderPositionMonitors.delete(requestId);
-}
-
-async function cancelGroupedOrderUnopenedTickets(groupId) {
-  const group = groupedOrderLifecycles.get(groupId);
-  if (!group) return { cancelled: 0, errors: [] };
-  const adapter = getAdapter(group.provider);
-  wireAdapter(adapter, group.provider);
-  const errors = [];
-  let cancelled = 0;
-  for (const ticket of groupedOrderLifecycles.getUnopenedTickets(groupId)) {
-    try {
-      const result = await adapter.cancelOrder(ticket, group.symbol);
-      cancelled += 1;
-      appendJsonl(EXEC_LOG, {
-        t: nowTs(),
-        kind: 'level-order-cancel-terminal',
-        parentRequestId: groupId,
-        provider: group.provider,
-        ticket,
-        symbol: group.symbol,
-        result
-      });
-    } catch (err) {
-      const reason = err?.message || String(err);
-      errors.push({ ticket, reason });
-      appendJsonl(EXEC_LOG, {
-        t: nowTs(),
-        kind: 'level-order-cancel-terminal',
-        parentRequestId: groupId,
-        provider: group.provider,
-        ticket,
-        symbol: group.symbol,
-        error: reason
-      });
-    }
-  }
-  return { cancelled, errors };
-}
-
-function findLevelOrderTerminalTickets(openPositions, { symbol, expectedIds = [], explicitTickets = [] } = {}) {
-  const targetSymbol = normalizeSymbolForMatch(symbol);
-  const ids = new Set((expectedIds || []).map(value => String(value || '').trim()).filter(Boolean));
-  const tickets = new Set((explicitTickets || []).map(value => String(value || '').trim()).filter(Boolean));
-  for (const pos of openPositions || []) {
-    if (!pos || isTerminalPendingOrder(pos)) continue;
-    if (targetSymbol && normalizeSymbolForMatch(pos.symbol) !== targetSymbol) continue;
-    const posTicket = getTerminalPositionTicket(pos);
-    if (posTicket && tickets.has(posTicket)) continue;
-    const posIds = getTerminalPositionIdentifiers(pos);
-    const matched = posTicket && tickets.has(posTicket)
-      || [...ids].some(id => posIds.has(id));
-    if (matched && posTicket) tickets.add(posTicket);
-  }
-  return [...tickets];
-}
-
-function startLevelOrderPositionMonitor({ adapter, providerName, requestId, strategyId, symbol, children, timeoutMs = 45000, intervalMs = 750 }) {
-  if (
-    !requestId
-    || !adapter
-    || (typeof adapter.listOpenPositions !== 'function' && typeof adapter.listOpenOrders !== 'function')
-  ) return;
-  stopLevelOrderPositionMonitor(requestId);
-  const startedAt = Date.now();
-  const monitor = { adapter, providerName, requestId, strategyId, symbol, children: children || [], timer: null };
-  levelOrderPositionMonitors.set(requestId, monitor);
-
-  const tick = async () => {
-    try {
-      const openPositions = typeof adapter.listOpenPositions === 'function'
-        ? await adapter.listOpenPositions(symbol)
-        : await adapter.listOpenOrders(symbol);
-      const scan = scanLevelOrderPositions(openPositions, monitor.children, symbol);
-      if (scan.ready) {
-        stopLevelOrderPositionMonitor(requestId);
-        const payload = {
-          requestId,
-          parentRequestId: requestId,
-          provider: providerName,
-          strategyId,
-          symbol,
-          expectedQty: scan.expectedQty,
-          foundQty: scan.foundQty,
-          expectedCids: scan.expectedCids,
-          foundCids: scan.foundCids,
-          foundTickets: scan.foundTickets
-        };
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-positions-ready', ...payload });
-        console.log('[LEVEL][POSITIONS_READY]', { requestId, symbol, foundQty: scan.foundQty, expectedQty: scan.expectedQty });
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('level-order:positions-ready', payload);
-        }
-        return;
-      }
-    } catch (err) {
-      console.warn('[LEVEL][POSITIONS_POLL_ERR]', { requestId, error: err?.message || String(err) });
-    }
-
-    if (Date.now() - startedAt >= timeoutMs) {
-      stopLevelOrderPositionMonitor(requestId);
-      let sample = [];
-      let scan = null;
-      try {
-        const openPositions = typeof adapter.listOpenPositions === 'function'
-          ? await adapter.listOpenPositions(symbol)
-          : await adapter.listOpenOrders(symbol);
-        scan = scanLevelOrderPositions(openPositions, monitor.children, symbol);
-        sample = (openPositions || []).slice(0, 10).map(pos => ({
-          ticket: pos?.ticket,
-          type: pos?.type || pos?.order_type || pos?.cmd,
-          symbol: pos?.symbol,
-          comment: pos?.comment || pos?.comment_string,
-          qty: terminalPositionQty(pos),
-          isPosition: pos?.__isPosition === true
-        }));
-      } catch {}
-      console.warn('[LEVEL][POSITIONS_TIMEOUT]', { requestId, symbol, scan, sample });
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('level-order:positions-timeout', { requestId, parentRequestId: requestId, provider: providerName, strategyId, symbol });
-      }
-      return;
-    }
-    monitor.timer = setTimeout(tick, intervalMs);
-    levelOrderPositionMonitors.set(requestId, monitor);
-  };
-
-  monitor.timer = setTimeout(tick, intervalMs);
-  levelOrderPositionMonitors.set(requestId, monitor);
-}
-
-function normalizeEquityOrderForExecution(order) {
-  if (!['EQ','FX','CX'].includes(String(order.instrumentType))) return order;
-
-  const action = String(order.side || '').toUpperCase();
-  const alreadySide = String(order.side || '').toLowerCase();
-  if (alreadySide === 'buy' || alreadySide === 'sell') {
-    const type = String(order.type || 'limit').toLowerCase();
-    const norm = { ...order, side: alreadySide, type };
-    if ((type === 'limit' || type === 'stoplimit') && Number.isFinite(Number(order.price))) {
-      norm.limitPrice = Number(order.price);
-    }
-    if ((type === 'stop' || type === 'stoplimit') && Number.isFinite(Number(order.price))) {
-      norm.stopPrice = Number(order.price);
-    }
-    return norm;
-  }
-  let side, type, limitPrice, stopPrice;
-
-  // Базовая интерпретация
-  switch (action) {
-    case 'BL':
-      side = 'buy';  type = 'limit';     limitPrice = Number(order.price); break;
-    case 'SL':
-      side = 'sell'; type = 'limit';     limitPrice = Number(order.price); break;
-    case 'BSL':
-      side = 'buy';  type = 'stoplimit'; stopPrice = Number(order.price);  limitPrice = Number(order.price); break;
-    case 'SSL':
-      side = 'sell'; type = 'stoplimit'; stopPrice = Number(order.price);  limitPrice = Number(order.price); break;
-    default:
-      return order; // пусть упадёт на валидации адаптера
-  }
-
-  const norm = { ...order, side, type };
-  if (type === 'limit' || type === 'stoplimit') norm.limitPrice = limitPrice;
-  if (type === 'stop' || type === 'stoplimit')  norm.stopPrice  = stopPrice;
-  return norm;
-}
-
 function setupIpc(orderSvc) {
-  async function queuePlaceOrderInternal(payload) {
-    const order = normalizeOrderPayload(payload);
-
-    // серверная валидация (зеркалит UI)
-    const v = validateOrder(order);
-    if (!v.ok) {
-      const rej = { status: 'rejected', reason: v.reason };
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'place', valid: false, order, result: rej });
-      return rej;
-    }
-
-    // выбор адаптера, requestId и нормализация под исполнение
-    const providerName = resolveOrderProviderName(order);
-    let execOrder;
-    let cid = '';
-    try {
-      const ts = nowTs();
-      const reqId = order?.meta?.requestId || `${ts}_${Math.random().toString(36).slice(2,8)}`;
-      if (!order.meta) order.meta = {};
-      order.meta.requestId = reqId;
-      cid = ensureOrderCid(order);
-
-        const sideCode = String(order.side || '').toUpperCase();
-        const sideDir = sideCode.startsWith('S') || sideCode === 'SELL' ? 'short' : 'long';
-        trackerPending.set(reqId, {
-          ticker: order.meta?.ticker || order.symbol,
-          tp: order.meta?.takePts,
-          sp: order.meta?.stopPts,
-          side: sideDir,
-          cid,
-          price: order.price,
-          qty: order.qty
-        });
-
-      execOrder = normalizeEquityOrderForExecution(order);
-      execOrder.comment = ensureCommentHasCid(execOrder.comment, cid);
-      if (!execOrder.meta) execOrder.meta = {};
-      execOrder.meta.cid = cid;
-      try {
-        const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
-        execOrder.meta.positionId = createCommand.positionId;
-        servicesApi.positions?.createAndOpen?.(createCommand);
-      } catch (err) {
-        console.warn('[positions] failed to record open request:', err?.message || String(err));
-      }
-
-      const logOrder = {
-        ...execOrder,
-        cid,
-        comment: execOrder.comment,
-        sentAt: ts,
-        meta: { ...(execOrder.meta || {}), cid, sentAt: ts, provider: providerName }
-      };
-      events.emit('execution:order-message', logOrder);
-
-      const adapter = getAdapter(providerName);
-      // разово подключим слушатели подтверждений (если адаптер их поддерживает)
-      wireAdapter(adapter, providerName);
-
-      const isOptionBlock = execOrder.instrumentType === 'OPT';
-      const isHedgeMarket = !isOptionBlock
-        && execOrder.meta?.hedge === true
-        && String(execOrder.type || '').toLowerCase() === 'market';
-      const instrumentSnapshot = await instrumentInfo.get({
-        provider: providerName,
-        symbol: execOrder.symbol,
-        instrumentType: execOrder.instrumentType,
-        payload: execOrder
-      }, { forceQuote: true });
-      const quote = normalizeQuoteForValidation(instrumentSnapshot?.quote);
-      if (!isOptionBlock && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
-        const rej = { status: 'rejected', provider: providerName, reason: 'No quote' };
-        appendJsonl(EXEC_LOG, { t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-        return rej;
-      }
-
-      const riskUsd = Number(order?.meta?.riskUsd);
-      const stopPts = Number(execOrder.sl);
-      const isFixedQty = order?.meta?.fixedQty === true;
-      const isRiskBased = !isFixedQty && Number.isFinite(riskUsd) && riskUsd > 0 && Number.isFinite(stopPts) && stopPts > 0;
-      const tickResolution = instrumentInfo.getTickSizeResolution({
-        provider: providerName,
-        symbol: execOrder.symbol,
-        instrumentType: execOrder.instrumentType,
-        payload: execOrder
-      }, { explicitTickSize: execOrder.tickSize });
-      const effectiveTickSize = tickResolution.tickSize;
-      const metadataQuantityStep = Number(instrumentSnapshot?.metadata?.quantityStep);
-      if (Number.isFinite(metadataQuantityStep) && metadataQuantityStep > 0) {
-        execOrder.meta = { ...(execOrder.meta || {}), quantityStep: execOrder.meta?.quantityStep || metadataQuantityStep };
-      }
-
-      if (!isOptionBlock && Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
-        execOrder.tickSize = effectiveTickSize;
-        if (isRiskBased) {
-          execOrder.qty = orderCalc.qty({
-            riskUsd,
-            stopPts,
-            tickSize: effectiveTickSize,
-            lot: execOrder.lot || order.lot || 1,
-            instrumentType: execOrder.instrumentType,
-            quantityStep: execOrder.meta?.quantityStep
-          });
-        }
-      } else if (!isOptionBlock && isRiskBased) {
-        if (!providerCanResolveRiskQty(providerName, adapter)) {
-          const rej = { status: 'rejected', provider: providerName, reason: `No tickSize for ${execOrder.symbol}; cannot calculate risk-based qty for provider ${providerName}` };
-          appendJsonl(EXEC_LOG, { t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-          return rej;
-        }
-        execOrder.meta.riskBasedQtyPending = true;
-        execOrder.meta.riskUsd = riskUsd;
-        execOrder.meta.stopPts = stopPts;
-      }
-
-      console.log('[EXEC][SIZE]', { symbol: execOrder.symbol, price: execOrder.price, riskUsd, stopPts, tickSize: execOrder.tickSize, lot: execOrder.lot, qty: execOrder.qty, tickSource: tickResolution.source });
-
-      if (!isOptionBlock) {
-        const quoteForRules = isHedgeMarket && (!quote || !Number.isFinite(quote.price)) ? { price: 1 } : quote;
-        const ruleOrder = execOrder.meta?.hedge === true
-          ? { ...execOrder, sl: Number.isFinite(Number(execOrder.sl)) && Number(execOrder.sl) > 0 ? execOrder.sl : Number.POSITIVE_INFINITY }
-          : execOrder;
-        const rule = tradeRules.validate(ruleOrder, quoteForRules);
-        if (!rule.ok) {
-          const rej = { status: 'rejected', provider: providerName, reason: rule.reason };
-          appendJsonl(EXEC_LOG, { t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-          return rej;
-        }
-      }
-
-      console.log('[EXEC][REQ]', { provider: providerName, reqId, cid, symbol: execOrder.symbol, action: order.side, side: execOrder.side, type: execOrder.type, qty: execOrder.qty, price: execOrder.price, sl: execOrder.sl, tp: execOrder.tp });
-
-      const result = await adapter.placeOrder(execOrder);
-
-      // если адаптер вернул "pending:<cid>" — не закрываем карточку,
-      // отправляем в UI спец-событие и ждём order:confirmed
-      const maybePending = String(result?.providerOrderId || '');
-      if (maybePending.startsWith('pending:')) {
-        const pendingId = normalizeCid(maybePending) || cid;
-        pendingIndex.set(pendingId, { reqId, adapter, providerName, order: execOrder, ts, cid: pendingId });
-        servicesApi.positions?.recordPlaced?.({
-          positionId: execOrder.meta?.positionId,
-          requestId: reqId,
-          providerOrderId: result.providerOrderId,
-          provider: providerName,
-          result,
-          payload: execOrder
-        });
-
-        appendJsonl(EXEC_LOG, {
-          t: ts,
-          kind: 'place-queued',
-          reqId,
-          provider: providerName,
-          pendingId,
-          cid: pendingId,
-          order: execOrder
-        });
-
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('execution:pending', {
-            ts,
-            reqId,
-            provider: providerName,
-            pendingId,
-            cid: pendingId,
-            parentRequestId: execOrder.meta?.parentRequestId,
-            childIndex: execOrder.meta?.childIndex,
-            childCount: execOrder.meta?.childCount,
-            strategyId: execOrder.meta?.strategyId,
-            order: execOrder
-          });
-        }
-
-        events.emit('order:placed', { order: execOrder, result: { status: 'ok', provider: providerName, providerOrderId: result.providerOrderId, cid: pendingId } });
-
-        console.log('[EXEC][QUEUED]', { reqId, pendingId, cid: pendingId });
-        // для синхронного ответа IPC можно вернуть «ok» с pendingId,
-        // но UI должен ждать финального события 'execution:result'
-        return { status: 'ok', provider: providerName, providerOrderId: result.providerOrderId, cid: pendingId };
-      }
-
-      // иначе — поведение как раньше (simulated/rejected/другие адаптеры)
-      const execRecord = {
-        t: ts,
-        kind: 'place',
-        reqId,
-        cid,
-        valid: true,
-        provider: (result && result.provider) || providerName,
-        order: execOrder,
-        result
-      };
-      appendJsonl(EXEC_LOG, execRecord);
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('execution:result', {
-          ts,
-          reqId,
-          provider: execRecord.provider,
-          status: result?.status || 'rejected',
-          reason: result?.reason,
-          providerOrderId: result?.providerOrderId,
-          cid,
-          parentRequestId: execOrder.meta?.parentRequestId,
-          childIndex: execOrder.meta?.childIndex,
-          childCount: execOrder.meta?.childCount,
-          strategyId: execOrder.meta?.strategyId,
-          payoff: result?.payoff || result?.raw?.payoff,
-          raw: result?.raw,
-          order: execOrder
-        });
-      }
-
-      const info = trackerPending.get(reqId);
-      if (info && result?.status !== 'rejected' && result?.providerOrderId) {
-        trackerIndex.set(String(result.providerOrderId), info);
-      }
-      trackerPending.delete(reqId);
-
-      const lifecycleResult = result?.status === 'ok'
-        ? { ...result, provider: execRecord.provider, cid }
-        : { status: result?.status || 'rejected', provider: execRecord.provider, providerOrderId: result?.providerOrderId, reason: result?.reason, cid };
-      events.emit('order:placed', { order: execOrder, result: lifecycleResult });
-      if (result?.status === 'ok' || result?.status === 'simulated') {
-        servicesApi.positions?.recordPlaced?.({
-          positionId: execOrder.meta?.positionId,
-          requestId: reqId,
-          providerOrderId: result.providerOrderId,
-          provider: execRecord.provider,
-          result,
-          payload: execOrder
-        });
-      } else {
-        servicesApi.positions?.recordRejected?.({
-          positionId: execOrder.meta?.positionId,
-          requestId: reqId,
-          provider: execRecord.provider,
-          reason: result?.reason,
-          result
-        });
-      }
-
-      console.log('[EXEC][RES]', { reqId, cid, status: result?.status, reason: result?.reason, providerOrderId: result?.providerOrderId });
-      return result;
-  } catch (err) {
-      const rej = { status: 'rejected', reason: err.message || 'adapter error' };
-      const errorCid = cid || normalizeCid(order?.meta?.cid);
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'place', valid: true, order, reqId: order?.meta?.requestId, cid: errorCid || undefined, error: String(err) });
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('execution:result', {
-          ts: nowTs(),
-          reqId: order?.meta?.requestId,
-          provider: providerName,
-          status: 'rejected',
-          reason: rej.reason,
-          cid: errorCid || undefined,
-          order
-        });
-      }
-      trackerPending.delete(order?.meta?.requestId);
-      console.log('[EXEC][ERR]', { provider: providerName, reqId: order?.meta?.requestId, cid: errorCid || undefined, error: String(err) });
-      events.emit('order:placed', { order: execOrder, result: { status: 'rejected', provider: providerName, reason: rej.reason, cid: errorCid || undefined } });
-      servicesApi.positions?.recordFailed?.({
-        positionId: execOrder?.meta?.positionId,
-        requestId: order?.meta?.requestId,
-        provider: providerName,
-        reason: rej.reason
-      });
-      return rej;
-    }
-  }
+  const executionService = createExecutionApplicationService({
+    getAdapter,
+    wireAdapter,
+    instrumentInfo,
+    orderCalc,
+    tradeRules,
+    events,
+    positions: servicesApi.positions,
+    appendJsonl,
+    execLog: EXEC_LOG,
+    nowTs,
+    sendToRenderer,
+    trackerPending,
+    trackerIndex,
+    pendingIndex,
+    resolveOrderProviderName: providerResolution.resolveOrderProviderName,
+    resolveProviderName: providerResolution.resolveProviderName,
+    providerCanResolveRiskQty: providerResolution.providerCanResolveRiskQty
+  });
 
   servicesApi.execution = {
-    queuePlaceOrder: queuePlaceOrderInternal,
-    pickProviderName: (instrumentType) => resolveProviderName({ instrumentType })
+    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
+    pickProviderName: (instrumentType) => executionService.pickProviderName(instrumentType)
   };
-
-  ipcMain.handle('optionstrat:button-event', async (_evt, payload = {}) => {
-    const { eventName, payload: eventPayload } = buildOptionStratHedgePayload(payload.action, payload.row || {});
-    if (!eventPayload.hedgeOpenSide) {
-      return { ok: false, reason: 'Unsupported OptionStrat strategy for hedge automation' };
-    }
-    if (servicesApi.actionBus && typeof servicesApi.actionBus.emit === 'function') {
-      servicesApi.actionBus.emit(eventName, eventPayload);
-      return { ok: true, event: eventName, payload: eventPayload };
-    }
-    return { ok: false, reason: 'actions-bus is not available' };
-  });
 
   const pendingHub = createPendingOrderHub({
     subscribe: (provider, symbols) => {
       const adapter = getAdapter(provider);
       try { adapter.client?.subscribe_symbols_bar_data(symbols.map(s => [s, 'M1'])); } catch {}
     },
-    ipcMain,
-    queuePlaceOrder: queuePlaceOrderInternal,
+    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
     wireAdapter,
     mainWindow,
     instrumentInfo
   });
   servicesApi.settings?.onApply?.('pending-strategies', ({ config }) => pendingHub.configureStrategies(config));
-
-  async function queueLevelOrderInternal(payload = {}) {
-    const symbol = String(payload.ticker || payload.symbol || '').trim();
-    const instrumentType = payload.instrumentType || detectInstrumentType(symbol);
-    const providerName = resolveProviderName({ payload, symbol, instrumentType, meta: payload.meta });
-    const strategyId = payload.strategyId || generateCid();
-    const requestId = payload.requestId || `${nowTs()}_${Math.random().toString(36).slice(2,8)}`;
-
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      const instrumentSnapshot = await instrumentInfo.get({ provider: providerName, symbol, instrumentType, payload }, { forceQuote: true });
-      const quote = instrumentSnapshot?.quote;
-      const bid = Number(quote?.bid);
-      const ask = Number(quote?.ask);
-      const tickSize = instrumentInfo.resolveTickSize(
-        { provider: providerName, symbol, instrumentType, payload },
-        { explicitTickSize: payload.tickSize }
-      );
-      const plan = calculateLimitBidTradePlan({
-        action: payload.action,
-        ticker: symbol,
-        instrumentType,
-        level: payload.level,
-        riskUsd: payload.riskUsd,
-        stopOffsetPts: payload.stopOffsetPts,
-        maxLot: payload.maxLot,
-        minLot: payload.minLot ?? instrumentSnapshot?.metadata?.quantityStep,
-        takeProfitPts: payload.takeProfitPts,
-        bid,
-        ask,
-        buyPriceSource: payload.buyPriceSource,
-        sellPriceSource: payload.sellPriceSource,
-        tickSize,
-        lot: payload.lot || 1,
-        orderCalculator: orderCalc
-      });
-      if (!plan.ok) {
-        const rej = { status: 'rejected', provider: providerName, reason: plan.reason };
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: false, reqId: requestId, provider: providerName, payload, quote, result: rej });
-        return rej;
-      }
-
-      const intentKey = buildLevelOrderIntentKey({ providerName, symbol, instrumentType, payload, plan });
-      const existingIntent = getActiveLevelOrderIntent(intentKey);
-      if (existingIntent) {
-        appendJsonl(EXEC_LOG, {
-          t: nowTs(),
-          kind: 'level-order-dedup',
-          reqId: requestId,
-          provider: providerName,
-          strategyId,
-          intentKey,
-          existingStatus: existingIntent.status
-        });
-        if (existingIntent.promise) return cloneJson(await existingIntent.promise);
-        return cloneJson(existingIntent.result);
-      }
-
-      const intentRecord = { status: 'placing', updatedAt: nowTs(), result: null, promise: null };
-      levelOrderIntentRegistry.set(intentKey, intentRecord);
-      const placementPromise = (async () => {
-        const results = [];
-        for (let i = 0; i < plan.childQtys.length; i += 1) {
-          const childReqId = `${requestId}_${i + 1}`;
-          const childPayload = {
-            ticker: symbol,
-            event: 'levelOrder',
-            price: plan.referencePrice,
-            kind: plan.orderKind,
-            instrumentType,
-            tickSize: plan.tickSize,
-            provider: providerName,
-            meta: {
-              requestId: childReqId,
-              qty: plan.childQtys[i],
-              stopPts: plan.stopPts,
-              takePts: plan.takeProfitPts,
-              riskUsd: plan.riskUsd,
-              fixedQty: true,
-              strategy: 'limitBidTrade',
-              strategyId,
-              parentRequestId: requestId,
-              childIndex: i + 1,
-              childCount: plan.childQtys.length,
-              level: plan.level,
-              bid: plan.bid,
-              ask: plan.ask,
-              priceSource: plan.priceSource,
-              referencePrice: plan.referencePrice,
-              stopOffsetPts: plan.stopOffsetPts,
-              minLot: plan.minLot,
-              quantityStep: plan.minLot,
-              pointSize: payload.pointSize,
-              stopPrice: plan.stopPrice,
-              levelOrderIntentKey: intentKey
-            }
-          };
-          const res = await queuePlaceOrderInternal(childPayload);
-          results.push({ requestId: childReqId, qty: plan.childQtys[i], result: res });
-          if (!res || res.status === 'rejected' || res.status === 'error') {
-            const accepted = results.filter(item => item.result && item.result.status !== 'rejected' && item.result.status !== 'error');
-            const result = accepted.length
-              ? {
-                  status: 'unknown',
-                  provider: providerName,
-                  reason: res?.reason || 'Level order child state unknown after partial placement',
-                  providerOrderId: `level:${strategyId}`,
-                  strategyId,
-                  partial: true,
-                  raw: { plan, results }
-                }
-              : {
-                  status: 'rejected',
-                  provider: providerName,
-                  reason: res?.reason || 'Level order child rejected',
-                  raw: { plan, results }
-                };
-            if (accepted.length) {
-              startLevelOrderPositionMonitor({
-                adapter,
-                providerName,
-                requestId,
-                strategyId,
-                symbol,
-                children: results
-              });
-            }
-            appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result });
-            return result;
-          }
-        }
-
-        const ok = {
-          status: 'ok',
-          provider: providerName,
-          providerOrderId: `level:${strategyId}`,
-          strategyId,
-          raw: { plan, results }
-        };
-        startLevelOrderPositionMonitor({
-          adapter,
-          providerName,
-          requestId,
-          strategyId,
-          symbol,
-          children: results
-        });
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result: ok });
-        return ok;
-      })();
-      intentRecord.promise = placementPromise;
-      try {
-        const finalResult = await placementPromise;
-        intentRecord.result = cloneJson(finalResult);
-        intentRecord.status = finalResult?.status || 'unknown';
-        intentRecord.updatedAt = nowTs();
-        intentRecord.promise = null;
-        if (intentRecord.status === 'ok' || intentRecord.status === 'rejected') {
-          levelOrderIntentRegistry.delete(intentKey);
-        }
-        return finalResult;
-      } catch (error) {
-        levelOrderIntentRegistry.delete(intentKey);
-        throw error;
-      }
-    } catch (err) {
-      const reason = err?.message || String(err);
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, payload, error: reason });
-      return { status: 'rejected', provider: providerName, reason };
-    }
-  }
-
-  servicesApi.execution.queueLevelOrder = queueLevelOrderInternal;
-
-  ipcMain.handle('level-order:place', async (_evt, payload = {}) => queueLevelOrderInternal(payload));
-
-  ipcMain.handle('execution:stop-retry', async (_evt, reqId) => {
-    const matches = collectRetryStopEntries(pendingIndex, reqId);
-    const parentIds = getRetryStopParentIds(reqId, matches);
-    let terminalCancelled = 0;
-    const terminalErrors = [];
-
-    for (const parentId of parentIds) {
-      stopLevelOrderPositionMonitor(parentId);
-      const terminalResult = await cancelGroupedOrderUnopenedTickets(parentId);
-      terminalCancelled += terminalResult.cancelled;
-      terminalErrors.push(...terminalResult.errors);
-    }
-
-    for (const { pendingId, rec } of matches) {
-      rec.adapter?.stopOpenOrder?.(pendingId);
-      pendingIndex.delete(pendingId);
-      trackerPending.delete(rec.reqId);
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('execution:retry-stopped', {
-          reqId: rec.reqId,
-          pendingId,
-          parentRequestId: rec.order?.meta?.parentRequestId
-        });
-      }
-    }
-
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      for (const parentId of parentIds) {
-        mainWindow.webContents.send('execution:retry-stopped', {
-          reqId: parentId,
-          parentRequestId: parentId,
-          stopped: matches.length
-        });
-      }
-    }
-
-    return { status: 'ok', stopped: matches.length, terminalCancelled, terminalErrors };
+  registerPendingOrdersIpcHandlers({
+    ipcMain,
+    pendingHub,
+    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload)
   });
 
-  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => {
-    const symbol = typeof payload.symbol === 'string' ? payload.symbol : String(payload.symbol || '');
-    const instrumentType = payload.instrumentType || detectInstrumentType(symbol);
-    const providerName = resolveProviderName({
-      provider: payload.provider,
-      payload,
-      symbol,
-      instrumentType,
-      meta: payload.meta
-    });
-    const explicitTickets = Array.isArray(payload.tickets) ? payload.tickets : [];
-    const expectedIds = Array.isArray(payload.expectedIds) ? payload.expectedIds : [];
-    if (!symbol) return { status: 'error', provider: providerName, reason: 'symbol required' };
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.cancelOrder !== 'function') {
-        return { status: 'unsupported', provider: providerName, reason: 'cancelOrder is not supported' };
-      }
-      let tickets = explicitTickets.map(value => String(value || '').trim()).filter(Boolean);
-      if (expectedIds.length && (typeof adapter.listOpenPositions === 'function' || typeof adapter.listOpenOrders === 'function')) {
-        const openPositions = typeof adapter.listOpenPositions === 'function'
-          ? await adapter.listOpenPositions(symbol)
-          : await adapter.listOpenOrders(symbol);
-        tickets = findLevelOrderTerminalTickets(openPositions, { symbol, expectedIds, explicitTickets: tickets });
-      }
-      const results = [];
-      const errors = [];
-      for (const ticket of tickets) {
-        try {
-          const result = await adapter.cancelOrder(ticket, symbol);
-          results.push({ ticket, result });
-          appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, ticket, result });
-        } catch (err) {
-          const reason = err?.message || String(err);
-          errors.push({ ticket, reason });
-          appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, ticket, error: reason });
-        }
-      }
-      if (!tickets.length) {
-        const res = { status: 'error', provider: providerName, reason: 'No matching open level-order positions found' };
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, expectedIds, result: res });
-        return res;
-      }
-      return { status: errors.length ? 'partial' : 'ok', provider: providerName, symbol, closed: results.length, results, errors };
-    } catch (err) {
-      const reason = err?.message || String(err || '');
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, expectedIds, explicitTickets, error: reason });
-      return { status: 'error', provider: providerName, reason };
-    }
+  const levelOrderService = createLevelOrderApplicationService({
+    getAdapter,
+    wireAdapter,
+    instrumentInfo,
+    orderCalc,
+    appendJsonl,
+    execLog: EXEC_LOG,
+    nowTs,
+    sendToRenderer,
+    resolveProviderName: providerResolution.resolveProviderName,
+    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
+    pendingIndex,
+    trackerPending,
+    levelOrderIntentRegistry,
+    runtime: levelOrderRuntime
   });
+  servicesApi.execution.queueLevelOrder = (payload) => levelOrderService.queueLevelOrder(payload);
 
-  ipcMain.handle('execution:cancel-order', async (_evt, payload = {}) => {
-    const providerNameRaw = payload.provider;
-    const ticketRaw = payload.ticket;
-    const symbolRaw = payload.symbol;
-    const nameRaw = payload.name || payload.order?.name;
-    const providerName = typeof providerNameRaw === 'string' ? providerNameRaw : String(providerNameRaw || '');
-    const ticket = typeof ticketRaw === 'string' ? ticketRaw : String(ticketRaw || '');
-    const symbol = typeof symbolRaw === 'string' ? symbolRaw : (symbolRaw == null ? undefined : String(symbolRaw));
-    const name = typeof nameRaw === 'string' ? nameRaw : (nameRaw == null ? undefined : String(nameRaw));
-
-    if (!providerName || !ticket) {
-      return { status: 'error', reason: 'provider and ticket required' };
-    }
-
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.cancelOrder !== 'function') {
-        const res = { status: 'unsupported', provider: providerName };
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'cancel', provider: providerName, ticket, symbol, result: res });
-        return res;
-      }
-      const result = await adapter.cancelOrder(ticket, symbol);
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'cancel', provider: providerName, ticket, symbol, result });
-      const res = result || { status: 'ok', provider: providerName };
-      const isOptionStratClose = String(providerName || '').toLowerCase() === 'optionstrat' || !!res?.raw?.strategy;
-      if (res.status === 'ok' && isOptionStratClose) {
-        events.emit('order:closed', {
-          provider: providerName,
-          ticket,
-          symbol,
-          order: name ? { name } : undefined,
-          result: { ...res, provider: res.provider || providerName }
-        });
-      }
-      return res;
-    } catch (err) {
-      const reason = err?.message || String(err || '');
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'cancel', provider: providerName, ticket, symbol, error: reason });
-      return { status: 'error', provider: providerName, reason };
-    }
+  registerExecutionIpcHandlers({
+    ipcMain,
+    executionService,
+    levelOrderService,
+    getAdapter,
+    wireAdapter,
+    appendJsonl,
+    execLog: EXEC_LOG,
+    nowTs,
+    events,
+    buildOptionStratHedgePayload,
+    servicesApi,
+    instrumentInfo,
+    detectInstrumentType,
+    resolveProviderName: providerResolution.resolveProviderName,
+    normalizeOrderPayload
   });
-
-  ipcMain.handle('optionstrat:estimate', async (_evt, payload = {}) => {
-    const order = normalizeOrderPayload({
-      ...payload,
-      instrumentType: 'OPT',
-      provider: payload.provider || payload.meta?.provider || 'optionstrat'
-    });
-    const providerName = resolveOrderProviderName(order);
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.estimateOrder !== 'function') {
-        return { status: 'unsupported', provider: providerName };
-      }
-      return await adapter.estimateOrder(order);
-    } catch (err) {
-      return { status: 'rejected', provider: providerName, reason: err?.message || String(err) };
-    }
-  });
-
-  ipcMain.handle('optionstrat:valuation', async (_evt, payload = {}) => {
-    const providerName = payload.provider || payload.meta?.provider || 'optionstrat';
-    const ticket = typeof payload.ticket === 'string' ? payload.ticket : String(payload.ticket || '');
-    const symbol = typeof payload.symbol === 'string' ? payload.symbol : (payload.symbol == null ? undefined : String(payload.symbol));
-    if (!ticket) return { status: 'error', provider: providerName, reason: 'ticket required' };
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.getStrategyValuation !== 'function') {
-        return { status: 'unsupported', provider: providerName };
-      }
-      return await adapter.getStrategyValuation(ticket, symbol);
-    } catch (err) {
-      return { status: 'error', provider: providerName, reason: err?.message || String(err) };
-    }
-  });
-
-  ipcMain.handle('instrument:get', async (_evt, arg) => {
-    try {
-      const symbol = typeof arg === 'object' ? arg.symbol : arg;
-      const provider = typeof arg === 'object' ? arg.provider : undefined;
-      const instrumentType = detectInstrumentType(String(symbol || ''));
-      const providerName = resolveProviderName({ provider, payload: typeof arg === 'object' ? arg : {}, symbol, instrumentType });
-      return await instrumentInfo.get({ provider: providerName, symbol, instrumentType, payload: typeof arg === 'object' ? arg : {} });
-    } catch {
-      return null;
-    }
-  });
-
-  ipcMain.handle('instrument:forget', async (_evt, arg) => {
-    try {
-      const symbol = typeof arg === 'object' ? arg.symbol : arg;
-      const provider = typeof arg === 'object' ? arg.provider : undefined;
-      const instrumentType = detectInstrumentType(String(symbol || ''));
-      const providerName = resolveProviderName({ provider, payload: typeof arg === 'object' ? arg : {}, symbol, instrumentType });
-      return await instrumentInfo.forget({ provider: providerName, symbol, instrumentType, payload: typeof arg === 'object' ? arg : {} });
-    } catch {
-      return false;
-    }
-  });
-
-  // --- IPC: orders:list (tail JSONL файлов, совместим с старым вызовом) ---
-  ipcMain.handle('orders:list', async (_evt, arg) => {
-    // Совместимость: могут передать число (rows) или объект {file, rows}
-    let file = 'webhooks';
-    let rows = 100;
-    if (typeof arg === 'number') {
-      rows = arg;
-    } else if (arg && typeof arg === 'object') {
-      file = arg.file || file;
-      rows = arg.rows || rows;
-    }
-
-    if (file === 'webhooks') {
-      return orderSvc.getOrdersList(rows);
-    }
-    if (file === 'executions') {
-      // Читаем весь файл (объёмы небольшие); при росте — заменить на tail по байтам
-      let text = '';
-      try {
-        text = fs.readFileSync(EXEC_LOG, 'utf8');
-      } catch (e) {
-        if (e.code === 'ENOENT') return [];
-        throw e;
-      }
-
-      const lines = text.split('\n').filter(Boolean);
-      const tail = lines.slice(-Math.max(1, rows));
-      const result = [];
-      for (const l of tail) {
-        try {
-          const rec = JSON.parse(l);
-          result.push(rec);
-        } catch {
-          // skip bad line
-        }
-      }
-      return result;
-    }
-
-    throw new Error(`Unknown file alias: ${file}`);
+  registerOrderListIpcHandlers({
+    ipcMain,
+    orderService: orderSvc,
+    execLog: EXEC_LOG
   });
 }

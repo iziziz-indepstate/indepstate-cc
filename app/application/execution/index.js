@@ -1,3 +1,6 @@
 module.exports = {
-  ...require('./adapterLifecycleBridge')
+  ...require('./adapterLifecycleBridge'),
+  ...require('./ExecutionApplicationService'),
+  ...require('./orderPayload'),
+  ...require('./providerResolution')
 };

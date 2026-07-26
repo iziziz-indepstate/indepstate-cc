@@ -51,6 +51,8 @@
 
 ## Important Docs
 - Repo overview: `README.md`, `docs/README.md`.
+- Architecture layering: `docs/architecture-layers.md`.
+- Target architecture: `docs/target-architecture.md`.
 - Execution adapters: `docs/execution-adapters.md`.
 - Order cards: `app/services/orderCards/README.md`, `docs/OrderCardsConfig.md`.
 - Level-order cards: `docs/level-order.md`.
