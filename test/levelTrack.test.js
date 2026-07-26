@@ -41,7 +41,7 @@ const {
   assert.strictEqual(cfg.refreshMs, 2000);
   assert.strictEqual(cfg.timeoutMs, 3000);
   assert.strictEqual(cfg.groups.length, 1);
-  assert.strictEqual(cfg.groups[0].ticker, 'SPX.cfd');
+  assert.strictEqual(cfg.groups[0].ticker, 'spx.cfd');
   assert.deepStrictEqual(cfg.groups[0].levels, [7500, 7510]);
 })();
 
@@ -90,8 +90,8 @@ async function testServiceSave() {
     groups: [{ key: 'mnq', enabled: true, ticker: 'mnq', levels: [100], maxOffset: 1 }]
   });
   assert.strictEqual(res.saved, true);
-  assert.strictEqual(saved.groups[0].ticker, 'MNQ');
-  assert.strictEqual(service.getGroup('mnq').ticker, 'MNQ');
+  assert.strictEqual(saved.groups[0].ticker, 'mnq');
+  assert.strictEqual(service.getGroup('mnq').ticker, 'mnq');
 }
 
 async function run() {

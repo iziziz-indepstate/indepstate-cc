@@ -30,6 +30,10 @@ function normalizeProvider(value) {
 }
 
 function normalizeSymbol(value) {
+  return String(value || '').trim();
+}
+
+function normalizeSymbolKey(value) {
   return String(value || '').trim().toUpperCase();
 }
 
@@ -158,7 +162,7 @@ function createInstrumentInfoService({
   }
 
   function keyOf(resolved) {
-    return `${resolved.provider}:${resolved.symbol}`;
+    return `${resolved.provider}:${normalizeSymbolKey(resolved.symbol)}`;
   }
 
   function ensureRecord(resolved) {

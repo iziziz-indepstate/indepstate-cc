@@ -1,15 +1,23 @@
 const assert = require('assert');
 const { createInstrumentInfoService } = require('../app/services/instrumentInfo');
+const points = require('../app/services/instrumentInfo/points');
 
 async function run() {
+  points.configure({
+    bySymbol: { 'MOVRUSDT.P': 0.0001 },
+    patterns: [],
+    defaultTickSize: 0.01
+  });
   let now = 1000;
   let quoteCalls = 0;
   let metadataCalls = 0;
+  const quoteSymbols = [];
   const forgotten = [];
   const adapters = {
     one: {
       async getQuote(symbol) {
         quoteCalls += 1;
+        quoteSymbols.push(symbol);
         return { bid: 10, ask: 12, tickSize: 0.25, tickSource: 'provider-spec', timestamp: now, symbol };
       },
       async getInstrumentMetadata() {
@@ -40,6 +48,8 @@ async function run() {
   ]);
   assert.strictEqual(quoteCalls, 1);
   assert.strictEqual(metadataCalls, 1);
+  assert.deepStrictEqual(quoteSymbols, ['aaa']);
+  assert.strictEqual(first.symbol, 'aaa');
   assert.deepStrictEqual(first.quote, { bid: 10, ask: 12, price: 11, timestamp: 1000 });
   assert.strictEqual(duplicate.metadata.quantityStep, 0.5);
   assert.ok(first.sources.tickSize.startsWith('adapter:one'));
