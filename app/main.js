@@ -167,6 +167,23 @@ function getTerminalPositionIdentifiers(position = {}) {
   return ids;
 }
 
+function getTerminalPositionTicket(position = {}) {
+  const values = [
+    position.ticket,
+    position.position_id,
+    position.positionId,
+    position.order,
+    position.order_id,
+    position.orderId,
+    position.id
+  ];
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
 function levelOrderChildCid(child = {}) {
   const raw = child.result?.providerOrderId || child.result?.cid || child.result?.raw?.cid || '';
   return normalizeCid(raw);
@@ -213,6 +230,7 @@ function scanLevelOrderPositions(openOrders, children, symbol) {
   for (const exp of expected) expectedQty += exp.qty;
   let foundQty = 0;
   for (const pos of matchedPositions) foundQty += terminalPositionQty(pos);
+  const foundTickets = matchedPositions.map(getTerminalPositionTicket).filter(Boolean);
   const anyCidFound = expectedIds.size > 0 && foundIds.size > 0;
   const qtyOk = expectedQty > 0 && foundQty + 1e-9 >= expectedQty;
   return {
@@ -221,6 +239,7 @@ function scanLevelOrderPositions(openOrders, children, symbol) {
     foundQty,
     expectedCids: expected.flatMap(exp => [...exp.ids]),
     foundCids: [...foundIds],
+    foundTickets,
     matchedPositions: matchedPositions.length
   };
 }
@@ -299,7 +318,7 @@ function getActiveLevelOrderIntent(intentKey, ttlMs = 10 * 60 * 1000) {
     levelOrderIntentRegistry.delete(intentKey);
     return null;
   }
-  if (['placing', 'ok', 'unknown', 'partial'].includes(rec.status)) return rec;
+  if (['placing', 'unknown', 'partial'].includes(rec.status)) return rec;
   return null;
 }
 
@@ -314,7 +333,8 @@ function emitLevelOrderPositionsReadyIfComplete(parentRequestId) {
     expectedQty: snapshot.expectedQty,
     foundQty: snapshot.foundQty,
     expectedCids: snapshot.cids,
-    foundCids: snapshot.cids
+    foundCids: snapshot.cids,
+    foundTickets: snapshot.openedTickets || snapshot.tickets || []
   };
   appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-positions-ready', source: 'lifecycle', ...payload });
   console.log('[LEVEL][POSITIONS_READY]', {
@@ -841,6 +861,23 @@ async function cancelGroupedOrderUnopenedTickets(groupId) {
   return { cancelled, errors };
 }
 
+function findLevelOrderTerminalTickets(openPositions, { symbol, expectedIds = [], explicitTickets = [] } = {}) {
+  const targetSymbol = normalizeSymbolForMatch(symbol);
+  const ids = new Set((expectedIds || []).map(value => String(value || '').trim()).filter(Boolean));
+  const tickets = new Set((explicitTickets || []).map(value => String(value || '').trim()).filter(Boolean));
+  for (const pos of openPositions || []) {
+    if (!pos || isTerminalPendingOrder(pos)) continue;
+    if (targetSymbol && normalizeSymbolForMatch(pos.symbol) !== targetSymbol) continue;
+    const posTicket = getTerminalPositionTicket(pos);
+    if (posTicket && tickets.has(posTicket)) continue;
+    const posIds = getTerminalPositionIdentifiers(pos);
+    const matched = posTicket && tickets.has(posTicket)
+      || [...ids].some(id => posIds.has(id));
+    if (matched && posTicket) tickets.add(posTicket);
+  }
+  return [...tickets];
+}
+
 function startLevelOrderPositionMonitor({ adapter, providerName, requestId, strategyId, symbol, children, timeoutMs = 45000, intervalMs = 750 }) {
   if (
     !requestId
@@ -869,7 +906,8 @@ function startLevelOrderPositionMonitor({ adapter, providerName, requestId, stra
           expectedQty: scan.expectedQty,
           foundQty: scan.foundQty,
           expectedCids: scan.expectedCids,
-          foundCids: scan.foundCids
+          foundCids: scan.foundCids,
+          foundTickets: scan.foundTickets
         };
         appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-positions-ready', ...payload });
         console.log('[LEVEL][POSITIONS_READY]', { requestId, symbol, foundQty: scan.foundQty, expectedQty: scan.expectedQty });
@@ -1375,7 +1413,9 @@ function setupIpc(orderSvc) {
         intentRecord.status = finalResult?.status || 'unknown';
         intentRecord.updatedAt = nowTs();
         intentRecord.promise = null;
-        if (intentRecord.status === 'rejected') levelOrderIntentRegistry.delete(intentKey);
+        if (intentRecord.status === 'ok' || intentRecord.status === 'rejected') {
+          levelOrderIntentRegistry.delete(intentKey);
+        }
         return finalResult;
       } catch (error) {
         levelOrderIntentRegistry.delete(intentKey);
@@ -1429,6 +1469,58 @@ function setupIpc(orderSvc) {
     }
 
     return { status: 'ok', stopped: matches.length, terminalCancelled, terminalErrors };
+  });
+
+  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => {
+    const symbol = typeof payload.symbol === 'string' ? payload.symbol : String(payload.symbol || '');
+    const instrumentType = payload.instrumentType || detectInstrumentType(symbol);
+    const providerName = resolveProviderName({
+      provider: payload.provider,
+      payload,
+      symbol,
+      instrumentType,
+      meta: payload.meta
+    });
+    const explicitTickets = Array.isArray(payload.tickets) ? payload.tickets : [];
+    const expectedIds = Array.isArray(payload.expectedIds) ? payload.expectedIds : [];
+    if (!symbol) return { status: 'error', provider: providerName, reason: 'symbol required' };
+    try {
+      const adapter = getAdapter(providerName);
+      wireAdapter(adapter, providerName);
+      if (typeof adapter?.cancelOrder !== 'function') {
+        return { status: 'unsupported', provider: providerName, reason: 'cancelOrder is not supported' };
+      }
+      let tickets = explicitTickets.map(value => String(value || '').trim()).filter(Boolean);
+      if (expectedIds.length && (typeof adapter.listOpenPositions === 'function' || typeof adapter.listOpenOrders === 'function')) {
+        const openPositions = typeof adapter.listOpenPositions === 'function'
+          ? await adapter.listOpenPositions(symbol)
+          : await adapter.listOpenOrders(symbol);
+        tickets = findLevelOrderTerminalTickets(openPositions, { symbol, expectedIds, explicitTickets: tickets });
+      }
+      const results = [];
+      const errors = [];
+      for (const ticket of tickets) {
+        try {
+          const result = await adapter.cancelOrder(ticket, symbol);
+          results.push({ ticket, result });
+          appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, ticket, result });
+        } catch (err) {
+          const reason = err?.message || String(err);
+          errors.push({ ticket, reason });
+          appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, ticket, error: reason });
+        }
+      }
+      if (!tickets.length) {
+        const res = { status: 'error', provider: providerName, reason: 'No matching open level-order positions found' };
+        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, expectedIds, result: res });
+        return res;
+      }
+      return { status: errors.length ? 'partial' : 'ok', provider: providerName, symbol, closed: results.length, results, errors };
+    } catch (err) {
+      const reason = err?.message || String(err || '');
+      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order-close-position', provider: providerName, symbol, expectedIds, explicitTickets, error: reason });
+      return { status: 'error', provider: providerName, reason };
+    }
   });
 
   ipcMain.handle('execution:cancel-order', async (_evt, payload = {}) => {

@@ -214,15 +214,31 @@ async function run() {
     origOrder: { meta: { requestId: `${parentRequestId}_2`, parentRequestId, childCount: 2 } }
   });
   assert.strictEqual(t.cardStates.get(key), 'executing');
+  card = t.cardByKey(key);
+  delete row.provider;
+  card.click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  let closeCall = calls.find(c => c.ch === 'execution:close-level-order-positions' && c.payload.tickets.includes('position-1') && c.payload.tickets.includes('position-2'));
+  assert(closeCall);
+  assert.strictEqual(closeCall.payload.provider, '');
+  assert.strictEqual(closeCall.payload.symbol, 'TST');
+  assert.strictEqual(closeCall.payload.instrumentType, 'EQ');
 
   t.cardStates.set(key, 'pending-exec');
   handlers['level-order:positions-ready'](null, {
     requestId: parentRequestId,
     expectedQty: 3,
     foundQty: 3,
-    foundCids: ['cid-1', 'cid-2']
+    foundCids: ['cid-1', 'cid-2'],
+    foundTickets: ['aggregate-position-1']
   });
   assert.strictEqual(t.cardStates.get(key), 'executing');
+  card = t.cardByKey(key);
+  card.click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  closeCall = calls.find(c => c.ch === 'execution:close-level-order-positions' && c.payload.tickets.includes('aggregate-position-1'));
+  assert(closeCall);
+  assert(closeCall.payload.expectedIds.includes('cid-1'));
 
   const firstGroup = t.levelOrderGroups.get(parentRequestId);
   firstGroup.key = 'stale-row-key';
@@ -427,6 +443,25 @@ async function run() {
   assert.strictEqual(t.cardStates.get(groupedKey), 'loss');
   handlers['position:closed'](null, { ticket: 'group-ticket-1', profit: 20, trade: { profit: 20, pnlStatus: 'reported' } });
   assert.strictEqual(t.cardStates.get(groupedKey), 'profit');
+
+  const repeatRow = { cardType: 'levelOrder', ticker: 'REPEAT', event: 'levelOrder', time: 30, level: 100, provider: 'simulated', instrumentType: 'EQ' };
+  const repeatRow2 = { cardType: 'levelOrder', ticker: 'REPEAT', event: 'levelOrder', time: 31, level: 100, provider: 'simulated', instrumentType: 'EQ' };
+  t.instrumentInfo.set('REPEAT', { bid: 101, ask: 102, price: 101.5, tickSize: 0.5 });
+  handlers['orders:new'](null, repeatRow);
+  const repeatKey = t.rowKey(repeatRow);
+  t.cardStates.set(repeatKey, 'profit');
+  handlers['orders:new'](null, repeatRow2);
+  const repeatKey2 = t.rowKey(repeatRow2);
+  assert.notStrictEqual(repeatKey2, repeatKey);
+  assert(t.cardByKey(repeatKey));
+  assert(t.cardByKey(repeatKey2));
+  assert.strictEqual(t.cardStates.get(repeatKey), 'profit');
+  assert.strictEqual(t.cardStates.get(repeatKey2), undefined);
+  t.cardByKey(repeatKey2).querySelector('button.btn[data-kind="LB"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const repeatCall = calls.filter(c => c.ch === 'level-order:place' && c.payload.ticker === 'REPEAT').at(-1);
+  assert(repeatCall);
+  assert.strictEqual(repeatCall.payload.level, 100);
 
   Module._load = originalLoad;
   console.log('levelOrderRenderer tests passed');
