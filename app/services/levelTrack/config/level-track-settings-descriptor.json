@@ -1,7 +1,7 @@
 {
   "properties": {
-    "name": "LevelTrack",
-    "group": "Trading"
+    "name": "Level Track",
+    "group": "Execution"
   },
   "options": {
     "refreshMs": {

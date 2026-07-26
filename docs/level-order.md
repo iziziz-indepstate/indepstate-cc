@@ -38,7 +38,8 @@ the grouped level order. Card-creating `lo {ticker} {level}` remains numeric-onl
 
 ## Settings
 
-The settings section is registered as `Level orders`.
+The settings section is registered as `Level Orders` under `Execution`. Level tracking groups are
+configured in the adjacent `Level Track` section.
 
 Config shape:
 

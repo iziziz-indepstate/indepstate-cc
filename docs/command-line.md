@@ -92,7 +92,7 @@ levelTrack
 
 Opens the LevelTrack window. The window manages saved groups with `key`, `ticker`, `levels`, and
 `maxOffset`, shows the current quote-derived active level, and persists groups through the
-`level-track` settings section.
+`Level Track` settings section under `Execution`.
 
 ### rm
 
