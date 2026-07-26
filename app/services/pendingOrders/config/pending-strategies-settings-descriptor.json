@@ -1,5 +1,8 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Pending Strategies",
+    "group": "Execution"
+  },
   "options": {
     "consolidation": {
       "description": "Consolidation breakout settings",

@@ -1,5 +1,8 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Trade Rules",
+    "group": "Execution"
+  },
   "options": {
     "rules": {
       "description": "Trade validation rules",

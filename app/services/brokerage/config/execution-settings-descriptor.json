@@ -1,5 +1,8 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Execution",
+    "group": "Execution"
+  },
   "options": {
     "default": {
       "type": "string",

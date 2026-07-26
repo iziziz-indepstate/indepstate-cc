@@ -1,6 +1,7 @@
 {
   "properties": {
-    "name": "Order calculator",
+    "name": "Order Calculator",
+    "group": "Execution",
     "rawEditor": {
       "path": "riskUsd.bySymbol",
       "type": "object",

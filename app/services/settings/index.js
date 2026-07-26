@@ -24,6 +24,7 @@ const APPLY_POLICIES = {
   'deal-trackers': { livePaths: ['*'] },
   'chart-images': { livePaths: ['*'] },
   'execution-log': { livePaths: ['*'] },
+  'execution-retry': { livePaths: ['*'] },
   'tv-listener': { livePaths: ['*'] },
   optionstrat: { livePaths: ['*'] },
   'command-line': { livePaths: ['*'] },
@@ -146,7 +147,7 @@ function listConfigs() {
       restartRequiredPaths: Array.from(restartRequired.get(key) || [])
     });
   }
-  const priority = ['ui', 'services', 'auto-updater'];
+  const priority = ['ui'];
   const noGroup = meta.filter(m => !m.group);
   const ordered = [];
   priority.forEach(p => {
@@ -159,7 +160,17 @@ function listConfigs() {
     return acc;
   }, {});
   Object.keys(grouped).forEach(g => grouped[g].sort((a, b) => a.name.localeCompare(b.name)));
-  const groups = Object.keys(grouped).sort();
+  const groupPriority = ['Execution'];
+  const groups = Object.keys(grouped).sort((a, b) => {
+    const ia = groupPriority.indexOf(a);
+    const ib = groupPriority.indexOf(b);
+    if (ia !== -1 || ib !== -1) {
+      if (ia === -1) return 1;
+      if (ib === -1) return -1;
+      return ia - ib;
+    }
+    return a.localeCompare(b);
+  });
   return ordered.concat(noGroup, ...groups.flatMap(g => grouped[g]));
 }
 

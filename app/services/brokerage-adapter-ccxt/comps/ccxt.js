@@ -19,6 +19,14 @@ function firstPositiveFiniteNumber(...values) {
   return undefined;
 }
 
+function isBinanceTimestampError(error) {
+  const msg = String(error?.message || error || '');
+  return msg.includes('"code":-1021')
+    || msg.includes('code": -1021')
+    || msg.includes('InvalidNonce')
+    || msg.includes('Timestamp for this request');
+}
+
 class CCXTExecutionAdapter extends ExecutionAdapter {
   /**
    * @param {Object} cfg
@@ -181,6 +189,21 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     const apiKey = this.exchange?.apiKey;
     const secret = this.exchange?.secret;
     if (!apiKey || !secret) throw new Error('Binance API key/secret are required');
+    try {
+      return await this._binanceSignedRequestOnce(method, path, params);
+    } catch (error) {
+      if (!isBinanceTimestampError(error)) throw error;
+      await this._syncBinanceServerTime(true);
+      if (typeof this.exchange?.loadTimeDifference === 'function') {
+        try { await this.exchange.loadTimeDifference(); } catch {}
+      }
+      return this._binanceSignedRequestOnce(method, path, params);
+    }
+  }
+
+  async _binanceSignedRequestOnce(method, path, params = {}) {
+    const apiKey = this.exchange?.apiKey;
+    const secret = this.exchange?.secret;
     const baseUrl = 'https://fapi.binance.com';
     await this._syncBinanceServerTime();
     const payload = { ...params, recvWindow: 5000, timestamp: Date.now() + this._binanceTimeOffsetMs };
@@ -204,6 +227,19 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     try { json = JSON.parse(txt); } catch { json = { raw: txt }; }
     if (!res.ok) throw new Error(`binance ${JSON.stringify(json)}`);
     return json;
+  }
+
+  async _withBinanceTimeRetry(fn) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isBinanceTimestampError(error)) throw error;
+      await this._syncBinanceServerTime(true).catch(() => {});
+      if (typeof this.exchange?.loadTimeDifference === 'function') {
+        try { await this.exchange.loadTimeDifference(); } catch {}
+      }
+      return fn();
+    }
   }
 
 
@@ -259,6 +295,17 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
   async _fetchEntryStatusOnce(symbol, entryClientOrderId) {
     return this._binanceSignedRequest('GET', '/fapi/v1/order', { symbol, origClientOrderId: entryClientOrderId });
+  }
+
+  async _tryFetchBinanceOrderByClientId(symbol, entryClientOrderId) {
+    if (!symbol || !entryClientOrderId) return null;
+    try {
+      return await this._fetchEntryStatusOnce(symbol, entryClientOrderId);
+    } catch (error) {
+      const msg = String(error?.message || error || '').toLowerCase();
+      if (msg.includes('order does not exist') || msg.includes('-2013') || msg.includes('not found')) return null;
+      throw error;
+    }
   }
   _buildSymbolMapFromMarkets(markets) {
     try {
@@ -1002,7 +1049,16 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
     const entryReq = { symbol: nativeSymbol, side: direction === 'LONG' ? 'BUY' : 'SELL', type: 'LIMIT', timeInForce: 'GTC', quantity: String(qtyRounded), price: String(priceRounded), newClientOrderId: ids.entryClientOrderId };
     if (hedgeMode) entryReq.positionSide = positionSide;
-    const entryRes = await this._binanceSignedRequest('POST', '/fapi/v1/order', entryReq);
+    let entryRes = await this._tryFetchBinanceOrderByClientId(nativeSymbol, ids.entryClientOrderId);
+    if (!entryRes) {
+      try {
+        entryRes = await this._binanceSignedRequest('POST', '/fapi/v1/order', entryReq);
+      } catch (error) {
+        const recovered = await this._tryFetchBinanceOrderByClientId(nativeSymbol, ids.entryClientOrderId);
+        if (!recovered) throw error;
+        entryRes = recovered;
+      }
+    }
 
     this._brackets.set(bracketId, { bracketId, symbol: nativeSymbol, mappedSymbol: symbol, positionSide, direction, entryClientOrderId: ids.entryClientOrderId, tpClientAlgoId: null, slClientAlgoId: null, entryOrderId: Number(entryRes?.orderId || 0) || null, status: 'ENTRY_PLACED', expectedQty: String(qtyRounded), actualQty: null, entryPrice: String(priceRounded), takeProfitPrice: tp, stopLossPrice: sl, protectionPriceSource: source, tickSize: String(tickSize), pendingId: cid, origOrder: order, uiConfirmed: false, uiRejected: false, createdAt: now, updatedAt: now });
     this._entryClientToBracket.set(ids.entryClientOrderId, bracketId);
@@ -1076,6 +1132,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
   }
 
   async _placeBracketProtection(bracket) {
+    if (this._isBracketProtectionPlacementBlocked(bracket)) return;
     if (bracket?.protectionPromise) return bracket.protectionPromise;
     const visibilityGraceMs = Math.max(
       0,
@@ -1096,6 +1153,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
   }
 
   async _placeBracketProtectionOnce(bracket) {
+    if (this._isBracketProtectionPlacementBlocked(bracket)) return;
     try {
       const qty = String(bracket.actualQty || bracket.expectedQty);
       const closeSide = bracket.direction === 'LONG' ? 'SELL' : 'BUY';
@@ -1103,7 +1161,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       if (bracket.positionSide !== 'BOTH') common.positionSide = bracket.positionSide; else common.reduceOnly = 'true';
       const tpId = this._makeBracketIds(bracket.bracketId).tpClientAlgoId;
       const slId = this._makeBracketIds(bracket.bracketId).slClientAlgoId;
-      const open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: bracket.symbol }).catch(() => []);
+      const open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: bracket.symbol });
       const mark = await this._binancePublicRequest('/fapi/v1/premiumIndex', { symbol: bracket.symbol }).catch(() => ({}));
       const markPrice = Number(mark?.markPrice);
       const tpNum = positiveFiniteNumber(bracket.takeProfitPrice);
@@ -1159,6 +1217,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       bracket.lastError = undefined;
       bracket.updatedAt = Date.now();
     } catch (error) {
+      if (this._isBracketProtectionPlacementBlocked(bracket)) throw error;
       bracket.status = 'ERROR';
       bracket.lastError = error?.message || String(error);
       console.error(`[${this.provider}] Binance bracket protection failed`, { bracketId: bracket.bracketId, error: bracket.lastError });
@@ -1204,7 +1263,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       return;
     }
     if (st === 'PARTIALLY_FILLED') { bracket.status = 'ENTRY_PARTIALLY_FILLED'; bracket.actualQty = String(o?.executedQty || o?.cumQty || ''); bracket.updatedAt = Date.now(); this._confirmBracketPending(bracket, o); this._markBracketOpened(bracket, o); return; }
-    if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { bracket.status = 'CANCELED'; bracket.updatedAt = Date.now(); this._rejectBracketPending(bracket, `Entry order finished with status ${st}`, o); clearInterval(watcher.timer); this._bracketEntryWatchers.delete(bracketId); }
+    if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { await this._markBracketParentGone(bracket, { terminalStatus: 'CANCELED', reason: `Entry order finished with status ${st}`, raw: o }); clearInterval(watcher.timer); this._bracketEntryWatchers.delete(bracketId); }
   }
 
   _registerTrackedTicket(ticket, symbol) {
@@ -1626,14 +1685,14 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
   async _openOrdersSym(sym) {
     try {
       await this.ensureReady();
-      let simpleOrders = await this.exchange.fetchOpenOrders(sym);
+      let simpleOrders = await this._withBinanceTimeRetry(() => this.exchange.fetchOpenOrders(sym));
 
-      let conditionalOrders = await this.exchange.fetchOpenOrders(sym, params => ({
+      let conditionalOrders = await this._withBinanceTimeRetry(() => this.exchange.fetchOpenOrders(sym, params => ({
         ...params,
         stop: true,
         trigger: true,
         conditional: true
-      }));
+      })));
 
       let algoOrders = [];
       if (this._isBinanceUsdmLike()) {
@@ -1642,13 +1701,9 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
           this.exchange.fapiPrivateGetOpenAlgoOrders
           || this.exchange.fapiPrivate_get_openalgoorders;
         if (typeof getOpenAlgo === 'function') {
-          algoOrders = await getOpenAlgo.call(this.exchange, { symbol: nativeSymbol, stop: true });
+          algoOrders = await this._withBinanceTimeRetry(() => getOpenAlgo.call(this.exchange, { symbol: nativeSymbol, stop: true }));
         } else {
-          try {
-            algoOrders = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: nativeSymbol });
-          } catch (e) {
-            console.warn(`[${this.provider}] raw openAlgoOrders failed for ${sym}:`, e?.message || String(e));
-          }
+          algoOrders = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: nativeSymbol });
         }
       }
 
@@ -1660,20 +1715,79 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       ];
     } catch (e) {
       console.error(`[${this.provider}] Failed to fetch open orders for symbol ${sym}`, e);
-      return [];
+      throw e;
     }
+  }
+
+  _isBracketProtectionPlacementBlocked(bracket) {
+    const status = String(bracket?.status || '').toUpperCase();
+    return ['CLOSING', 'CLOSED', 'CANCELED', 'EXTERNALLY_MODIFIED'].includes(status);
+  }
+
+  _findBracketByLifecycleTicket(ticket) {
+    const normalized = String(ticket || '').trim();
+    if (!normalized) return null;
+    for (const bracket of this._brackets.values()) {
+      const ids = [
+        bracket.lifecycleTicket,
+        bracket.entryOrderId,
+        bracket.entryClientOrderId,
+        bracket.pendingId,
+        bracket.bracketId
+      ].map((x) => String(x || '').trim()).filter(Boolean);
+      if (ids.includes(normalized)) return bracket;
+    }
+    return null;
+  }
+
+  async _markBracketParentGone(bracket, { terminalStatus = 'CLOSED', reason = '', raw = undefined } = {}) {
+    if (!bracket) return false;
+    const currentStatus = String(bracket.status || '').toUpperCase();
+    if (['CLOSED', 'CANCELED'].includes(currentStatus)) return false;
+
+    bracket.status = 'CLOSING';
+    bracket.parentGoneReason = reason || undefined;
+    bracket.updatedAt = Date.now();
+
+    try {
+      await this.cancelBracketProtection(bracket.bracketId);
+    } catch (error) {
+      bracket.lastError = error?.message || String(error);
+      bracket.updatedAt = Date.now();
+      return false;
+    }
+
+    const finalStatus = String(terminalStatus || 'CLOSED').toUpperCase();
+    if (finalStatus === 'CANCELED') {
+      bracket.status = 'CANCELED';
+      bracket.updatedAt = Date.now();
+      this._rejectBracketPending(bracket, reason || 'Entry order was canceled before fill', raw);
+      const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || bracket.entryClientOrderId || '');
+      if (ticket) {
+        this._ticketOpened.delete(ticket);
+        this.events.emit('order:cancelled', { ticket });
+      }
+      return true;
+    }
+
+    const emitted = this._markBracketClosed(bracket);
+    if (!emitted) {
+      bracket.status = 'CLOSED';
+      bracket.updatedAt = Date.now();
+    }
+    return true;
   }
 
   async _openOrders() {
     try {
       await this.ensureReady();
-      let simpleOrders = await this.exchange.fetchOpenOrders();
-      let conditionalOrders = await this.exchange.fetchOpenOrders(params => ({
+      let simpleOrders = await this._withBinanceTimeRetry(() => this.exchange.fetchOpenOrders());
+      let conditionalOrders = await this._withBinanceTimeRetry(() => this.exchange.fetchOpenOrders(params => ({
         ...params,
         stop: true,
         trigger: true,
         conditional: true
-      }));
+      })));
 
       let algoOrders = [];
       if (this._isBinanceUsdmLike()) {
@@ -1681,13 +1795,9 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
           this.exchange.fapiPrivateGetOpenAlgoOrders
           || this.exchange.fapiPrivate_get_openalgoorders;
         if (typeof getOpenAlgo === 'function') {
-          algoOrders = await getOpenAlgo.call(this.exchange);
+          algoOrders = await this._withBinanceTimeRetry(() => getOpenAlgo.call(this.exchange));
         } else if (typeof this.exchange.request === 'function') {
-          try {
-            algoOrders = await this.exchange.request('openAlgoOrders', 'fapiPrivate', 'GET', {});
-          } catch (e) {
-            console.warn(`[${this.provider}] raw openAlgoOrders failed:`, e?.message || String(e));
-          }
+          algoOrders = await this._withBinanceTimeRetry(() => this.exchange.request('openAlgoOrders', 'fapiPrivate', 'GET', {}));
         }
       }
       console.log("Open orders", this.exchangeId, simpleOrders, conditionalOrders, algoOrders );
@@ -1700,7 +1810,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
     } catch (e) {
       console.error(`[${this.provider}] Failed to fetch open orders`, e);
-      return [];
+      throw e;
     }
   }
 
@@ -1710,6 +1820,9 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       await this.ensureReady();
       const mappedSymbol = this._ticketToSymbol.get(ticket);
       if (!mappedSymbol) return;
+      const bracket = this._findBracketByLifecycleTicket(ticket);
+      if (this._isBracketProtectionPlacementBlocked(bracket)) return;
+      if (bracket && !this._ticketOpened.has(String(ticket))) return;
 
       // Зчитуємо бажану конфіг
       const cfg = this._desiredProtectionByTicket.get(ticket) || {};
@@ -1717,7 +1830,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
 
       // Отримаємо поточний розмір позиції та середню ціну входу
       let positions = [];
-      try { positions = await this.exchange.fetchPositions(); } catch { positions = []; }
+      try { positions = await this.exchange.fetchPositions(); } catch { return; }
       const pos = (positions || []).find(p =>
         (p?.symbol || p?.info?.symbol || p?.info?.instId) === mappedSymbol
       );
@@ -2050,7 +2163,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
           const st = String(o?.status || '').toUpperCase();
           if (st === 'FILLED') { b.status = 'ENTRY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || b.expectedQty); this._confirmBracketPending(b, o); this._markBracketOpened(b, o); try { await this._placeBracketProtection(b); } catch (error) { b.status = 'ERROR'; b.lastError = error?.message || String(error); this._rejectBracketPending(b, `Entry filled but protection failed: ${b.lastError}`, error); } }
           else if (st === 'PARTIALLY_FILLED') { b.status = 'ENTRY_PARTIALLY_FILLED'; b.actualQty = String(o?.executedQty || o?.cumQty || ''); this._confirmBracketPending(b, o); this._markBracketOpened(b, o); }
-          else if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { b.status = 'CANCELED'; this._rejectBracketPending(b, `Entry order finished with status ${st}`, o); }
+          else if (['CANCELED','REJECTED','EXPIRED'].includes(st)) { await this._markBracketParentGone(b, { terminalStatus: 'CANCELED', reason: `Entry order finished with status ${st}`, raw: o }); }
           b.updatedAt = Date.now();
         } catch (orderError) {
           try {
@@ -2104,22 +2217,22 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
         posAmt = Math.abs(Number(row?.positionAmt || 0));
         positionKnown = Array.isArray(all);
       } catch {}
-      let open = [];
+      let open = null;
       try { open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: b.symbol }); } catch {}
       this._detectManualProtectiveOrderModifications(b, open);
       if (b.status === 'EXTERNALLY_MODIFIED') continue;
 
-      const set = new Set((open || []).map((x) => String(x.clientAlgoId || '')));
+      const set = new Set((Array.isArray(open) ? open : []).map((x) => String(x.clientAlgoId || '')));
 
       const lifecycleTicket = String(b.lifecycleTicket || b.entryOrderId || b.entryClientOrderId || '');
       const lifecycleOpened = this._ticketOpened.has(lifecycleTicket);
-      if (['PROTECTED','CLOSING','ENTRY_FILLED','ERROR'].includes(b.status) && lifecycleOpened && positionKnown && posAmt === 0) { await this.cancelBracketProtection(b.bracketId); this._markBracketClosed(b); continue; }
+      if (['PROTECTED','CLOSING','ENTRY_FILLED','ERROR'].includes(b.status) && lifecycleOpened && positionKnown && posAmt === 0) { await this._markBracketParentGone(b, { terminalStatus: 'CLOSED', reason: 'Position amount is zero' }); continue; }
 
       const expectsTp = positiveFiniteNumber(b.takeProfitPrice) !== undefined;
       const expectsSl = positiveFiniteNumber(b.stopLossPrice) !== undefined;
       const hasTp = !expectsTp || (b.tpClientAlgoId && set.has(b.tpClientAlgoId));
       const hasSl = !expectsSl || (b.slClientAlgoId && set.has(b.slClientAlgoId));
-      if (posAmt > 0 && ['ENTRY_FILLED','PROTECTED','ERROR'].includes(b.status) && (!hasTp || !hasSl)) {
+      if (Array.isArray(open) && posAmt > 0 && ['ENTRY_FILLED','PROTECTED','ERROR'].includes(b.status) && (!hasTp || !hasSl)) {
         try { await this._placeBracketProtection(b); } catch {}
       }
     }
@@ -2149,8 +2262,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       this._confirmBracketPending(bracket, o);
       this._markBracketOpened(bracket, o);
     } else if (['CANCELED','EXPIRED','REJECTED'].includes(status)) {
-      bracket.status = 'CANCELED'; bracket.updatedAt = Date.now();
-      this._rejectBracketPending(bracket, `Entry order finished with status ${status}`, o);
+      await this._markBracketParentGone(bracket, { terminalStatus: 'CANCELED', reason: `Entry order finished with status ${status}`, raw: o });
     }
   }
 
@@ -2163,9 +2275,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
         const lifecycleTicket = String(b.lifecycleTicket || b.entryOrderId || b.entryClientOrderId || '');
         const lifecycleOpened = this._ticketOpened.has(lifecycleTicket);
         if (b.symbol === symbol && b.positionSide === ps && lifecycleOpened && !['CLOSED','CANCELED'].includes(b.status)) {
-          b.status = 'CLOSING'; b.updatedAt = Date.now();
-          await this.cancelBracketProtection(b.bracketId);
-          this._markBracketClosed(b);
+          await this._markBracketParentGone(b, { terminalStatus: 'CLOSED', reason: 'Account update position amount is zero', raw: p });
         }
       }
     }
@@ -2192,7 +2302,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
         const m = String(e?.message || ''); if (!m.includes('not found') && !m.includes('already')) throw e;
       }
     }
-    const open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: b.symbol }).catch(() => []);
+    const open = await this._binanceSignedRequest('GET', '/fapi/v1/openAlgoOrders', { symbol: b.symbol });
     const rest = (Array.isArray(open) ? open : []).filter((x) => String(x?.clientAlgoId || '').startsWith(`br_${bracketId}_`));
     if (!rest.length) { b.tpClientAlgoId = null; b.slClientAlgoId = null; }
   }

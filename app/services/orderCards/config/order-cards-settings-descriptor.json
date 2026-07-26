@@ -1,5 +1,8 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Order Cards",
+    "group": "Execution"
+  },
   "options": {
     "sources": {
       "description": "Order card sources",

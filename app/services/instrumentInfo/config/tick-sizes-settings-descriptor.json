@@ -1,5 +1,8 @@
 {
-  "properties": {},
+  "properties": {
+    "name": "Tick Size",
+    "group": "Execution"
+  },
   "options": {
     "bySymbol": {
       "description": "Tick size overrides by symbol",
