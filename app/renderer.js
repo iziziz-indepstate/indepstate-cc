@@ -3701,7 +3701,7 @@ ipcRenderer.on('level-order:positions-ready', (_evt, rec = {}) => {
   const parentRequestId = rec.parentRequestId || rec.requestId;
   const group = levelOrderGroups.get(parentRequestId);
   let key = group?.key || pendingByReqId.get(parentRequestId);
-  if ((!key || !cardByKey(key)) && rec.symbol) {
+  if ((!key || !cardByKey(key)) && rec.symbol && (!parentRequestId || group)) {
     const liveKey = findKeyByTicker(rec.symbol);
     if (liveKey) {
       if (group) group.key = liveKey;

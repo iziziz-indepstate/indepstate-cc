@@ -462,6 +462,22 @@ async function run() {
   const repeatCall = calls.filter(c => c.ch === 'level-order:place' && c.payload.ticker === 'REPEAT').at(-1);
   assert(repeatCall);
   assert.strictEqual(repeatCall.payload.level, 100);
+  assert.strictEqual(t.cardStates.get(repeatKey2), 'pending-exec');
+  handlers['level-order:positions-ready'](null, {
+    requestId: 'old-repeat-parent',
+    parentRequestId: 'old-repeat-parent',
+    symbol: 'REPEAT',
+    expectedQty: 1,
+    foundQty: 1,
+    foundCids: ['old-repeat-cid'],
+    foundTickets: ['old-repeat-ticket']
+  });
+  assert.strictEqual(t.cardStates.get(repeatKey), 'profit');
+  assert.strictEqual(t.cardStates.get(repeatKey2), 'pending-exec');
+  assert.strictEqual(t.levelOrderTicketToGroup.has('old-repeat-ticket'), false);
+  assert.strictEqual(t.ticketToKey.has('old-repeat-ticket'), false);
+  handlers['position:closed'](null, { ticket: 'old-repeat-ticket', provider: 'simulated', profit: -5 });
+  assert.strictEqual(t.cardStates.get(repeatKey2), 'pending-exec');
 
   Module._load = originalLoad;
   console.log('levelOrderRenderer tests passed');

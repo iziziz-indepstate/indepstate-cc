@@ -1287,6 +1287,9 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     if (!normalizedTicket || this._positionClosedTickets.has(normalizedTicket)) return false;
     this._positionClosedTickets.add(normalizedTicket);
     this._ticketOpened.delete(normalizedTicket);
+    this._ticketToSymbol.delete(normalizedTicket);
+    this._desiredProtectionByTicket.delete(normalizedTicket);
+    this._childOrdersByParent.delete(normalizedTicket);
     const profit = Number(trade?.profit);
     const normalizedTrade = Number.isFinite(profit)
       ? { ...trade, profit, pnlStatus: 'reported' }
@@ -1295,13 +1298,39 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     return true;
   }
 
+  _cleanupBracketTerminalState(bracket) {
+    if (!bracket) return;
+    const ids = [
+      bracket.lifecycleTicket,
+      bracket.entryOrderId,
+      bracket.entryClientOrderId
+    ].map((x) => String(x || '').trim()).filter(Boolean);
+    for (const id of ids) {
+      this._ticketOpened.delete(id);
+      this._ticketToSymbol.delete(id);
+      this._desiredProtectionByTicket.delete(id);
+      this._childOrdersByParent.delete(id);
+    }
+    for (const id of [bracket.tpClientAlgoId, bracket.slClientAlgoId]) {
+      const normalized = String(id || '').trim();
+      if (normalized && this._algoClientToBracket) this._algoClientToBracket.delete(normalized);
+    }
+    const watcher = this._bracketEntryWatchers?.get(bracket.bracketId);
+    if (watcher?.timer) clearInterval(watcher.timer);
+    if (this._bracketEntryWatchers) this._bracketEntryWatchers.delete(bracket.bracketId);
+    bracket.protectionPromise = null;
+  }
+
   _markBracketClosed(bracket) {
     if (!bracket) return false;
     const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || bracket.entryClientOrderId || '');
-    if (!this._ticketOpened.has(ticket)) return false;
     bracket.status = 'CLOSED';
     bracket.updatedAt = Date.now();
-    return this._emitPositionClosed(ticket, { pnlStatus: 'unavailable' });
+    const emitted = this._ticketOpened.has(ticket)
+      ? this._emitPositionClosed(ticket, { pnlStatus: 'unavailable' })
+      : false;
+    this._cleanupBracketTerminalState(bracket);
+    return emitted;
   }
 
   _startWatchLoop() {
@@ -1763,8 +1792,8 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
       bracket.updatedAt = Date.now();
       this._rejectBracketPending(bracket, reason || 'Entry order was canceled before fill', raw);
       const ticket = String(bracket.lifecycleTicket || bracket.entryOrderId || bracket.entryClientOrderId || '');
+      this._cleanupBracketTerminalState(bracket);
       if (ticket) {
-        this._ticketOpened.delete(ticket);
         this.events.emit('order:cancelled', { ticket });
       }
       return true;
@@ -1774,6 +1803,7 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     if (!emitted) {
       bracket.status = 'CLOSED';
       bracket.updatedAt = Date.now();
+      this._cleanupBracketTerminalState(bracket);
     }
     return true;
   }

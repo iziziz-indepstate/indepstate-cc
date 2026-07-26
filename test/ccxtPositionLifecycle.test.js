@@ -10,8 +10,12 @@ function makeAdapter() {
   adapter._ticketToSymbol = new Map();
   adapter._ticketOpened = new Set();
   adapter._positionClosedTickets = new Set();
+  adapter._desiredProtectionByTicket = new Map();
   adapter._brackets = new Map();
   adapter._entryClientToBracket = new Map();
+  adapter._algoClientToBracket = new Map();
+  adapter._childOrdersByParent = new Map();
+  adapter._bracketEntryWatchers = new Map();
   adapter._cancelCalls = 0;
   adapter.exchangeId = 'binance';
   adapter.defaultParams = {};
@@ -64,6 +68,35 @@ function addBracket(adapter, suffix = '1') {
 }
 
 (async () => {
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, 'terminal');
+    bracket.lifecycleTicket = '10terminal';
+    adapter._ticketToSymbol.set('10terminal', 'BTC/USDT:USDT');
+    adapter._ticketOpened.add('10terminal');
+    adapter._desiredProtectionByTicket.set('10terminal', { symbol: 'BTC/USDT:USDT', side: 'buy', amount: 1, slPts: 10 });
+    adapter._childOrdersByParent.set('10terminal', { symbol: 'BTC/USDT:USDT', children: ['old-sl'] });
+    adapter._algoClientToBracket.set(bracket.slClientAlgoId, bracket.bracketId);
+
+    const emitted = adapter._markBracketClosed(bracket);
+    assert.strictEqual(emitted, true);
+    assert.strictEqual(bracket.status, 'CLOSED');
+    assert.strictEqual(adapter._ticketToSymbol.has('10terminal'), false);
+    assert.strictEqual(adapter._ticketOpened.has('10terminal'), false);
+    assert.strictEqual(adapter._desiredProtectionByTicket.has('10terminal'), false);
+    assert.strictEqual(adapter._childOrdersByParent.has('10terminal'), false);
+    assert.strictEqual(adapter._algoClientToBracket.has(bracket.slClientAlgoId), false);
+
+    const positions = await adapter.listOpenPositions('BTCUSDT');
+    assert.deepStrictEqual(positions, []);
+
+    let placementCalls = 0;
+    adapter._placeBracketProtection = async () => { placementCalls += 1; };
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1' }];
+    await adapter._reconcileBrackets();
+    assert.strictEqual(placementCalls, 0);
+  }
+
   {
     const adapter = makeAdapter();
     const bracket = addBracket(adapter, '9');
