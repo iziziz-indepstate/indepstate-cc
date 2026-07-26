@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' data:">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LevelTrack</title>
+  <style>
+    :root {
+      --bg:#0b0b0c; --panel:#121214; --muted:#a1a1aa; --text:#e5e7eb;
+      --border:#27272a; --green:#22c55e; --red:#ef4444; --blue:#3b82f6;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);font:13px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+    header{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:10px 12px;background:rgba(11,11,12,.92);border-bottom:1px solid var(--border)}
+    h1{font-size:15px;margin:0;font-weight:650}
+    .spacer{flex:1}
+    button{border:1px solid var(--border);background:#18181b;color:var(--text);border-radius:6px;padding:6px 10px;cursor:pointer}
+    button:hover{filter:brightness(1.1)}
+    button.primary{background:var(--blue);border-color:var(--blue);color:#fff}
+    button.danger{color:#fecaca;border-color:rgba(239,68,68,.45)}
+    main{padding:12px}
+    table{width:100%;border-collapse:collapse;min-width:930px}
+    th,td{border-bottom:1px solid var(--border);padding:7px 5px;text-align:left;vertical-align:middle}
+    th{color:var(--muted);font-size:12px;font-weight:600}
+    input{width:100%;padding:6px 7px;border:1px solid var(--border);border-radius:6px;background:#0f0f11;color:var(--text);outline:none}
+    input[type="checkbox"]{width:auto}
+    .key{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+    .status{display:inline-flex;align-items:center;gap:5px;color:var(--muted);white-space:nowrap}
+    .dot{width:8px;height:8px;border-radius:999px;background:#71717a}
+    .status.active .dot{background:var(--green)}
+    .status.inactive .dot{background:#f59e0b}
+    .status.error .dot{background:var(--red)}
+    .number{font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+    .levels{display:flex;flex-wrap:wrap;gap:6px;align-items:center;min-width:260px}
+    .levels input{width:96px}
+    .levels button{padding:5px 8px}
+    .levels .level-remove{width:24px;padding:5px 0;color:#fecaca;border-color:rgba(239,68,68,.35)}
+    .level-item{display:flex;gap:3px;align-items:center}
+    .hint{margin-top:10px;color:var(--muted);font-size:12px}
+    .toast{position:fixed;left:12px;right:12px;bottom:12px;display:none;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:#18181b;color:var(--text)}
+    .empty{padding:28px 8px;text-align:center;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>LevelTrack</h1>
+    <div class="spacer"></div>
+    <button id="add">Add</button>
+    <button id="refresh">Refresh</button>
+    <button id="save" class="primary">Save</button>
+  </header>
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th>On</th>
+          <th>Key</th>
+          <th>Ticker</th>
+          <th>Levels</th>
+          <th>Max offset</th>
+          <th>Price</th>
+          <th>Active</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="groups"></tbody>
+    </table>
+    <div id="empty" class="empty">No level groups yet.</div>
+    <div class="hint">Use levels separated by comma, space, or semicolon. Commands use f:levelTrack:&lt;key&gt;.</div>
+  </main>
+  <div id="toast" class="toast"></div>
+  <script src="./window.js"></script>
+</body>
+</html>

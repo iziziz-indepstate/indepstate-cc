@@ -13,6 +13,7 @@ const APPLY_POLICIES = {
     restartPaths: ['sources']
   },
   'level-order': { livePaths: ['*'] },
+  'level-track': { livePaths: ['*'] },
   'pending-strategies': { livePaths: ['*'] },
   'tick-sizes': { livePaths: ['*'] },
   'trade-rules': { livePaths: ['*'] },

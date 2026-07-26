@@ -15,6 +15,7 @@
   "services/dealTrackers-source-mt5-log",
   "services/orderCards",
   "services/levelOrder",
+  "services/levelTrack",
   "services/execution-log",
   "services/pendingOrders",
   "services/tradeRules",

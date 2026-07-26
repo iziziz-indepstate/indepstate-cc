@@ -99,6 +99,36 @@ const orderCalculator = {
   assert.strictEqual(queued[1].action, 'LS');
   assert.strictEqual(queued[1].strategyId.endsWith('_ls'), true);
 
+  servicesApi.levelOrder = {
+    getLevelResolver(name) {
+      if (name !== 'levelTrack') return null;
+      return async ({ key, ticker, action }) => {
+        assert.strictEqual(key, 'spx-main');
+        assert.strictEqual(ticker, 'SPX');
+        assert.strictEqual(action, 'LB');
+        return { ok: true, level: 7500 };
+      };
+    }
+  };
+  res = await buy.run(['SPX', 'f:levelTrack:spx-main', '10', '500']);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(queued[2].ticker, 'SPX');
+  assert.strictEqual(queued[2].level, 7500);
+
+  servicesApi.levelOrder = {
+    getLevelResolver() {
+      return async () => ({ ok: false, error: 'No active level' });
+    }
+  };
+  res = await buy.run(['SPX', 'f:levelTrack:spx-main', '10', '500']);
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, 'No active level');
+
+  servicesApi.levelOrder = { getLevelResolver: () => null };
+  res = await buy.run(['SPX', 'f:missing:spx-main', '10', '500']);
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, 'Level resolver is not registered: missing');
+
   res = await buy.run(['UPRO', '100', '0', '50']);
   assert.strictEqual(res.ok, false);
 

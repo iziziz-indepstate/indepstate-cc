@@ -10,6 +10,18 @@ settings.register(
 
 function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
+  const resolvers = new Map();
+  servicesApi.levelOrder = {
+    registerLevelResolver(name, fn) {
+      const key = String(name || '').trim();
+      if (!key || typeof fn !== 'function') return false;
+      resolvers.set(key, fn);
+      return () => resolvers.delete(key);
+    },
+    getLevelResolver(name) {
+      return resolvers.get(String(name || '').trim());
+    }
+  };
   servicesApi.commands.push(new LevelOrderCommand());
   const commandOpts = {
     servicesApi,

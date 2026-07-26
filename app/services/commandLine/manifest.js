@@ -9,6 +9,26 @@ settings.register(
   path.join(__dirname, 'config', 'command-line-settings-descriptor.json')
 );
 
+function isMainAppWindow(win) {
+  if (!win || win.isDestroyed?.()) return false;
+  const url = String(win.webContents?.getURL?.() || '');
+  return /(?:^|\/|\\)index\.html(?:$|[?#])/i.test(url);
+}
+
+function getOrderWindows() {
+  const windows = (BrowserWindow.getAllWindows?.() || []).filter(win => win && !win.isDestroyed?.());
+  return windows.filter(isMainAppWindow);
+}
+
+function sendToOrderWindows(channel, payload) {
+  let sent = 0;
+  for (const win of getOrderWindows()) {
+    win.webContents?.send?.(channel, payload);
+    sent += 1;
+  }
+  return sent;
+}
+
 function initService(servicesApi = {}) {
   const { config } = settings.readConfig('command-line') || {};
   const cmdService = createCommandService({
@@ -16,18 +36,11 @@ function initService(servicesApi = {}) {
     executionApi: servicesApi,
     aliases: config && config.aliases,
     onAdd(row) {
-      const win = BrowserWindow.getAllWindows()[0];
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('orders:new', row);
-      }
+      sendToOrderWindows('orders:new', row);
     },
     onRemove(filter) {
-      const win = BrowserWindow.getAllWindows()[0];
       if (!filter || typeof filter !== 'object') return { ok: false, error: 'Invalid remove payload' };
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('orders:remove', filter);
-        return { ok: true };
-      }
+      if (sendToOrderWindows('orders:remove', filter) > 0) return { ok: true };
       return { ok: false, error: 'No window' };
     }
   });
@@ -131,4 +144,4 @@ function hookRenderer(ipcRenderer) {
   });
 }
 
-module.exports = { initService, hookRenderer };
+module.exports = { initService, hookRenderer, isMainAppWindow, getOrderWindows };

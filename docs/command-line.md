@@ -77,7 +77,22 @@ Example:
 
 ```
 levelOrder-sell MNQ 28125 1 500
+lo-ls SPX f:levelTrack:spx-main 10 500
 ```
+
+`level` may also be a functional reference in the form `f:levelTrack:<key>`. In that case the
+`levelTrack` service refreshes the configured group, returns its current active level, and the order
+is rejected before execution if the group has no active level.
+
+### levelTrack (alias: lt)
+
+```
+levelTrack
+```
+
+Opens the LevelTrack window. The window manages saved groups with `key`, `ticker`, `levels`, and
+`maxOffset`, shows the current quote-derived active level, and persists groups through the
+`level-track` settings section.
 
 ### rm
 

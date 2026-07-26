@@ -4,6 +4,7 @@ const { resolveLevelOrderDefaults } = require('./strategy');
 const RESERVED_ROW_PROPS = new Set(['cardType', 'ticker', 'level', 'event', 'time']);
 const PROPS_USAGE = 'Usage: levelOrder {ticker} {level} [props=key:value;key2:value2]';
 const PLACE_USAGE = 'Usage: levelOrder-{buy|sell} {ticker} {level} {levelOffset} {risk}';
+const LEVEL_FUNCTION_PREFIX = 'f:';
 
 function normalizeTicker(ticker) {
   const raw = String(ticker || '').trim();
@@ -18,6 +19,17 @@ function normalizeTicker(ticker) {
 function parseNumber(value) {
   const n = Number(String(value ?? '').trim().replace(',', '.'));
   return Number.isFinite(n) ? n : null;
+}
+
+function parseLevelFunction(value) {
+  const raw = String(value || '').trim();
+  if (!raw.startsWith(LEVEL_FUNCTION_PREFIX)) return null;
+  const [, name, ...keyParts] = raw.split(':');
+  const key = keyParts.join(':').trim();
+  if (!name || !key) {
+    return { ok: false, error: 'Usage: functional level must be f:{resolver}:{key}' };
+  }
+  return { ok: true, name: name.trim(), key };
 }
 
 function parsePropsToken(token) {
@@ -95,17 +107,19 @@ class LevelOrderPlaceCommand extends Command {
   async run(args) {
     const [tickerRaw, levelRaw, offsetRaw, riskRaw] = Array.isArray(args) ? args : [];
     const ticker = normalizeTicker(tickerRaw);
-    const level = parseNumber(levelRaw);
     const stopOffsetPts = parseNumber(offsetRaw);
     const riskUsd = parseNumber(riskRaw);
     if (
       !ticker ||
-      !Number.isFinite(level) || level <= 0 ||
       !Number.isFinite(stopOffsetPts) || stopOffsetPts <= 0 ||
       !Number.isFinite(riskUsd) || riskUsd <= 0
     ) {
       return { ok: false, error: PLACE_USAGE };
     }
+
+    const levelResult = await this.resolveLevel(levelRaw, { ticker, args });
+    if (!levelResult.ok) return levelResult;
+    const level = levelResult.level;
 
     const queueLevelOrder = this.servicesApi.execution?.queueLevelOrder;
     if (typeof queueLevelOrder !== 'function') {
@@ -141,6 +155,35 @@ class LevelOrderPlaceCommand extends Command {
     }
     return { ok: true, result };
   }
+
+  async resolveLevel(levelRaw, context = {}) {
+    const levelFn = parseLevelFunction(levelRaw);
+    if (!levelFn) {
+      const level = parseNumber(levelRaw);
+      if (!Number.isFinite(level) || level <= 0) return { ok: false, error: PLACE_USAGE };
+      return { ok: true, level };
+    }
+    if (!levelFn.ok) return { ok: false, error: levelFn.error };
+
+    const resolver = this.servicesApi.levelOrder?.getLevelResolver?.(levelFn.name);
+    if (typeof resolver !== 'function') {
+      return { ok: false, error: `Level resolver is not registered: ${levelFn.name}` };
+    }
+    const result = await resolver({
+      key: levelFn.key,
+      ticker: context.ticker,
+      action: this.action,
+      args: context.args || []
+    });
+    if (!result || result.ok === false) {
+      return { ok: false, error: result?.error || `No active level from resolver ${levelFn.name}:${levelFn.key}` };
+    }
+    const level = parseNumber(result.level);
+    if (!Number.isFinite(level) || level <= 0) {
+      return { ok: false, error: `Resolver ${levelFn.name}:${levelFn.key} returned invalid level` };
+    }
+    return { ok: true, level };
+  }
 }
 
 module.exports = {
@@ -148,5 +191,6 @@ module.exports = {
   LevelOrderPlaceCommand,
   buildLevelOrderRow,
   normalizeTicker,
-  parsePropsToken
+  parsePropsToken,
+  parseLevelFunction
 };

@@ -1,0 +1,45 @@
+{
+  "properties": {
+    "name": "LevelTrack",
+    "group": "Trading"
+  },
+  "options": {
+    "refreshMs": {
+      "type": "number",
+      "description": "Quote refresh interval in milliseconds"
+    },
+    "timeoutMs": {
+      "type": "number",
+      "description": "Quote lookup timeout in milliseconds"
+    },
+    "groups": {
+      "description": "Tracked level groups",
+      "item": {
+        "description": "Level group",
+        "key": {
+          "type": "string",
+          "description": "Group key used by f:levelTrack:<key>"
+        },
+        "enabled": {
+          "type": "boolean",
+          "description": "Track this group"
+        },
+        "ticker": {
+          "type": "string",
+          "description": "Ticker"
+        },
+        "levels": {
+          "description": "Numeric levels",
+          "item": {
+            "type": "number",
+            "description": "Price level"
+          }
+        },
+        "maxOffset": {
+          "type": "number",
+          "description": "Maximum absolute distance from a level"
+        }
+      }
+    }
+  }
+}

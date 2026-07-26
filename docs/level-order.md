@@ -27,6 +27,15 @@ lo ES.cfd 6500
 lo ES.cfd 6500 props=producingLineId:tv-line-123
 ```
 
+Immediate execution commands (`lo-lb` and `lo-ls`) also accept a functional level reference:
+
+```text
+lo-ls SPX f:levelTrack:spx-main 10 500
+```
+
+The `levelTrack` service resolves `spx-main` to its current active level immediately before queuing
+the grouped level order. Card-creating `lo {ticker} {level}` remains numeric-only.
+
 ## Settings
 
 The settings section is registered as `Level orders`.
@@ -152,6 +161,7 @@ If the monitor times out, it logs `[LEVEL][POSITIONS_TIMEOUT]` with a visible te
 - `app/services/levelOrder/command.js`: command parsing and row creation.
 - `app/services/levelOrder/strategy.js`: default resolution, sizing, stop math, and split math.
 - `app/services/levelOrder/manifest.js`: settings and command registration.
+- `app/services/levelTrack/*`: saved active-level tracking and `f:levelTrack:<key>` resolver.
 - `app/main.js`: `level-order:place`, child submission, and terminal-position monitoring.
 - `app/renderer.js`: card UI, IPC payload, grouped child lifecycle, and status transitions.
 - `test/levelOrder.test.js`: command and strategy tests.
