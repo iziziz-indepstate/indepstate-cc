@@ -1,5 +1,6 @@
 [
   "services/brokerage",
+  "services/executionRetry",
   "services/actions-bus",
   "services/instrumentInfo",
   "services/brokerage-adapter-ccxt",

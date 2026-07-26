@@ -1,0 +1,12 @@
+{
+  "properties": {
+    "name": "Execution retry",
+    "group": "Execution"
+  },
+  "options": {
+    "enabled": {
+      "type": "boolean",
+      "description": "Allow automatic execution retries that can resubmit trading orders"
+    }
+  }
+}

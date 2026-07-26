@@ -60,6 +60,7 @@
  * @property {McpApi} [mcp]
  * @property {AutoUpdaterApi} [autoUpdater]
  * @property {import('./tradeRules')} [tradeRules]
+ * @property {{configure:Function,getConfig:Function,isEnabled:Function,shouldRetry:Function}} [executionRetry]
  * @property {{listConfigs:Function,readConfig:Function,writeConfig:Function,saveAndApplyConfig:Function,getRestartStatus:Function,onApply:Function}} [settings]
  */
 

@@ -3153,7 +3153,9 @@ async function placeLevelOrder(kind, row, v, instrumentType, btnLabel) {
     } else {
       setCardState(key, 'pending-exec');
     }
-    toast(`... ${row.ticker}: level order sent`);
+    toast(res.status === 'unknown'
+      ? `... ${row.ticker}: level order state unknown, waiting reconciliation`
+      : `... ${row.ticker}: level order sent`);
     render();
   } catch (e) {
     setCardState(key, null);
@@ -3481,6 +3483,13 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
       }
       return;
     }
+    if (rec.status === 'unknown' || rec.partial === true) {
+      setCardState(key, 'pending-exec');
+      if (card) card.title = rec.reason || 'Execution state unknown';
+      toast(`... ${rec.order?.symbol || ''}: execution state unknown`);
+      render();
+      return;
+    }
     setCardState(key, null);
     render();
     shakeCard(key);
@@ -3514,6 +3523,11 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
       if (row && row.instrumentType === 'OPT') row.openedAt = row.openedAt || openedAt;
     }
     toast(`✔ ${rec.order.symbol} ${rec.order.side} ${rec.order.qty} — placed`);
+    render();
+  } else if (rec.status === 'unknown' || rec.partial === true) {
+    setCardState(key, 'pending');
+    if (card) card.title = rec.reason || 'Execution state unknown';
+    toast(`... ${rec.order?.symbol || ''}: execution state unknown`);
     render();
   } else {
     setCardState(key, null);

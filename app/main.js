@@ -252,7 +252,55 @@ const confirmedOrderByCid = new Map(); // cid/pendingId -> original normalized o
 const trackerPending = new Map(); // reqId -> { ticker, tp, sp }
 const trackerIndex = new Map(); // ticket -> { ticker, tp, sp, cid }
 const levelOrderPositionMonitors = new Map(); // parent requestId -> { timer, children, ... }
+const levelOrderIntentRegistry = new Map(); // intentKey -> { status, promise, result, updatedAt }
 const groupedOrderLifecycles = new GroupedOrderLifecycleRegistry();
+
+function stableStringify(value) {
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableStringify(value[key])}`).join(',')}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function roundIntentNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? Number(n.toFixed(12)) : null;
+}
+
+function buildLevelOrderIntentKey({ providerName, symbol, instrumentType, payload, plan }) {
+  return stableStringify({
+    provider: providerName,
+    symbol: String(symbol || '').trim().toUpperCase(),
+    instrumentType,
+    action: String(payload?.action || '').toUpperCase(),
+    level: roundIntentNumber(plan.level),
+    referencePrice: roundIntentNumber(plan.referencePrice),
+    tickSize: roundIntentNumber(plan.tickSize),
+    riskUsd: roundIntentNumber(plan.riskUsd),
+    stopPts: roundIntentNumber(plan.stopPts),
+    stopOffsetPts: roundIntentNumber(plan.stopOffsetPts),
+    takeProfitPts: roundIntentNumber(plan.takeProfitPts),
+    minLot: roundIntentNumber(plan.minLot),
+    childQtys: (plan.childQtys || []).map(roundIntentNumber),
+    priceSource: plan.priceSource
+  });
+}
+
+function cloneJson(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function getActiveLevelOrderIntent(intentKey, ttlMs = 10 * 60 * 1000) {
+  const rec = levelOrderIntentRegistry.get(intentKey);
+  if (!rec) return null;
+  if (Date.now() - Number(rec.updatedAt || 0) > ttlMs) {
+    levelOrderIntentRegistry.delete(intentKey);
+    return null;
+  }
+  if (['placing', 'ok', 'unknown', 'partial'].includes(rec.status)) return rec;
+  return null;
+}
 
 function emitLevelOrderPositionsReadyIfComplete(parentRequestId) {
   const snapshot = groupedOrderLifecycles.takeReadySnapshot(parentRequestId);
@@ -289,6 +337,9 @@ function extractCid(s) {
 
 function wireAdapter(adapter, providerName) {
   if (!adapter?.on || wiredAdapters.has(adapter)) return;
+  if (typeof adapter.setExecutionRetryPolicy === 'function' && servicesApi.executionRetry) {
+    adapter.setExecutionRetryPolicy(servicesApi.executionRetry);
+  }
   wiredAdapters.add(adapter);
 
   adapter.on('order:confirmed', ({ pendingId, ticket, mtOrder, origOrder }) => {
@@ -1163,72 +1214,127 @@ function setupIpc(orderSvc) {
         return rej;
       }
 
-      const results = [];
-      for (let i = 0; i < plan.childQtys.length; i += 1) {
-        const childReqId = `${requestId}_${i + 1}`;
-        const childPayload = {
-          ticker: symbol,
-          event: 'levelOrder',
-          price: plan.referencePrice,
-          kind: plan.orderKind,
-          instrumentType,
-          tickSize: plan.tickSize,
+      const intentKey = buildLevelOrderIntentKey({ providerName, symbol, instrumentType, payload, plan });
+      const existingIntent = getActiveLevelOrderIntent(intentKey);
+      if (existingIntent) {
+        appendJsonl(EXEC_LOG, {
+          t: nowTs(),
+          kind: 'level-order-dedup',
+          reqId: requestId,
           provider: providerName,
-          meta: {
-            requestId: childReqId,
-            qty: plan.childQtys[i],
-            stopPts: plan.stopPts,
-            takePts: plan.takeProfitPts,
-            riskUsd: plan.riskUsd,
-            fixedQty: true,
-            strategy: 'limitBidTrade',
-            strategyId,
-            parentRequestId: requestId,
-            childIndex: i + 1,
-            childCount: plan.childQtys.length,
-            level: plan.level,
-            bid: plan.bid,
-            ask: plan.ask,
-            priceSource: plan.priceSource,
-            referencePrice: plan.referencePrice,
-            stopOffsetPts: plan.stopOffsetPts,
-            minLot: plan.minLot,
-            quantityStep: plan.minLot,
-            pointSize: payload.pointSize,
-            stopPrice: plan.stopPrice
-          }
-        };
-        const res = await queuePlaceOrderInternal(childPayload);
-        results.push({ requestId: childReqId, qty: plan.childQtys[i], result: res });
-        if (!res || res.status === 'rejected' || res.status === 'error') {
-          const rej = {
-            status: 'rejected',
-            provider: providerName,
-            reason: res?.reason || 'Level order child rejected',
-            raw: { plan, results }
-          };
-          appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, plan, result: rej });
-          return rej;
-        }
+          strategyId,
+          intentKey,
+          existingStatus: existingIntent.status
+        });
+        if (existingIntent.promise) return cloneJson(await existingIntent.promise);
+        return cloneJson(existingIntent.result);
       }
 
-      const ok = {
-        status: 'ok',
-        provider: providerName,
-        providerOrderId: `level:${strategyId}`,
-        strategyId,
-        raw: { plan, results }
-      };
-      startLevelOrderPositionMonitor({
-        adapter,
-        providerName,
-        requestId,
-        strategyId,
-        symbol,
-        children: results
-      });
-      appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, plan, result: ok });
-      return ok;
+      const intentRecord = { status: 'placing', updatedAt: nowTs(), result: null, promise: null };
+      levelOrderIntentRegistry.set(intentKey, intentRecord);
+      const placementPromise = (async () => {
+        const results = [];
+        for (let i = 0; i < plan.childQtys.length; i += 1) {
+          const childReqId = `${requestId}_${i + 1}`;
+          const childPayload = {
+            ticker: symbol,
+            event: 'levelOrder',
+            price: plan.referencePrice,
+            kind: plan.orderKind,
+            instrumentType,
+            tickSize: plan.tickSize,
+            provider: providerName,
+            meta: {
+              requestId: childReqId,
+              qty: plan.childQtys[i],
+              stopPts: plan.stopPts,
+              takePts: plan.takeProfitPts,
+              riskUsd: plan.riskUsd,
+              fixedQty: true,
+              strategy: 'limitBidTrade',
+              strategyId,
+              parentRequestId: requestId,
+              childIndex: i + 1,
+              childCount: plan.childQtys.length,
+              level: plan.level,
+              bid: plan.bid,
+              ask: plan.ask,
+              priceSource: plan.priceSource,
+              referencePrice: plan.referencePrice,
+              stopOffsetPts: plan.stopOffsetPts,
+              minLot: plan.minLot,
+              quantityStep: plan.minLot,
+              pointSize: payload.pointSize,
+              stopPrice: plan.stopPrice,
+              levelOrderIntentKey: intentKey
+            }
+          };
+          const res = await queuePlaceOrderInternal(childPayload);
+          results.push({ requestId: childReqId, qty: plan.childQtys[i], result: res });
+          if (!res || res.status === 'rejected' || res.status === 'error') {
+            const accepted = results.filter(item => item.result && item.result.status !== 'rejected' && item.result.status !== 'error');
+            const result = accepted.length
+              ? {
+                  status: 'unknown',
+                  provider: providerName,
+                  reason: res?.reason || 'Level order child state unknown after partial placement',
+                  providerOrderId: `level:${strategyId}`,
+                  strategyId,
+                  partial: true,
+                  raw: { plan, results }
+                }
+              : {
+                  status: 'rejected',
+                  provider: providerName,
+                  reason: res?.reason || 'Level order child rejected',
+                  raw: { plan, results }
+                };
+            if (accepted.length) {
+              startLevelOrderPositionMonitor({
+                adapter,
+                providerName,
+                requestId,
+                strategyId,
+                symbol,
+                children: results
+              });
+            }
+            appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result });
+            return result;
+          }
+        }
+
+        const ok = {
+          status: 'ok',
+          provider: providerName,
+          providerOrderId: `level:${strategyId}`,
+          strategyId,
+          raw: { plan, results }
+        };
+        startLevelOrderPositionMonitor({
+          adapter,
+          providerName,
+          requestId,
+          strategyId,
+          symbol,
+          children: results
+        });
+        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result: ok });
+        return ok;
+      })();
+      intentRecord.promise = placementPromise;
+      try {
+        const finalResult = await placementPromise;
+        intentRecord.result = cloneJson(finalResult);
+        intentRecord.status = finalResult?.status || 'unknown';
+        intentRecord.updatedAt = nowTs();
+        intentRecord.promise = null;
+        if (intentRecord.status === 'rejected') levelOrderIntentRegistry.delete(intentKey);
+        return finalResult;
+      } catch (error) {
+        levelOrderIntentRegistry.delete(intentKey);
+        throw error;
+      }
     } catch (err) {
       const reason = err?.message || String(err);
       appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, payload, error: reason });

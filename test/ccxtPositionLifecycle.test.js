@@ -46,6 +46,7 @@ function addBracket(adapter, suffix = '1') {
     uiRejected: false,
   };
   adapter._brackets.set(bracket.bracketId, bracket);
+  adapter._entryClientToBracket.set(bracket.entryClientOrderId, bracket.bracketId);
   adapter.pending.set(bracket.pendingId, { order: bracket.origOrder });
   return bracket;
 }
@@ -56,8 +57,9 @@ function addBracket(adapter, suffix = '1') {
     adapter.normalizeBinanceUsdmSymbol = async () => 'BTCUSDT';
     adapter._getBinanceSymbolFilters = async () => ({ tickSize: 0.1, stepSize: 0.001, minNotional: 5 });
     adapter._binanceSignedRequest = async (method, endpoint) => {
-      assert.strictEqual(method, 'POST');
       assert.strictEqual(endpoint, '/fapi/v1/order');
+      if (method === 'GET') throw new Error('binance {"code":-2013,"msg":"Order does not exist."}');
+      assert.strictEqual(method, 'POST');
       return { orderId: 100, status: 'NEW' };
     };
     adapter._startBracketEntryWatcher = async () => {};
@@ -194,6 +196,94 @@ function addBracket(adapter, suffix = '1') {
 
   {
     const adapter = makeAdapter();
+    const bracket = addBracket(adapter, 'entry-cancel');
+    bracket.status = 'ENTRY_PLACED';
+    let placementCalls = 0;
+    const cancelled = [];
+    adapter._placeBracketProtection = async () => { placementCalls += 1; };
+    adapter.events.on('order:cancelled', event => cancelled.push(event));
+    adapter._binanceSignedRequest = async (_method, endpoint) => {
+      if (endpoint === '/fapi/v1/order') return { status: 'CANCELED', orderId: bracket.entryOrderId };
+      if (endpoint === '/fapi/v1/userTrades') return [];
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    };
+
+    await adapter._reconcileBrackets();
+
+    assert.strictEqual(bracket.status, 'CANCELED');
+    assert.strictEqual(adapter._cancelCalls, 1);
+    assert.strictEqual(placementCalls, 0);
+    assert.strictEqual(cancelled.length, 1);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, 'entry-update-cancel');
+    bracket.status = 'ENTRY_PLACED';
+    let placementCalls = 0;
+    adapter._placeBracketProtection = async () => { placementCalls += 1; };
+
+    await adapter._onOrderTradeUpdate({ o: { c: bracket.entryClientOrderId, X: 'CANCELED' } });
+
+    assert.strictEqual(bracket.status, 'CANCELED');
+    assert.strictEqual(adapter._cancelCalls, 1);
+    assert.strictEqual(placementCalls, 0);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, 'manual-close');
+    adapter.exchange = {
+      fetchPositions: async () => [{ symbol: 'BTC/USDT:USDT', contracts: 1, entryPrice: 100 }]
+    };
+    adapter._desiredProtectionByTicket = new Map();
+    adapter._desiredProtectionByTicket.set(String(bracket.entryOrderId), {
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      amount: 1,
+      slPts: 10,
+      tpPts: 20,
+      tickSize: 0.1
+    });
+    adapter._confirmBracketPending(bracket, { orderId: bracket.entryOrderId });
+    adapter._markBracketOpened(bracket, { orderId: bracket.entryOrderId });
+
+    await adapter._onAccountUpdate({ a: { P: [{ s: 'BTCUSDT', ps: 'BOTH', pa: '0' }] } });
+
+    let placementCalls = 0;
+    adapter._openOrdersSym = async () => [];
+    adapter._placeProtectiveOrders = async () => { placementCalls += 1; return ['new-protection']; };
+    await adapter._ensureProtectiveOrdersForTicket(String(bracket.entryOrderId));
+    await adapter._placeBracketProtection(bracket);
+
+    assert.strictEqual(bracket.status, 'CLOSED');
+    assert.strictEqual(adapter._cancelCalls, 1);
+    assert.strictEqual(placementCalls, 0);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, 'unknown-state');
+    bracket.status = 'PROTECTED';
+    adapter._confirmBracketPending(bracket, { orderId: bracket.entryOrderId });
+    adapter._markBracketOpened(bracket, { orderId: bracket.entryOrderId });
+    let placementCalls = 0;
+    adapter._placeBracketProtection = async () => { placementCalls += 1; };
+    adapter._binanceSignedRequest = async (_method, endpoint) => {
+      if (endpoint === '/fapi/v2/positionRisk') throw new Error('temporary position outage');
+      if (endpoint === '/fapi/v1/openAlgoOrders') throw new Error('temporary open-order outage');
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    };
+
+    await adapter._reconcileBrackets();
+
+    assert.strictEqual(bracket.status, 'PROTECTED');
+    assert.strictEqual(adapter._cancelCalls, 0);
+    assert.strictEqual(placementCalls, 0);
+  }
+
+  {
+    const adapter = makeAdapter();
     const opened = [];
     const closed = [];
     let positions = [{ symbol: 'ETH/USDT:USDT', contracts: 2, unrealizedPnl: 3 }];
@@ -225,6 +315,124 @@ function addBracket(adapter, suffix = '1') {
 
     assert.strictEqual(closed.length, 0);
     assert(adapter._ticketOpened.has('outage-ticket'));
+  }
+
+  {
+    const adapter = makeAdapter();
+    let calls = 0;
+    let syncs = 0;
+    let ccxtSyncs = 0;
+    adapter.exchange = {
+      apiKey: 'key',
+      secret: 'secret',
+      loadTimeDifference: async () => { ccxtSyncs += 1; }
+    };
+    adapter._syncBinanceServerTime = async (force) => {
+      if (force) syncs += 1;
+      return 0;
+    };
+    adapter._binanceSignedRequest = CCXTExecutionAdapter.prototype._binanceSignedRequest;
+    adapter._binanceSignedRequestOnce = async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('InvalidNonce: binance {"code":-1021,"msg":"Timestamp for this request was 1000ms ahead of the server time."}');
+      return { ok: true };
+    };
+
+    const result = await adapter._binanceSignedRequest('GET', '/fapi/v1/order', { symbol: 'BTCUSDT' });
+
+    assert.deepStrictEqual(result, { ok: true });
+    assert.strictEqual(calls, 2);
+    assert.strictEqual(syncs, 1);
+    assert.strictEqual(ccxtSyncs, 1);
+  }
+
+  {
+    const adapter = makeAdapter();
+    adapter.normalizeBinanceUsdmSymbol = async () => 'BTCUSDT';
+    adapter._getBinanceSymbolFilters = async () => ({ tickSize: 0.1, stepSize: 0.001, minNotional: 5 });
+    adapter._startBracketEntryWatcher = async () => {};
+    const calls = [];
+    adapter._binanceSignedRequest = async (method, endpoint, params) => {
+      calls.push({ method, endpoint, params });
+      if (method === 'GET' && endpoint === '/fapi/v1/order') {
+        if (calls.filter(call => call.method === 'GET' && call.endpoint === '/fapi/v1/order').length === 1) {
+          throw new Error('binance {"code":-2013,"msg":"Order does not exist."}');
+        }
+        return { orderId: 777, status: 'NEW' };
+      }
+      if (method === 'POST' && endpoint === '/fapi/v1/order') {
+        throw new Error('socket hang up after broker accepted order');
+      }
+      throw new Error(`unexpected ${method} ${endpoint}`);
+    };
+
+    const result = await adapter._placeBinanceBracketEntry({
+      order: { symbol: 'BTCUSDT', side: 'buy', stopLossPrice: 90 },
+      symbol: 'BTC/USDT:USDT',
+      side: 'BUY',
+      amount: 1,
+      price: 100,
+      params: {},
+      cid: 'cid-recovered'
+    });
+
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(adapter._brackets.get('cid-recovered').entryOrderId, 777);
+    assert.strictEqual(calls.filter(call => call.method === 'POST' && call.endpoint === '/fapi/v1/order').length, 1);
+    assert.strictEqual(calls.filter(call => call.method === 'GET' && call.endpoint === '/fapi/v1/order').length, 2);
+  }
+
+  {
+    const adapter = makeAdapter();
+    adapter._desiredProtectionByTicket = new Map();
+    adapter._desiredProtectionByTicket.set('ticket-unknown', {
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      amount: 1,
+      slPts: 10,
+      tpPts: 20,
+      tickSize: 0.1
+    });
+    adapter._registerTrackedTicket('ticket-unknown', 'BTC/USDT:USDT');
+    adapter.exchange = {
+      fetchPositions: async () => [{ symbol: 'BTC/USDT:USDT', contracts: 1, entryPrice: 100 }]
+    };
+    adapter._getTickSizeFromMarket = () => 0.1;
+    adapter.getQuote = async () => ({ price: 100 });
+    let placementCalls = 0;
+    adapter._openOrdersSym = async () => { throw new Error('InvalidNonce: binance {"code":-1021}'); };
+    adapter._placeProtectiveOrders = async () => { placementCalls += 1; return ['new-protection']; };
+
+    await adapter._ensureProtectiveOrdersForTicket('ticket-unknown');
+
+    assert.strictEqual(placementCalls, 0);
+    assert(adapter._desiredProtectionByTicket.has('ticket-unknown'));
+  }
+
+  {
+    const adapter = makeAdapter();
+    adapter._desiredProtectionByTicket = new Map();
+    adapter._desiredProtectionByTicket.set('ticket-position-unknown', {
+      symbol: 'BTC/USDT:USDT',
+      side: 'buy',
+      amount: 1,
+      slPts: 10,
+      tpPts: 20,
+      tickSize: 0.1
+    });
+    adapter._registerTrackedTicket('ticket-position-unknown', 'BTC/USDT:USDT');
+    adapter.exchange = {
+      fetchPositions: async () => { throw new Error('temporary position outage'); }
+    };
+    let openOrderCalls = 0;
+    let placementCalls = 0;
+    adapter._openOrdersSym = async () => { openOrderCalls += 1; return []; };
+    adapter._placeProtectiveOrders = async () => { placementCalls += 1; return ['new-protection']; };
+
+    await adapter._ensureProtectiveOrdersForTicket('ticket-position-unknown');
+
+    assert.strictEqual(openOrderCalls, 0);
+    assert.strictEqual(placementCalls, 0);
   }
 
   console.log('ccxt position lifecycle tests passed');

@@ -59,8 +59,9 @@ async function testStopOnlyLevelOrderKeepsTakeProfitAbsent() {
   adapter.normalizeBinanceUsdmSymbol = async () => 'FILUSDT';
   adapter._getBinanceSymbolFilters = async () => ({ tickSize: 0.0001, stepSize: 0.1, minNotional: 0 });
   adapter._binanceSignedRequest = async (method, endpoint) => {
-    assert.strictEqual(method, 'POST');
     assert.strictEqual(endpoint, '/fapi/v1/order');
+    if (method === 'GET') throw new Error('binance {"code":-2013,"msg":"Order does not exist."}');
+    assert.strictEqual(method, 'POST');
     return { orderId: 123 };
   };
   adapter._startBracketEntryWatcher = async () => {};

@@ -77,6 +77,7 @@ class DWXAdapter extends ExecutionAdapter {
     this._subscribedSymbols = new Set();
     this._historicTradesRequestChain = Promise.resolve();
     this._historicBarsRequestChain = Promise.resolve();
+    this.executionRetryPolicy = { shouldRetry: () => false };
   }
 
   /**
@@ -85,6 +86,12 @@ class DWXAdapter extends ExecutionAdapter {
    * - 'order:rejected'  ({pendingId, reason, msg, origOrder})
    */
   on(event, fn) { this.events.on(event, fn); return () => this.events.off(event, fn); }
+
+  setExecutionRetryPolicy(policy) {
+    this.executionRetryPolicy = policy && typeof policy.shouldRetry === 'function'
+      ? policy
+      : { shouldRetry: () => false };
+  }
 
   /**
    * normalized order -> отправка в DWX, возвращаем enqueued + pendingId
@@ -173,6 +180,18 @@ class DWXAdapter extends ExecutionAdapter {
   async #retryOrder(cid) {
     const p = this.pending.get(cid);
     if (!p) return;
+    const allowed = this.executionRetryPolicy?.shouldRetry?.({
+      provider: this.provider,
+      adapter: 'dwx',
+      kind: 'open_order',
+      pendingId: cid,
+      order: p.order,
+      count: p.cycles + 1
+    }) === true;
+    if (!allowed) {
+      this.#rejectPending(cid, 'Execution retries disabled after OPEN_ORDER error');
+      return;
+    }
     await new Promise(r => setTimeout(r, this.cfg.openOrderRetryDelayMs));
     try {
       p.cycles++;
