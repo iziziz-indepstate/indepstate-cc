@@ -8,7 +8,13 @@
     "pollMs": { "type": "number", "description": "Polling interval in milliseconds" },
     "logLimit": { "type": "number", "description": "Maximum trigger log rows" },
     "providers": {
-      "description": "Provider-specific risk limits. Each provider may define enabled, maxStopRiskUsd, maxOpenLossUsd and symbols overrides."
+      "__allowUnknown": true,
+      "__replace": true,
+      "description": "Provider-specific risk limits. Each provider may define enabled, maxStopRiskUsd, maxOpenLossUsd and symbols overrides.",
+      "symbols": {
+        "__allowUnknown": true,
+        "__replace": true
+      }
     }
   }
 }

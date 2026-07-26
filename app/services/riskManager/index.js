@@ -15,7 +15,11 @@ function positiveLimit(value) {
 }
 
 function normalizeSymbol(value) {
-  return String(value || '').trim().toUpperCase();
+  return String(value || '').trim();
+}
+
+function normalizeSymbolKey(value) {
+  return normalizeSymbol(value).toUpperCase();
 }
 
 function normalizeProvider(value) {
@@ -39,7 +43,7 @@ function normalizeConfig(config = {}) {
     const provider = rawProvider || {};
     const symbols = {};
     for (const [rawSymbol, rawSymbolCfg] of Object.entries(provider.symbols || {})) {
-      const symbol = normalizeSymbol(rawSymbol);
+      const symbol = normalizeSymbolKey(rawSymbol);
       if (!symbol) continue;
       const symbolCfg = rawSymbolCfg || {};
       symbols[symbol] = {
@@ -69,7 +73,7 @@ function resolveLimits(config, provider, symbol) {
   if (!cfg.enabled || !providerCfg || providerCfg.enabled === false) {
     return { enabled: false, maxStopRiskUsd: undefined, maxOpenLossUsd: undefined };
   }
-  const symbolCfg = providerCfg.symbols[normalizeSymbol(symbol)] || {};
+  const symbolCfg = providerCfg.symbols[normalizeSymbolKey(symbol)] || {};
   if (symbolCfg.enabled === false) {
     return { enabled: false, maxStopRiskUsd: undefined, maxOpenLossUsd: undefined };
   }
@@ -134,6 +138,43 @@ function positionKey(provider, ticket) {
   return `${normalizeProvider(provider)}:${String(ticket || '').trim()}`;
 }
 
+function checkLabel(check) {
+  if (check === 'maxStopRiskUsd') return 'Stop size';
+  if (check === 'maxOpenLossUsd') return 'Open loss';
+  return check || '';
+}
+
+function actionForTracked(tracked = {}) {
+  if (tracked.kind !== 'order') return 'close position';
+  return String(tracked.ticket || '').startsWith('pending:')
+    ? 'cancel pending'
+    : 'cancel order';
+}
+
+function formatUsd(value) {
+  const n = finiteNumber(value);
+  return n === undefined ? '-' : `$${n.toFixed(2)}`;
+}
+
+function buildBreach({ tracked, check, value, limit }) {
+  const label = checkLabel(check);
+  const reason = `${label} ${formatUsd(value)} exceeds limit ${formatUsd(limit)}`;
+  return {
+    check,
+    checkLabel: label,
+    value,
+    limit,
+    action: actionForTracked(tracked),
+    itemKind: tracked.kind || 'position',
+    reason
+  };
+}
+
+function isPendingOrderType(order = {}) {
+  const type = String(order.type || order.orderType || '').toLowerCase();
+  return type.includes('limit') || type.includes('stop') || type.includes('pending');
+}
+
 function createRiskManagerService({
   config = {},
   events,
@@ -179,13 +220,93 @@ function createRiskManagerService({
       side,
       origOrder,
       order,
-      status: existing.status || 'open',
+      kind: 'position',
+      status: 'open',
       openedAt: existing.openedAt || clock(),
       updatedAt: clock()
     };
     positions.set(key, tracked);
     notify();
     return tracked;
+  }
+
+  function trackOrder(rec = {}) {
+    const result = rec.result || {};
+    const order = rec.order || {};
+    const status = String(result.status || '').toLowerCase();
+    if (status === 'rejected') return null;
+    if (status && !['ok', 'pending'].includes(status)) return null;
+    if (!isPendingOrderType(order) && !String(result.providerOrderId || '').startsWith('pending:')) return null;
+    const provider = normalizeProvider(result.provider || rec.provider || order.provider);
+    const providerOrderId = String(result.providerOrderId || result.orderId || '').trim();
+    const cid = String(result.cid || order.meta?.cid || '').trim();
+    const ticket = providerOrderId || (cid ? `pending:${cid}` : '');
+    if (!provider || !ticket) return null;
+    const pendingId = ticket.startsWith('pending:') ? ticket.slice('pending:'.length) : cid;
+    const key = positionKey(provider, ticket);
+    const existing = positions.get(key) || {};
+    const symbol = normalizeSymbol(order.symbol || order.ticker || existing.symbol);
+    const side = normalizeSide(order.side || existing.side);
+    const tracked = {
+      ...existing,
+      key,
+      provider,
+      ticket,
+      pendingId,
+      symbol,
+      side,
+      origOrder: order,
+      order,
+      kind: 'order',
+      status: existing.status || 'pending',
+      openedAt: existing.openedAt || clock(),
+      updatedAt: clock()
+    };
+    positions.set(key, tracked);
+    notify();
+    return tracked;
+  }
+
+  function confirmOrder(rec = {}) {
+    const provider = normalizeProvider(rec.provider || rec.order?.provider);
+    const pendingId = String(rec.pendingId || rec.order?.meta?.cid || '').trim();
+    const ticket = String(rec.ticket || '').trim();
+    if (!provider || !ticket) return null;
+    const oldKey = pendingId ? positionKey(provider, `pending:${pendingId}`) : '';
+    const existing = oldKey ? positions.get(oldKey) : null;
+    if (oldKey) positions.delete(oldKey);
+    const order = rec.order || existing?.order || {};
+    const key = positionKey(provider, ticket);
+    const tracked = {
+      ...(existing || {}),
+      key,
+      provider,
+      ticket,
+      pendingId,
+      symbol: normalizeSymbol(order.symbol || order.ticker || existing?.symbol),
+      side: normalizeSide(order.side || existing?.side),
+      origOrder: order,
+      order,
+      kind: 'order',
+      status: 'working',
+      updatedAt: clock()
+    };
+    positions.set(key, tracked);
+    notify();
+    return tracked;
+  }
+
+  function untrackOrder(rec = {}) {
+    const provider = normalizeProvider(rec.provider || rec.order?.provider);
+    const pendingId = String(rec.pendingId || rec.order?.meta?.cid || '').trim();
+    const ticket = String(rec.ticket || rec.providerOrderId || '').trim();
+    const keys = [
+      ticket ? positionKey(provider, ticket) : '',
+      pendingId ? positionKey(provider, `pending:${pendingId}`) : ''
+    ].filter(Boolean);
+    let removed = false;
+    for (const key of keys) removed = positions.delete(key) || removed;
+    if (removed) notify();
   }
 
   function untrackPosition(rec = {}) {
@@ -273,37 +394,65 @@ function createRiskManagerService({
 
     snapshot.stopRiskUsd = calculateStopRiskUsd(snapshot);
     snapshot.openLossUsd = calculateOpenLossUsd(snapshot);
-    if (snapshot.openLossUsd === undefined) warnings.push('Missing current PnL');
+    if (tracked.kind !== 'order' && snapshot.openLossUsd === undefined) warnings.push('Missing current PnL');
     return snapshot;
   }
 
   async function closeTrackedPosition(tracked, reason, snapshotOverride) {
-    if (!tracked || tracked.status === 'closing') return { status: 'skipped', reason: 'already closing' };
-    tracked.status = 'closing';
+    if (!tracked || tracked.status === 'closing' || tracked.status === 'cancelling') return { status: 'skipped', reason: 'already closing' };
+    const isOrder = tracked.kind === 'order';
+    tracked.status = isOrder ? 'cancelling' : 'closing';
     tracked.closeReason = reason;
     tracked.updatedAt = clock();
     notify();
     const adapter = await adapterFor(tracked.provider);
+    if (isOrder) {
+      try {
+        let result;
+        if (tracked.pendingId && tracked.ticket === `pending:${tracked.pendingId}` && typeof adapter?.stopOpenOrder === 'function') {
+          adapter.stopOpenOrder(tracked.pendingId, reason);
+          result = { status: 'ok', provider: tracked.provider, raw: { pendingId: tracked.pendingId, action: 'stopOpenOrder' } };
+        } else if (adapter && typeof adapter.cancelOrder === 'function') {
+          result = await adapter.cancelOrder(tracked.ticket, tracked.symbol);
+        } else {
+          result = { status: 'unsupported', provider: tracked.provider, reason: 'Adapter cancelOrder is not supported' };
+        }
+        tracked.closeResult = result;
+        tracked.status = result?.status === 'ok' || result?.status === 'simulated' ? 'cancelling' : 'cancel-failed';
+        appendLog({ type: 'action', action: actionForTracked(tracked), itemKind: tracked.kind || 'order', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
+        notify();
+        return result;
+      } catch (err) {
+        const result = { status: 'error', provider: tracked.provider, reason: err?.message || String(err) };
+        tracked.status = 'cancel-failed';
+        tracked.closeResult = result;
+        appendLog({ type: 'action-failed', action: actionForTracked(tracked), itemKind: tracked.kind || 'order', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
+        notify();
+        return result;
+      }
+    }
+
     if (!adapter || typeof adapter.closePosition !== 'function') {
       tracked.status = 'close-failed';
       const result = { status: 'unsupported', provider: tracked.provider, reason: 'Adapter closePosition is not supported' };
-      appendLog({ type: 'close-failed', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
+      appendLog({ type: 'action-failed', action: actionForTracked(tracked), itemKind: tracked.kind || 'position', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
       notify();
       return result;
     }
     try {
-      const snapshotData = snapshotOverride || tracked.snapshot || await buildSnapshot(tracked);
+      const snapshotData = await buildSnapshot(tracked);
+      tracked.snapshot = snapshotData || snapshotOverride || tracked.snapshot || null;
       const result = await adapter.closePosition({ ...tracked, snapshot: snapshotData }, reason);
       tracked.closeResult = result;
       tracked.status = result?.status === 'ok' || result?.status === 'simulated' ? 'closing' : 'close-failed';
-      appendLog({ type: 'close', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
+      appendLog({ type: 'action', action: actionForTracked(tracked), itemKind: tracked.kind || 'position', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
       notify();
       return result;
     } catch (err) {
       const result = { status: 'error', provider: tracked.provider, reason: err?.message || String(err) };
       tracked.status = 'close-failed';
       tracked.closeResult = result;
-      appendLog({ type: 'close-failed', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
+      appendLog({ type: 'action-failed', action: actionForTracked(tracked), itemKind: tracked.kind || 'position', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, reason, result });
       notify();
       return result;
     }
@@ -322,17 +471,19 @@ function createRiskManagerService({
     }
 
     if (limits.maxStopRiskUsd !== undefined && riskSnapshot.stopRiskUsd !== undefined && riskSnapshot.stopRiskUsd > limits.maxStopRiskUsd) {
-      const reason = `stop risk ${riskSnapshot.stopRiskUsd.toFixed(2)} exceeds limit ${limits.maxStopRiskUsd.toFixed(2)}`;
+      const breach = buildBreach({ tracked, check: 'maxStopRiskUsd', value: riskSnapshot.stopRiskUsd, limit: limits.maxStopRiskUsd });
+      const reason = breach.reason;
       tracked.riskStatus = 'breached';
-      appendLog({ type: 'trigger', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, check: 'maxStopRiskUsd', value: riskSnapshot.stopRiskUsd, limit: limits.maxStopRiskUsd, reason });
+      appendLog({ type: 'trigger', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, ...breach });
       await closeTrackedPosition(tracked, reason, riskSnapshot);
       return { ok: false, reason, tracked };
     }
 
-    if (limits.maxOpenLossUsd !== undefined && riskSnapshot.openLossUsd !== undefined && riskSnapshot.openLossUsd > limits.maxOpenLossUsd) {
-      const reason = `open loss ${riskSnapshot.openLossUsd.toFixed(2)} exceeds limit ${limits.maxOpenLossUsd.toFixed(2)}`;
+    if (tracked.kind !== 'order' && limits.maxOpenLossUsd !== undefined && riskSnapshot.openLossUsd !== undefined && riskSnapshot.openLossUsd > limits.maxOpenLossUsd) {
+      const breach = buildBreach({ tracked, check: 'maxOpenLossUsd', value: riskSnapshot.openLossUsd, limit: limits.maxOpenLossUsd });
+      const reason = breach.reason;
       tracked.riskStatus = 'breached';
-      appendLog({ type: 'trigger', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, check: 'maxOpenLossUsd', value: riskSnapshot.openLossUsd, limit: limits.maxOpenLossUsd, reason });
+      appendLog({ type: 'trigger', provider: tracked.provider, ticket: tracked.ticket, symbol: tracked.symbol, ...breach });
       await closeTrackedPosition(tracked, reason, riskSnapshot);
       return { ok: false, reason, tracked };
     }
@@ -344,7 +495,7 @@ function createRiskManagerService({
   async function refreshAll() {
     const results = [];
     for (const tracked of positions.values()) {
-      if (tracked.status === 'closing') {
+      if (tracked.status === 'closing' || tracked.status === 'cancelling') {
         results.push({ ok: true, skipped: true, tracked });
         continue;
       }
@@ -388,6 +539,7 @@ function createRiskManagerService({
         symbol: pos.symbol,
         side: pos.side,
         status: pos.status,
+        kind: pos.kind || 'position',
         riskStatus: pos.riskStatus || 'pending',
         limits: pos.limits || resolveLimits(cfg, pos.provider, pos.symbol),
         snapshot: pos.snapshot || null,
@@ -403,6 +555,9 @@ function createRiskManagerService({
 
   function bindEvents() {
     if (!events || typeof events.on !== 'function') return;
+    events.on('order:placed', trackOrder);
+    events.on('order:confirmed', confirmOrder);
+    events.on('order:rejected', untrackOrder);
     events.on('position:opened', trackPosition);
     events.on('position:closed', untrackPosition);
     events.on('order:cancelled', untrackPosition);
@@ -426,7 +581,10 @@ function createRiskManagerService({
       return closeTrackedPosition(tracked, reason);
     },
     trackPosition,
+    trackOrder,
+    confirmOrder,
     untrackPosition,
+    untrackOrder,
     snapshot,
     bindEvents,
     on

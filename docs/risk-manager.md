@@ -27,6 +27,8 @@ Limits are ignored when missing, `null`, `0`, or negative. Symbol settings overr
 
 ## Behavior
 
-Risk Manager tracks only positions opened by this app through `position:opened` events. It removes them on `position:closed` or `order:cancelled`.
+Risk Manager tracks only orders and positions created by this app. Pending/working limit and stop orders are checked for maximum stop risk before they open; open positions are checked for both maximum stop risk and current open loss. Tracked items are removed on rejection, cancellation, or close events.
 
 When critical data is missing, Risk Manager logs a warning and does not close the position. Automatic close is sent only when the stop-risk or open-loss calculation is reliable and exceeds a configured limit.
+
+The trigger log separates item kind (`order` or `position`), breached check (`Stop size` or `Open loss`), action (`cancel pending`, `cancel order`, or `close position`), value/limit, and adapter result.

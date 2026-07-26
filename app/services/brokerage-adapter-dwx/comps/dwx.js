@@ -151,14 +151,16 @@ class DWXAdapter extends ExecutionAdapter {
     );
   }
 
-  stopOpenOrder(cid) {
-    this.#cancelPending(cid);
-  }
-
-  #cancelPending(cid) {
+  stopOpenOrder(cid, reason) {
     const p = this.pending.get(cid);
-    if (!p) return;
-    this.pending.delete(cid);
+    if (p) this.pending.delete(cid);
+    if (p && reason) {
+      this.events.emit('order:rejected', {
+        pendingId: cid,
+        reason,
+        origOrder: p.order
+      });
+    }
   }
 
   async cancelOrder(ticket) {

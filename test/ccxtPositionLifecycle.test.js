@@ -13,14 +13,26 @@ function makeAdapter() {
   adapter._brackets = new Map();
   adapter._entryClientToBracket = new Map();
   adapter._cancelCalls = 0;
+  adapter.exchangeId = 'binance';
+  adapter.defaultParams = {};
+  adapter.closeVerificationPollMs = 0;
   adapter.mapSymbol = symbol => symbol === 'BTCUSDT' ? 'BTC/USDT:USDT' : symbol;
   adapter.cancelBracketProtection = async () => { adapter._cancelCalls += 1; };
   adapter._detectManualProtectiveOrderModifications = () => {};
-  adapter._binanceSignedRequest = async (_method, endpoint) => {
+  adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0' }];
+  adapter._binanceOrders = [];
+  adapter._binanceSignedRequest = async (method, endpoint, params = {}) => {
     if (endpoint === '/fapi/v2/positionRisk') {
-      return [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '0' }];
+      return adapter._binancePositionRiskRows;
     }
     if (endpoint === '/fapi/v1/openAlgoOrders') return [];
+    if (method === 'POST' && endpoint === '/fapi/v1/order') {
+      adapter._binanceOrders.push(params);
+      if (adapter._binanceCloseOnPost !== false) {
+        adapter._binancePositionRiskRows = adapter._binancePositionRiskRows.map(row => ({ ...row, positionAmt: '0' }));
+      }
+      return { orderId: adapter._binanceOrders.length, status: 'NEW' };
+    }
     throw new Error(`unexpected endpoint ${endpoint}`);
   };
   return adapter;
@@ -52,6 +64,155 @@ function addBracket(adapter, suffix = '1') {
 }
 
 (async () => {
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '9');
+    bracket.positionSide = 'LONG';
+    bracket.lifecycleTicket = '109';
+    adapter.ensureReady = async () => {};
+    adapter._cancelAllProtectionForTicket = async () => {};
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '1' }];
+
+    const result = await adapter.closePosition({ ticket: '109', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'ok');
+    const order = adapter._binanceOrders[0];
+    assert.strictEqual(order.side, 'SELL');
+    assert.strictEqual(order.positionSide, 'LONG');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(order, 'reduceOnly'), false);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '4');
+    bracket.positionSide = 'SHORT';
+    bracket.direction = 'SHORT';
+    bracket.origOrder.side = 'sell';
+    bracket.lifecycleTicket = '104';
+    adapter.ensureReady = async () => {};
+    adapter._cancelAllProtectionForTicket = async () => {};
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'SHORT', positionAmt: '-1' }];
+
+    const result = await adapter.closePosition({ ticket: '104', symbol: 'BTCUSDT', side: 'sell', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'ok');
+    const order = adapter._binanceOrders[0];
+    assert.strictEqual(order.side, 'BUY');
+    assert.strictEqual(order.positionSide, 'SHORT');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(order, 'reduceOnly'), false);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '8');
+    bracket.positionSide = 'BOTH';
+    bracket.lifecycleTicket = '108';
+    adapter.ensureReady = async () => {};
+    adapter._cancelAllProtectionForTicket = async () => {};
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1' }];
+
+    const result = await adapter.closePosition({ ticket: '108', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'ok');
+    const order = adapter._binanceOrders[0];
+    assert.strictEqual(order.side, 'SELL');
+    assert.strictEqual(order.reduceOnly, 'true');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(order, 'positionSide'), false);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '3');
+    bracket.positionSide = 'BOTH';
+    bracket.direction = 'SHORT';
+    bracket.origOrder.side = 'sell';
+    bracket.lifecycleTicket = '103';
+    adapter.ensureReady = async () => {};
+    adapter._cancelAllProtectionForTicket = async () => {};
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '-1' }];
+
+    const result = await adapter.closePosition({ ticket: '103', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'ok');
+    const order = adapter._binanceOrders[0];
+    assert.strictEqual(order.side, 'BUY');
+    assert.strictEqual(order.reduceOnly, 'true');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(order, 'positionSide'), false);
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '7');
+    bracket.positionSide = 'LONG';
+    bracket.lifecycleTicket = '107';
+    adapter.ensureReady = async () => {};
+    adapter._cancelAllProtectionForTicket = async () => {};
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'LONG', positionAmt: '1' }];
+    adapter.exchange = {
+      async createOrder() {
+        throw new Error('generic CCXT createOrder must not be used for Binance bracket close');
+      }
+    };
+
+    const result = await adapter.closePosition({ ticket: '107', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'ok');
+    assert.strictEqual(adapter._binanceOrders.length, 1);
+    assert.strictEqual(adapter._binanceOrders[0].positionSide, 'LONG');
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '6');
+    bracket.positionSide = 'BOTH';
+    bracket.lifecycleTicket = '106';
+    bracket.status = 'PROTECTED';
+    adapter.ensureReady = async () => {};
+    const sequence = [];
+    adapter._cancelAllProtectionForTicket = async () => { sequence.push('cancel-protection'); };
+    let protectionRestored = false;
+    adapter._ensureProtectiveOrdersForTicket = async () => { protectionRestored = true; };
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1' }];
+    adapter._binanceSignedRequest = async (method, endpoint, params = {}) => {
+      if (endpoint === '/fapi/v2/positionRisk') return adapter._binancePositionRiskRows;
+      if (endpoint === '/fapi/v1/openAlgoOrders') return [];
+      if (method === 'POST' && endpoint === '/fapi/v1/order') {
+        sequence.push('post-close');
+        adapter._binanceOrders.push(params);
+        throw new Error('binance {"code":-2022,"msg":"ReduceOnly Order is rejected."}');
+      }
+      throw new Error(`unexpected endpoint ${endpoint}`);
+    };
+
+    const result = await adapter.closePosition({ ticket: '106', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'error');
+    assert.match(result.reason, /ReduceOnly Order is rejected/);
+    assert.deepStrictEqual(sequence, ['cancel-protection', 'post-close']);
+    assert.strictEqual(adapter._binanceOrders.length, 1);
+    assert.strictEqual(adapter._binanceOrders[0].reduceOnly, 'true');
+    assert.strictEqual(protectionRestored, true);
+    assert.strictEqual(bracket.status, 'PROTECTED');
+  }
+
+  {
+    const adapter = makeAdapter();
+    const bracket = addBracket(adapter, '5');
+    bracket.positionSide = 'BOTH';
+    bracket.lifecycleTicket = '105';
+    bracket.status = 'PROTECTED';
+    adapter.ensureReady = async () => {};
+    adapter._ticketToSymbol.set('105', 'BTC/USDT:USDT');
+    let protectionCancelled = false;
+    let protectionRestored = false;
+    adapter._cancelAllProtectionForTicket = async () => { protectionCancelled = true; };
+    adapter._ensureProtectiveOrdersForTicket = async () => { protectionRestored = true; };
+    adapter._binanceCloseOnPost = false;
+    adapter._binancePositionRiskRows = [{ symbol: 'BTCUSDT', positionSide: 'BOTH', positionAmt: '1' }];
+
+    const result = await adapter.closePosition({ ticket: '105', symbol: 'BTCUSDT', side: 'buy', snapshot: { qty: 1 } }, 'risk breach');
+    assert.strictEqual(result.status, 'error');
+    assert.strictEqual(result.reason, 'Close order accepted but bracket position is still open after verification');
+    assert.strictEqual(protectionCancelled, true);
+    assert.strictEqual(protectionRestored, true);
+    assert.strictEqual(bracket.status, 'PROTECTED');
+    assert.strictEqual(result.raw.verification.remainingQty, 1);
+  }
+
   {
     const adapter = makeAdapter();
     adapter.normalizeBinanceUsdmSymbol = async () => 'BTCUSDT';

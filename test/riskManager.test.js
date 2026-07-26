@@ -1,4 +1,7 @@
 const assert = require('assert');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
 const { EventEmitter } = require('events');
 const {
   createRiskManagerService,
@@ -76,6 +79,14 @@ async function run() {
   });
   service.trackPosition({
     provider: 'dwx',
+    ticket: 'casing',
+    origOrder: { symbol: 'ADAUSDT.cfd', side: 'buy', price: 0.1648, sl: 1, tickSize: 0.0001, qty: 1 }
+  });
+  assert.strictEqual(service.snapshot().positions[0].symbol, 'ADAUSDT.cfd');
+  service.untrackPosition({ provider: 'dwx', ticket: 'casing' });
+
+  service.trackPosition({
+    provider: 'dwx',
     ticket: '1',
     origOrder: { symbol: 'EURUSD', side: 'buy', price: 100, sl: 1, tickSize: 1, qty: 1 }
   });
@@ -85,6 +96,10 @@ async function run() {
   const afterBreach = service.snapshot();
   assert.strictEqual(afterBreach.positions[0].status, 'closing');
   assert.ok(afterBreach.logs.some(row => row.type === 'trigger' && row.check === 'maxStopRiskUsd'));
+  const stopTrigger = afterBreach.logs.find(row => row.type === 'trigger' && row.check === 'maxStopRiskUsd');
+  assert.strictEqual(stopTrigger.itemKind, 'position');
+  assert.strictEqual(stopTrigger.action, 'close position');
+  assert.strictEqual(stopTrigger.checkLabel, 'Stop size');
 
   let missingCloseCalls = 0;
   const missingService = createRiskManagerService({
@@ -123,6 +138,123 @@ async function run() {
   bus.emit('position:closed', { provider: 'dwx', ticket: '3' });
   assert.strictEqual(eventService.snapshot().positions.length, 0);
 
+  let stoppedPendingId = null;
+  const pendingService = createRiskManagerService({
+    config: { providers: { dwx: { maxStopRiskUsd: 1 } } },
+    brokerage: {
+      getAdapter: () => ({
+        stopOpenOrder(pendingId) { stoppedPendingId = pendingId; }
+      })
+    }
+  });
+  pendingService.trackOrder({
+    order: { symbol: 'ADAUSDT.cfd', side: 'buy', type: 'limit', price: 0.1648, sl: 100, tickSize: 0.0001, qty: 200 },
+    result: { status: 'ok', provider: 'dwx', providerOrderId: 'pending:cid-pending', cid: 'cid-pending' }
+  });
+  await pendingService.refreshAll();
+  let pendingSnapshot = pendingService.snapshot();
+  assert.strictEqual(stoppedPendingId, 'cid-pending');
+  assert.strictEqual(pendingSnapshot.positions[0].kind, 'order');
+  assert.strictEqual(pendingSnapshot.positions[0].status, 'cancelling');
+  const pendingTrigger = pendingSnapshot.logs.find(row => row.type === 'trigger');
+  assert.strictEqual(pendingTrigger.itemKind, 'order');
+  assert.strictEqual(pendingTrigger.action, 'cancel pending');
+  assert.strictEqual(pendingTrigger.checkLabel, 'Stop size');
+  await pendingService.refreshAll();
+  assert.strictEqual(stoppedPendingId, 'cid-pending', 'pending cancel must be idempotent while cancelling');
+
+  let cancelledTicket = null;
+  const confirmedService = createRiskManagerService({
+    config: { providers: { dwx: { maxStopRiskUsd: 1 } } },
+    brokerage: {
+      getAdapter: () => ({
+        async cancelOrder(ticket, symbol) {
+          cancelledTicket = `${ticket}:${symbol}`;
+          return { status: 'ok', provider: 'dwx' };
+        }
+      })
+    }
+  });
+  confirmedService.trackOrder({
+    order: { symbol: 'ADAUSDT.cfd', side: 'buy', type: 'limit', price: 0.1648, sl: 100, tickSize: 0.0001, qty: 200 },
+    result: { status: 'ok', provider: 'dwx', providerOrderId: 'pending:cid-working', cid: 'cid-working' }
+  });
+  confirmedService.confirmOrder({
+    provider: 'dwx',
+    pendingId: 'cid-working',
+    ticket: '777',
+    order: { symbol: 'ADAUSDT.cfd', side: 'buy', type: 'limit', price: 0.1648, sl: 100, tickSize: 0.0001, qty: 200 }
+  });
+  assert.strictEqual(confirmedService.snapshot().positions[0].ticket, '777');
+  await confirmedService.refreshAll();
+  assert.strictEqual(cancelledTicket, '777:ADAUSDT.cfd');
+  assert.strictEqual(confirmedService.snapshot().logs.find(row => row.type === 'trigger').action, 'cancel order');
+
+  let openLossClosed = false;
+  const openLossService = createRiskManagerService({
+    config: { providers: { dwx: { maxOpenLossUsd: 5 } } },
+    brokerage: {
+      getAdapter: () => ({
+        async getRiskPositionSnapshot() {
+          return { symbol: 'EURUSD', side: 'buy', qty: 1, entryPrice: 100, stopLossPrice: 95, unrealizedPnl: -6 };
+        },
+        async closePosition() {
+          openLossClosed = true;
+          return { status: 'ok', provider: 'dwx' };
+        }
+      })
+    }
+  });
+  openLossService.trackPosition({ provider: 'dwx', ticket: 'loss-1', origOrder: { symbol: 'EURUSD', side: 'buy' } });
+  await openLossService.refreshAll();
+  const openLossTrigger = openLossService.snapshot().logs.find(row => row.type === 'trigger');
+  assert.strictEqual(openLossClosed, true);
+  assert.strictEqual(openLossTrigger.itemKind, 'position');
+  assert.strictEqual(openLossTrigger.action, 'close position');
+  assert.strictEqual(openLossTrigger.checkLabel, 'Open loss');
+  assert.strictEqual(openLossTrigger.check, 'maxOpenLossUsd');
+
+  const snapshotsForClose = [
+    { symbol: 'EURUSD', side: 'buy', qty: 1, entryPrice: 100, stopLossPrice: 90, unrealizedPnl: -6 },
+    { symbol: 'EURUSD', side: 'sell', qty: 2, entryPrice: 100, stopLossPrice: 105, unrealizedPnl: -6 }
+  ];
+  let snapshotPassedToClose = null;
+  const freshCloseService = createRiskManagerService({
+    config: { providers: { dwx: { maxOpenLossUsd: 5 } } },
+    brokerage: {
+      getAdapter: () => ({
+        async getRiskPositionSnapshot() {
+          return snapshotsForClose.shift();
+        },
+        async closePosition(position) {
+          snapshotPassedToClose = position.snapshot;
+          return { status: 'ok', provider: 'dwx' };
+        }
+      })
+    }
+  });
+  freshCloseService.trackPosition({ provider: 'dwx', ticket: 'fresh-1', origOrder: { symbol: 'EURUSD', side: 'buy' } });
+  await freshCloseService.refreshAll();
+  assert.strictEqual(snapshotPassedToClose.side, 'sell');
+  assert.strictEqual(snapshotPassedToClose.qty, 2);
+
+  const transitionService = createRiskManagerService({
+    config: { providers: { dwx: { maxStopRiskUsd: 100 } } },
+    brokerage: { getAdapter: () => ({ async getRiskPositionSnapshot() { return null; } }) }
+  });
+  transitionService.trackOrder({
+    order: { symbol: 'ADAUSDT.cfd', side: 'buy', type: 'limit', price: 0.1648, sl: 10, tickSize: 0.0001, qty: 1 },
+    result: { status: 'ok', provider: 'dwx', providerOrderId: '123' }
+  });
+  transitionService.trackPosition({
+    provider: 'dwx',
+    ticket: '123',
+    origOrder: { symbol: 'ADAUSDT.cfd', side: 'buy', price: 0.1648, sl: 10, tickSize: 0.0001, qty: 1 }
+  });
+  const transitioned = transitionService.snapshot().positions[0];
+  assert.strictEqual(transitioned.kind, 'position');
+  assert.strictEqual(transitioned.status, 'open');
+
   const simulated = new SimulatedAdapter({ latencyMs: [0, 0] });
   let simulatedClosed = false;
   simulated.on('position:closed', () => { simulatedClosed = true; });
@@ -131,6 +263,23 @@ async function run() {
   assert.strictEqual(simulatedClosed, true);
 
   let dwxClosedTicket = null;
+  let dwxRejected = null;
+  const dwxPending = new Map([
+    ['rm-cid', { order: { symbol: 'ADAUSDT.cfd' } }],
+    ['silent-cid', { order: { symbol: 'ADAUSDT.cfd' } }]
+  ]);
+  DWXAdapter.prototype.stopOpenOrder.call({
+    pending: dwxPending,
+    events: { emit(eventName, payload) { dwxRejected = { eventName, payload }; } }
+  }, 'silent-cid');
+  assert.strictEqual(dwxRejected, null);
+  DWXAdapter.prototype.stopOpenOrder.call({
+    pending: dwxPending,
+    events: { emit(eventName, payload) { dwxRejected = { eventName, payload }; } }
+  }, 'rm-cid', 'risk breach');
+  assert.strictEqual(dwxRejected.eventName, 'order:rejected');
+  assert.strictEqual(dwxRejected.payload.reason, 'risk breach');
+
   const dwxClose = await DWXAdapter.prototype.closePosition.call({
     provider: 'dwx',
     client: {
@@ -144,6 +293,50 @@ async function run() {
 
   const j2tUnsupported = await J2TExecutionAdapter.prototype.closePosition.call({ provider: 'j2t' });
   assert.strictEqual(j2tUnsupported.status, 'unsupported');
+
+  const descriptor = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'app', 'services', 'riskManager', 'config', 'risk-manager-settings-descriptor.json'),
+    'utf8'
+  ));
+  assert.strictEqual(descriptor.options.providers.__allowUnknown, true);
+  assert.strictEqual(descriptor.options.providers.__replace, true);
+
+  const loadConfig = require('../app/config/load');
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'risk-manager-config-'));
+  const originalRoots = loadConfig.CONFIG_ROOTS.slice();
+  try {
+    const defaultsRoot = path.join(tempRoot, 'defaults');
+    const overrideRoot = path.join(tempRoot, 'override');
+    fs.mkdirSync(defaultsRoot, { recursive: true });
+    fs.mkdirSync(overrideRoot, { recursive: true });
+    loadConfig.CONFIG_ROOTS.length = 0;
+    loadConfig.CONFIG_ROOTS.push(overrideRoot);
+    const defaultsPath = path.join(defaultsRoot, 'risk-manager.json');
+    fs.writeFileSync(defaultsPath, JSON.stringify({
+      providers: {
+        dwx: { enabled: true, maxStopRiskUsd: 10, symbols: {} }
+      }
+    }));
+    fs.writeFileSync(path.join(defaultsRoot, 'risk-manager-settings-descriptor.json'), JSON.stringify({
+      options: {
+        providers: { __allowUnknown: true, __replace: true }
+      }
+    }));
+    fs.writeFileSync(path.join(overrideRoot, 'risk-manager.json'), JSON.stringify({
+      providers: {
+        dwx: { enabled: true, maxStopRiskUsd: 22, symbols: { 'ADAUSDT.cfd': { maxOpenLossUsd: 7 } } },
+        custom: { enabled: true, maxStopRiskUsd: 3, symbols: { TEST: { maxOpenLossUsd: 1 } } }
+      }
+    }));
+    const loaded = loadConfig(defaultsPath);
+    assert.strictEqual(loaded.providers.dwx.maxStopRiskUsd, 22);
+    assert.strictEqual(loaded.providers.dwx.symbols['ADAUSDT.cfd'].maxOpenLossUsd, 7);
+    assert.strictEqual(loaded.providers.custom.maxStopRiskUsd, 3);
+  } finally {
+    loadConfig.CONFIG_ROOTS.length = 0;
+    originalRoots.forEach(root => loadConfig.CONFIG_ROOTS.push(root));
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
 }
 
 run()

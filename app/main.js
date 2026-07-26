@@ -382,6 +382,7 @@ function wireAdapter(adapter, providerName) {
     if (pendingId) confirmedOrderByCid.set(String(pendingId), rec.order);
     if (rec.cid) confirmedOrderByCid.set(String(rec.cid), rec.order);
     if (rec.order?.meta?.cid) confirmedOrderByCid.set(String(rec.order.meta.cid), rec.order);
+    events.emit('order:confirmed', { pendingId, ticket: normalizedTicket, order: rec.order, mtOrder, provider: providerName });
     appendJsonl(EXEC_LOG, { t: payload.ts, kind: 'confirm', ...payload, mtOrder });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('execution:result', payload);
@@ -414,6 +415,7 @@ function wireAdapter(adapter, providerName) {
       order: rec.order
     };
     appendJsonl(EXEC_LOG, { t: payload.ts, kind: 'reject', ...payload, msg });
+    events.emit('order:rejected', { pendingId, reason: payload.reason, order: rec.order, provider: providerName });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('execution:result', payload);
     }
