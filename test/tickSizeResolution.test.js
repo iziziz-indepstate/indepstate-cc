@@ -1,8 +1,18 @@
 const assert = require('assert');
 const orderCalc = require('../app/services/orderCalculator');
-const { resolveTickSize } = require('../app/services/instrumentInfo/points');
+const points = require('../app/services/instrumentInfo/points');
+const { resolveTickSize } = points;
 
 function run() {
+  points.configure({
+    bySymbol: {
+      'BNBUSDT.P': 0.01,
+      'MOVRUSDT.P': 0.0001
+    },
+    patterns: [],
+    defaultTickSize: 0.01
+  });
+
   assert.strictEqual(resolveTickSize({ symbol: 'UNKNOWNUSDT.P' }), 0.01);
 
   assert.strictEqual(resolveTickSize({ symbol: 'MOVRUSDT.P' }), 0.0001);

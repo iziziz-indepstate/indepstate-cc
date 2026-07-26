@@ -28,6 +28,12 @@ function findTickSizeOverride(symbol) {
     const value = Number(bySymbol[symbol]);
     return Number.isFinite(value) && value > 0 ? value : null;
   }
+  const normalizedSymbol = String(symbol || '').trim().toUpperCase();
+  const matchedKey = Object.keys(bySymbol).find(key => String(key || '').trim().toUpperCase() === normalizedSymbol);
+  if (matchedKey) {
+    const value = Number(bySymbol[matchedKey]);
+    return Number.isFinite(value) && value > 0 ? value : null;
+  }
   for (const pattern of cfg?.patterns || []) {
     if (wildcardToRegExp(pattern.match).test(symbol)) {
       const value = Number(pattern.tickSize);
