@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { PositionState, PositionCommand, PositionEvent } = require('./types');
 const { createOpeningPolicy, createClosingPolicy } = require('./policies');
+const { derivePositionCard } = require('./cardMetadata');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -36,6 +37,7 @@ class PositionAggregate {
     this.provider = snapshot.provider || '';
     this.side = snapshot.side || '';
     this.source = clone(snapshot.source) || {};
+    this.cardSpec = clone(snapshot.card || snapshot.cardSpec) || {};
     this.executionIntent = clone(snapshot.executionIntent) || null;
     this.openingPolicy = createOpeningPolicy(snapshot.openingPolicy || { kind: snapshot.cardType === 'levelOrder' ? 'levelOrder' : 'regular' });
     this.closingPolicy = createClosingPolicy(snapshot.closingPolicy || { kind: 'regular' });
@@ -72,6 +74,7 @@ class PositionAggregate {
       provider: command.provider,
       side: command.side,
       source: command.source || command.payload || {},
+      card: command.card,
       executionIntent: command.executionIntent || command.payload || null,
       openingPolicy: command.openingPolicy,
       closingPolicy: command.closingPolicy,
@@ -263,7 +266,7 @@ class PositionAggregate {
   }
 
   snapshot() {
-    return {
+    const snapshot = {
       id: this.id,
       state: this.state,
       ticker: this.ticker,
@@ -285,6 +288,8 @@ class PositionAggregate {
       lastReason: this.lastReason,
       version: this.version
     };
+    snapshot.card = derivePositionCard(snapshot, { card: this.cardSpec });
+    return snapshot;
   }
 }
 

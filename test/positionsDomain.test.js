@@ -7,7 +7,8 @@ const {
   IntegrationCommand,
   RegularOpeningPolicy,
   LevelOrderOpeningPolicy,
-  PendingOpeningPolicy
+  PendingOpeningPolicy,
+  derivePositionCard
 } = require('../app/domain/positions');
 const {
   createPositionApplicationService,
@@ -123,9 +124,52 @@ function runApplicationAndLegacyTests() {
   assert.strictEqual(rowCreate.openingPolicy.kind, 'levelOrder');
 }
 
+function runCardMetadataTests() {
+  const level = PositionAggregate.create({
+    positionId: 'pos-level-card',
+    ticker: 'ADAUSDT',
+    provider: 'dwx',
+    cardType: 'levelOrder',
+    source: {
+      cardType: 'levelOrder',
+      ticker: 'ADAUSDT',
+      level: 0.164,
+      riskUsd: 25,
+      stopOffsetPts: 4,
+      maxLot: 200,
+      takeProfitPts: 12,
+      pointSize: 0.001
+    }
+  });
+  level.handle({ type: PositionCommand.CREATE });
+  let snapshot = level.snapshot();
+  assert.strictEqual(snapshot.card.type, 'levelOrder');
+  assert.deepStrictEqual(snapshot.card.actions.map(a => a.id), ['LB', 'LS']);
+  assert.strictEqual(snapshot.card.data.level, 0.164);
+  assert.strictEqual(snapshot.card.data.stopOffsetPts, 4);
+
+  level.handle({ type: PositionCommand.PROVIDER_OPENED, ticket: 'L-1' });
+  snapshot = level.snapshot();
+  assert.deepStrictEqual(snapshot.card.actions.map(a => a.id), ['close']);
+
+  const regularCard = derivePositionCard({
+    state: PositionState.DRAFT,
+    ticker: 'AAPL',
+    provider: 'j2t',
+    source: {
+      cardActions: [{ label: 'BUY', action: 'BUY', style: 'bl' }],
+      price: 100
+    }
+  });
+  assert.strictEqual(regularCard.type, 'regular');
+  assert.deepStrictEqual(regularCard.actions.map(a => a.id), ['BUY']);
+  assert.strictEqual(regularCard.data.price, 100);
+}
+
 runAggregateLifecycleTest();
 runRejectedCancelledTest();
 runPolicyTests();
 runApplicationAndLegacyTests();
+runCardMetadataTests();
 
 console.log('positionsDomain tests passed');

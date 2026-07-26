@@ -24,6 +24,10 @@ function legacyRowToCreateCommand(row = {}) {
     provider: normalizeProvider(row.provider),
     side: row.side || row.kind || '',
     cardType,
+    card: {
+      type: cardType === 'levelOrder' ? 'levelOrder' : cardType,
+      actions: row.cardActions || row.actions
+    },
     openingPolicy: openingPolicyForLegacy(row),
     source: row,
     executionIntent: row
@@ -44,6 +48,10 @@ function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
     provider: normalizeProvider(resolvedProvider || payload.provider || meta.provider),
     side: payload.side || payload.kind || payload.action || '',
     cardType: payload.cardType,
+    card: {
+      type: payload.cardType,
+      actions: payload.cardActions || payload.actions
+    },
     openingPolicy: openingPolicyForLegacy(payload),
     source: payload,
     executionIntent: payload

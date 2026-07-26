@@ -2,6 +2,8 @@ const { ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const settings = require('../settings');
 const { createCommandService } = require('.');
+const { detectInstrumentType } = require('../instruments');
+const { legacyRowToCreateCommand } = require('../../application/positions');
 
 settings.register(
   'command-line',
@@ -36,6 +38,14 @@ function initService(servicesApi = {}) {
     executionApi: servicesApi,
     aliases: config && config.aliases,
     onAdd(row) {
+      const ticker = row?.ticker || row?.symbol;
+      const instrumentType = row?.instrumentType || detectInstrumentType(String(ticker || ''));
+      const provider = servicesApi.brokerage?.resolveProvider?.({ row, symbol: ticker, instrumentType })?.provider || row?.provider;
+      try {
+        servicesApi.positions?.handle?.(legacyRowToCreateCommand({ ...row, instrumentType, provider }));
+      } catch (err) {
+        console.warn('[positions] failed to record command-line row:', err?.message || String(err));
+      }
       sendToOrderWindows('orders:new', row);
     },
     onRemove(filter) {
