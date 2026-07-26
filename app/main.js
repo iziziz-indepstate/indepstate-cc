@@ -21,6 +21,10 @@ const { GroupedOrderLifecycleRegistry } = require('./services/brokerage/comps/gr
 const { calculateLimitBidTradePlan } = require('./services/levelOrder/strategy');
 const { collectRetryStopEntries, getRetryStopParentIds } = require('./services/levelOrder/retryStop');
 const { normalizeOrderQty, isValidOrderQty } = require('./services/executionQuantity');
+const {
+  legacyRowToCreateCommand,
+  legacyOrderPayloadToCreateCommand
+} = require('./application/positions');
 const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
 
@@ -458,6 +462,7 @@ function wireAdapter(adapter, providerName) {
       || confirmedOrderByTicket.get(normalizedTicket)
       || (cid ? confirmedOrderByCid.get(cid) : null)
       || (cid ? pendingIndex.get(cid)?.order : null);
+    servicesApi.positions?.recordOpened?.({ ticket, order, origOrder: enrichedOrigOrder, provider: providerName });
     events.emit('position:opened', { ticket, order, origOrder: enrichedOrigOrder, provider: providerName });
     const parentRequestId = enrichedOrigOrder?.meta?.parentRequestId;
     console.log('[EXEC][POSITION_OPENED]', {
@@ -483,6 +488,7 @@ function wireAdapter(adapter, providerName) {
   });
 
   adapter.on('position:closed', ({ ticket, trade }) => {
+    servicesApi.positions?.recordClosed?.({ ticket, trade, profit: trade?.profit, provider: providerName });
     events.emit('position:closed', { ticket, trade, provider: providerName });
     const info = trackerIndex.get(String(ticket));
     const profit = trade?.profit;
@@ -495,6 +501,7 @@ function wireAdapter(adapter, providerName) {
   });
 
   adapter.on('order:cancelled', ({ ticket }) => {
+    servicesApi.positions?.recordCancelled?.({ ticket, provider: providerName });
     events.emit('order:cancelled', { ticket, provider: providerName });
     trackerIndex.delete(String(ticket));
     groupedOrderLifecycles.removeTicket(ticket, providerName);
@@ -642,6 +649,11 @@ app.whenReady().then(() => {
         const ticker = row.ticker || row.symbol;
         const instrumentType = row.instrumentType || detectInstrumentType(String(ticker || ''));
         row.provider = resolveProviderName({ row, symbol: ticker, instrumentType });
+        try {
+          servicesApi.positions?.handle?.(legacyRowToCreateCommand({ ...row, instrumentType }));
+        } catch (err) {
+          console.warn('[positions] failed to record legacy row:', err?.message || String(err));
+        }
         if (mainWindow && !mainWindow.isDestroyed()) {
           mainWindow.webContents.send('orders:new', row);
         }
@@ -1029,6 +1041,13 @@ function setupIpc(orderSvc) {
       execOrder.comment = ensureCommentHasCid(execOrder.comment, cid);
       if (!execOrder.meta) execOrder.meta = {};
       execOrder.meta.cid = cid;
+      try {
+        const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
+        execOrder.meta.positionId = createCommand.positionId;
+        servicesApi.positions?.createAndOpen?.(createCommand);
+      } catch (err) {
+        console.warn('[positions] failed to record open request:', err?.message || String(err));
+      }
 
       const logOrder = {
         ...execOrder,
@@ -1124,6 +1143,14 @@ function setupIpc(orderSvc) {
       if (maybePending.startsWith('pending:')) {
         const pendingId = normalizeCid(maybePending) || cid;
         pendingIndex.set(pendingId, { reqId, adapter, providerName, order: execOrder, ts, cid: pendingId });
+        servicesApi.positions?.recordPlaced?.({
+          positionId: execOrder.meta?.positionId,
+          requestId: reqId,
+          providerOrderId: result.providerOrderId,
+          provider: providerName,
+          result,
+          payload: execOrder
+        });
 
         appendJsonl(EXEC_LOG, {
           t: ts,
@@ -1200,6 +1227,24 @@ function setupIpc(orderSvc) {
         ? { ...result, provider: execRecord.provider, cid }
         : { status: result?.status || 'rejected', provider: execRecord.provider, providerOrderId: result?.providerOrderId, reason: result?.reason, cid };
       events.emit('order:placed', { order: execOrder, result: lifecycleResult });
+      if (result?.status === 'ok' || result?.status === 'simulated') {
+        servicesApi.positions?.recordPlaced?.({
+          positionId: execOrder.meta?.positionId,
+          requestId: reqId,
+          providerOrderId: result.providerOrderId,
+          provider: execRecord.provider,
+          result,
+          payload: execOrder
+        });
+      } else {
+        servicesApi.positions?.recordRejected?.({
+          positionId: execOrder.meta?.positionId,
+          requestId: reqId,
+          provider: execRecord.provider,
+          reason: result?.reason,
+          result
+        });
+      }
 
       console.log('[EXEC][RES]', { reqId, cid, status: result?.status, reason: result?.reason, providerOrderId: result?.providerOrderId });
       return result;
@@ -1222,6 +1267,12 @@ function setupIpc(orderSvc) {
       trackerPending.delete(order?.meta?.requestId);
       console.log('[EXEC][ERR]', { provider: providerName, reqId: order?.meta?.requestId, cid: errorCid || undefined, error: String(err) });
       events.emit('order:placed', { order: execOrder, result: { status: 'rejected', provider: providerName, reason: rej.reason, cid: errorCid || undefined } });
+      servicesApi.positions?.recordFailed?.({
+        positionId: execOrder?.meta?.positionId,
+        requestId: order?.meta?.requestId,
+        provider: providerName,
+        reason: rej.reason
+      });
       return rej;
     }
   }

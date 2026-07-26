@@ -7,7 +7,8 @@ async function run() {
   const originalLoad = Module._load;
 
   Module._load = function(request, parent, isMain) {
-    if (request === './dwx_client' && parent?.filename?.endsWith('app\\services\\brokerage-adapter-dwx\\comps\\dwx.js')) {
+    const parentFile = String(parent?.filename || '').replace(/\\/g, '/');
+    if (request === './dwx_client' && parentFile.endsWith('app/services/brokerage-adapter-dwx/comps/dwx.js')) {
       return {
         dwx_client: class {
           constructor(opts = {}) {
@@ -67,7 +68,8 @@ async function run() {
   calls.length = 0;
   eventHandler = null;
   Module._load = function(request, parent, isMain) {
-    if (request === './dwx_client' && parent?.filename?.endsWith('app\\services\\brokerage-adapter-dwx\\comps\\dwx.js')) {
+    const parentFile = String(parent?.filename || '').replace(/\\/g, '/');
+    if (request === './dwx_client' && parentFile.endsWith('app/services/brokerage-adapter-dwx/comps/dwx.js')) {
       return {
         dwx_client: class {
           constructor(opts = {}) {
@@ -89,6 +91,7 @@ async function run() {
     delete require.cache[require.resolve('../app/services/brokerage-adapter-dwx/comps/dwx')];
     const { DWXAdapter } = require('../app/services/brokerage-adapter-dwx/comps/dwx');
     const adapter = new DWXAdapter({ metatraderDirPath: 'test', provider: 'mt5-j2t-dwx', openOrderRetryDelayMs: 1 });
+    adapter.setExecutionRetryPolicy({ shouldRetry: () => true });
     let retryCount = 0;
     adapter.on('order:retry', () => { retryCount++; });
     await adapter.placeOrder({

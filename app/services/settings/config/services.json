@@ -3,6 +3,7 @@
   "services/executionRetry",
   "services/actions-bus",
   "services/instrumentInfo",
+  "services/positions",
   "services/brokerage-adapter-ccxt",
   "services/brokerage-adapter-dwx",
   "services/brokerage-adapter-j2t",
