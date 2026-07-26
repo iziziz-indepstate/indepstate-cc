@@ -1,0 +1,37 @@
+{
+  "enabled": false,
+  "pollMs": 1000,
+  "logLimit": 200,
+  "providers": {
+    "dwx": {
+      "enabled": true,
+      "maxStopRiskUsd": 10,
+      "maxOpenLossUsd": 5,
+      "symbols": {}
+    },
+    "ccxt-binance-futures": {
+      "enabled": true,
+      "maxStopRiskUsd": 10,
+      "maxOpenLossUsd": 5,
+      "symbols": {}
+    },
+    "ibkr": {
+      "enabled": false,
+      "maxStopRiskUsd": 10,
+      "maxOpenLossUsd": 5,
+      "symbols": {}
+    },
+    "optionstrat": {
+      "enabled": false,
+      "maxStopRiskUsd": 50,
+      "maxOpenLossUsd": 25,
+      "symbols": {}
+    },
+    "simulated": {
+      "enabled": true,
+      "maxStopRiskUsd": 10,
+      "maxOpenLossUsd": 5,
+      "symbols": {}
+    }
+  }
+}

@@ -25,6 +25,7 @@ const APPLY_POLICIES = {
   'chart-images': { livePaths: ['*'] },
   'execution-log': { livePaths: ['*'] },
   'execution-retry': { livePaths: ['*'] },
+  'risk-manager': { livePaths: ['*'] },
   'tv-listener': { livePaths: ['*'] },
   optionstrat: { livePaths: ['*'] },
   'command-line': { livePaths: ['*'] },

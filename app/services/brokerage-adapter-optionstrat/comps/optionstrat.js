@@ -540,6 +540,13 @@ class OptionStratAdapter extends ExecutionAdapter {
     }
   }
 
+  async closePosition(position = {}, reason = 'risk-manager close') {
+    const result = await this.cancelOrder(position.ticket || position.id, position.symbol || position.snapshot?.symbol);
+    return result?.status === 'ok'
+      ? { ...result, raw: { ...(result.raw || {}), reason } }
+      : result;
+  }
+
   async getQuote() {
     return { price: 1, bid: 1, ask: 1, tickSize: 0.01 };
   }

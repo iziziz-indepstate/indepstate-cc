@@ -2359,6 +2359,80 @@ class CCXTExecutionAdapter extends ExecutionAdapter {
     }
   }
 
+  /** Emergency-close an app-tracked futures position. */
+  async closePosition(position = {}, reason = 'risk-manager close') {
+    try {
+      await this.ensureReady();
+      const ticket = String(position.ticket || position.id || '').trim();
+      const bracket = this._findBracketByLifecycleTicket(ticket);
+      const snapshot = position.snapshot || {};
+      const symbolInput = snapshot.symbol || position.symbol || bracket?.mappedSymbol || bracket?.origOrder?.symbol;
+      const mappedSymbol = this.mapSymbol(symbolInput);
+      if (!mappedSymbol) return { status: 'error', provider: this.provider, reason: 'symbol required' };
+
+      let side = String(snapshot.side || position.side || bracket?.origOrder?.side || '').toLowerCase();
+      let amount = Number(snapshot.qty || snapshot.contracts || bracket?.actualQty || bracket?.expectedQty || 0);
+      let positions = [];
+      try { positions = typeof this.exchange.fetchPositions === 'function' ? await this.exchange.fetchPositions([mappedSymbol]) : []; } catch {}
+      const current = (positions || []).find(p => (p?.symbol || p?.info?.symbol || p?.info?.instId) === mappedSymbol);
+      const rawSize = Number(current?.contracts ?? current?.positionAmt ?? current?.size ?? current?.info?.positionAmt ?? current?.info?.pos ?? 0);
+      if (Number.isFinite(rawSize) && rawSize !== 0) {
+        amount = Math.abs(rawSize);
+        side = rawSize > 0 ? 'buy' : 'sell';
+      }
+      if (!Number.isFinite(amount) || amount <= 0) return { status: 'error', provider: this.provider, reason: 'position quantity required' };
+      if (!side) side = bracket?.direction === 'SHORT' ? 'sell' : 'buy';
+      const closeSide = side === 'sell' || side === 'short' ? 'buy' : 'sell';
+      const params = { ...(this.defaultParams || {}), reduceOnly: true };
+      if (this.exchangeId === 'binance') params.reduceOnly = 'true';
+      const result = await this.exchange.createOrder(mappedSymbol, 'market', closeSide, amount, undefined, params);
+      if (bracket) {
+        bracket.status = 'CLOSING';
+        bracket.updatedAt = Date.now();
+      }
+      try { if (ticket) await this._cancelAllProtectionForTicket(ticket); } catch {}
+      return { status: 'ok', provider: this.provider, raw: { ticket, symbol: mappedSymbol, side: closeSide, amount, reason, result } };
+    } catch (err) {
+      return { status: 'error', provider: this.provider, reason: err?.message || String(err) };
+    }
+  }
+
+  async getRiskPositionSnapshot(trackedPosition = {}) {
+    await this.ensureReady();
+    const ticket = String(trackedPosition.ticket || '').trim();
+    const bracket = this._findBracketByLifecycleTicket(ticket);
+    const symbolInput = bracket?.mappedSymbol || bracket?.origOrder?.symbol || trackedPosition.symbol;
+    const mappedSymbol = this.mapSymbol(symbolInput);
+    if (!mappedSymbol) return null;
+    let pos = null;
+    try {
+      const positions = typeof this.exchange.fetchPositions === 'function' ? await this.exchange.fetchPositions([mappedSymbol]) : [];
+      pos = (positions || []).find(p => (p?.symbol || p?.info?.symbol || p?.info?.instId) === mappedSymbol) || null;
+    } catch {}
+    const rawSize = Number(pos?.contracts ?? pos?.positionAmt ?? pos?.size ?? pos?.info?.positionAmt ?? pos?.info?.pos ?? 0);
+    const qty = Number.isFinite(rawSize) && rawSize !== 0
+      ? Math.abs(rawSize)
+      : Number(bracket?.actualQty || bracket?.expectedQty || trackedPosition.origOrder?.qty || 0);
+    const entryPrice = Number(pos?.entryPrice ?? pos?.info?.entryPrice ?? pos?.info?.avgPrice ?? pos?.info?.avgPx ?? bracket?.entryPrice);
+    const unrealizedPnl = Number(pos?.unrealizedPnl ?? pos?.info?.unrealizedPnl ?? pos?.info?.upl);
+    let market = null;
+    try { market = (this.exchange.markets && this.exchange.markets[mappedSymbol]) || this.exchange.market(mappedSymbol); } catch {}
+    const side = rawSize < 0 ? 'sell' : (rawSize > 0 ? 'buy' : (bracket?.direction === 'SHORT' ? 'sell' : 'buy'));
+    return {
+      provider: this.provider,
+      ticket,
+      symbol: trackedPosition.symbol || bracket?.origOrder?.symbol || mappedSymbol,
+      side,
+      qty,
+      entryPrice: Number.isFinite(entryPrice) ? entryPrice : undefined,
+      stopLossPrice: Number(bracket?.stopLossPrice) || undefined,
+      unrealizedPnl: Number.isFinite(unrealizedPnl) ? unrealizedPnl : undefined,
+      tickSize: Number(bracket?.tickSize) || this._getTickSizeFromMarket(mappedSymbol),
+      contractSize: Number(market?.contractSize) || 1,
+      source: 'ccxt-position'
+    };
+  }
+
   /** @returns {Promise<any[]>} список відкритих ордерів */
   async listOpenOrders() {
     try {

@@ -1,0 +1,14 @@
+{
+  "properties": {
+    "name": "Risk Manager",
+    "group": "Execution"
+  },
+  "options": {
+    "enabled": { "type": "boolean", "description": "Enable risk manager" },
+    "pollMs": { "type": "number", "description": "Polling interval in milliseconds" },
+    "logLimit": { "type": "number", "description": "Maximum trigger log rows" },
+    "providers": {
+      "description": "Provider-specific risk limits. Each provider may define enabled, maxStopRiskUsd, maxOpenLossUsd and symbols overrides."
+    }
+  }
+}

@@ -9,6 +9,7 @@
   "services/brokerage-adapter-optionstrat",
   "services/brokerage-adapter-ibkr",
   "services/brokerage-adapter-simulated",
+  "services/riskManager",
   "services/mcp",
   "services/dealTrackers",
   "services/dealTrackers-chartImages",

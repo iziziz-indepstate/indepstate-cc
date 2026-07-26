@@ -148,6 +148,9 @@ class J2TExecutionAdapter extends ExecutionAdapter {
   // на вырост:
   // async cancelOrder(id) { ... /accounts/{accountId}/orders/{orderId} DELETE ... }
   // async getOrderStatus(id) { ... /accounts/{accountId}/orders ... }
+  async closePosition() {
+    return { status: 'unsupported', provider: 'j2t', reason: 'J2T closePosition is not implemented' };
+  }
 }
 
 module.exports = { J2TExecutionAdapter };

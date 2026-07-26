@@ -1,11 +1,15 @@
 const { ExecutionAdapter } = require('../../brokerage/comps/base');
+const { EventEmitter } = require('events');
 
 class SimulatedAdapter extends ExecutionAdapter {
   constructor({ latencyMs = [120, 350] } = {}) {
     super();
     this.latencyMs = latencyMs;
     this.provider = 'simulated';
+    this.events = new EventEmitter();
   }
+  on(event, fn) { this.events.on(event, fn); return () => this.events.off(event, fn); }
+
   async placeOrder(order) {
     const wait = ms => new Promise(r => setTimeout(r, ms));
     const rand = (a,b)=>Math.floor(a+Math.random()*(b-a+1));
@@ -37,6 +41,12 @@ class SimulatedAdapter extends ExecutionAdapter {
 
   async cancelOrder() {
     return { status: 'ok', provider: this.provider };
+  }
+
+  async closePosition(position = {}, reason = 'risk-manager close') {
+    const ticket = String(position.ticket || '').trim();
+    if (ticket) this.events.emit('position:closed', { ticket, trade: { pnlStatus: 'simulated', reason } });
+    return { status: 'simulated', provider: this.provider, raw: { ticket, reason } };
   }
 }
 module.exports = { SimulatedAdapter };

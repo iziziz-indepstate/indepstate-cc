@@ -174,6 +174,35 @@ class DWXAdapter extends ExecutionAdapter {
     }
   }
 
+  async closePosition(position = {}, reason = 'risk-manager close') {
+    const ticket = String(position.ticket || position.id || '').trim();
+    if (!ticket) return { status: 'error', provider: this.provider, reason: 'ticket required' };
+    try {
+      await this.client.close_order(ticket, 0);
+      return { status: 'ok', provider: this.provider, raw: { ticket, reason } };
+    } catch (err) {
+      return { status: 'error', provider: this.provider, reason: err?.message || String(err) };
+    }
+  }
+
+  async getRiskPositionSnapshot(trackedPosition = {}) {
+    const ticket = String(trackedPosition.ticket || '').trim();
+    const order = this.client.open_orders?.[ticket];
+    if (!order) return null;
+    const type = normalizeType(order.type || order.order_type);
+    return {
+      provider: this.provider,
+      ticket,
+      symbol: order.symbol,
+      side: type,
+      qty: numberOr(order.lots, order.volume, order.size),
+      entryPrice: numberOr(order.open_price, order.price),
+      stopLossPrice: numberOr(order.sl, order.stop_loss),
+      unrealizedPnl: numberOr(order.pnl, order.profit),
+      source: 'dwx-open-orders'
+    };
+  }
+
   #trackPending(cid, order, order_type) {
     this.pending.set(cid, {
       order,

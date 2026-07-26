@@ -17,6 +17,20 @@ class ExecutionAdapter {
   // async getHistoricBars({ symbol, timeframe, from, to, limit, timeoutMs }) {}
 
   /**
+   * Emergency-close an app-tracked open position.
+   * @returns {Promise<{status:'ok'|'simulated'|'unsupported'|'error', provider?:string, reason?:string, raw?:any}>}
+   */
+  async closePosition(_position, _reason) {
+    return { status: 'unsupported', provider: this.provider, reason: 'closePosition is not supported by this adapter' };
+  }
+
+  /**
+   * Optional richer snapshot for risk-manager calculations.
+   * @returns {Promise<any|null>}
+   */
+  async getRiskPositionSnapshot(_trackedPosition) { return null; }
+
+  /**
    * Получить котировку/информацию по инструменту.
    * @param {string} symbol
    * @returns {Promise<{bid?:number, ask?:number, price?:number, tickSize?:number}|null>}

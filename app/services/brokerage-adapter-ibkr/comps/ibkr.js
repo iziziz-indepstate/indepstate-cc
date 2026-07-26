@@ -1520,6 +1520,71 @@ class IBKRAdapter extends ExecutionAdapter {
     }
   }
 
+  async closePosition(position = {}, reason = 'risk-manager close') {
+    if (!this.cfg.enabled) return { status: 'disabled', provider: this.provider, reason: 'IBKR adapter is disabled' };
+    const readiness = this.readinessReason();
+    if (readiness) return { status: 'error', provider: this.provider, reason: readiness };
+    const ticket = String(position.ticket || position.id || '').trim();
+    const logical = this.logicalPositions.get(ticket) || this.logicalPositionsByCid.get(ticket);
+    if (!logical) return { status: 'error', provider: this.provider, reason: `No app-tracked IBKR position for ${ticket}` };
+    const quantity = positiveNumber(position.snapshot?.qty) || Math.max(0, (logical.entryFilled || logical.requestedQty || 0) - (logical.exitFilled || 0));
+    if (!quantity) return { status: 'error', provider: this.provider, reason: 'position quantity required' };
+    const action = logical.entryAction === 'BUY' ? 'SELL' : 'BUY';
+    const orderId = this.allocateOrderId();
+    const order = {
+      orderId,
+      action,
+      orderType: 'MKT',
+      totalQuantity: quantity,
+      tif: this.cfg.defaultTif,
+      account: logical.account || this.selectedAccount,
+      orderRef: `${logical.cid || ticket}:risk-manager`,
+      transmit: true
+    };
+    try {
+      for (const [linkedOrderId, link] of this.orderIdToLogical.entries()) {
+        if (link.logical !== logical || link.role === 'parent') continue;
+        if (/^\d+$/.test(String(linkedOrderId))) {
+          try { this.client.cancelOrder(Number(linkedOrderId)); } catch {}
+        }
+      }
+      this.client.placeOrder(orderId, safeClone(logical.contract), order);
+      logical.closingByRiskManager = true;
+      logical.riskManagerCloseReason = reason;
+      this.#log('info', 'risk-manager close order placed', { provider: this.provider, ticket, orderId, action, quantity, reason });
+      return { status: 'ok', provider: this.provider, raw: { ticket, orderId, action, quantity, reason } };
+    } catch (err) {
+      return { status: 'error', provider: this.provider, reason: err?.message || String(err) };
+    }
+  }
+
+  async getRiskPositionSnapshot(trackedPosition = {}) {
+    const ticket = String(trackedPosition.ticket || '').trim();
+    const logical = this.logicalPositions.get(ticket) || this.logicalPositionsByCid.get(ticket);
+    if (!logical) return null;
+    const current = this.currentPositions.get(logical.positionKey) || {};
+    const qty = Math.abs(Number(current.quantity ?? ((logical.entryFilled || logical.requestedQty || 0) - (logical.exitFilled || 0))));
+    const orig = logical.origOrder || {};
+    const action = logical.entryAction || normalizeAction(orig.side);
+    const tickSize = positiveNumber(orig.tickSize) || positiveNumber(this.cfg.defaultTickSize);
+    const entryPrice = positiveNumber(orig.price ?? orig.entryPrice);
+    const slDistance = positiveNumber(orig.sl ?? orig.stopPts ?? orig.meta?.stopPts);
+    const stopLossPrice = positiveNumber(orig.stopLossPrice ?? orig.slPrice)
+      || (entryPrice && slDistance && tickSize ? (action === 'BUY' ? entryPrice - slDistance * tickSize : entryPrice + slDistance * tickSize) : undefined);
+    return {
+      provider: this.provider,
+      ticket,
+      symbol: orig.symbol,
+      side: action === 'SELL' ? 'sell' : 'buy',
+      qty,
+      entryPrice,
+      stopLossPrice,
+      tickSize,
+      contractSize: positiveNumber(logical.contract?.multiplier) || 1,
+      source: 'ibkr-logical-position'
+    };
+  }
+
   #confirmPending(orderId, ticket, raw) {
     const rec = this.pending.get(orderId);
     if (!rec) return;
