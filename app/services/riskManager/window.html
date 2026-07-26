@@ -12,17 +12,32 @@
     button { border:1px solid var(--line); background:#20252d; color:var(--text); border-radius:6px; padding:6px 10px; cursor:pointer; }
     button:hover { background:#28313b; }
     button.danger { border-color:rgba(239,68,68,.45); color:#fecaca; }
-    main { display:grid; grid-template-columns: 380px 1fr; gap:12px; padding:12px; }
+    button.icon { width:30px; height:30px; padding:0; display:inline-grid; place-items:center; }
+    main { display:grid; grid-template-columns: 520px 1fr; gap:12px; padding:12px; }
     section { border-top:1px solid var(--line); padding-top:10px; }
+    details { border-top:1px solid var(--line); padding-top:10px; }
+    summary { cursor:pointer; color:#dbeafe; font-size:13px; font-weight:650; margin-bottom:8px; }
     h2 { margin:0 0 8px; font-size:13px; color:#dbeafe; font-weight:650; }
     label { display:grid; gap:4px; color:var(--muted); margin-bottom:8px; }
     input, textarea { width:100%; border:1px solid var(--line); background:#0f1216; color:var(--text); border-radius:6px; padding:7px 8px; font:12px ui-monospace,SFMono-Regular,Consolas,monospace; }
-    textarea { min-height:360px; resize:vertical; }
+    input[type="checkbox"] { width:auto; accent-color:var(--blue); }
+    textarea { min-height:220px; resize:vertical; }
     table { width:100%; border-collapse:collapse; }
     th, td { border-bottom:1px solid var(--line); padding:7px 8px; text-align:left; vertical-align:top; }
     th { color:var(--muted); font-weight:600; background:#151920; position:sticky; top:47px; }
     .stack { display:grid; gap:12px; }
     .toolbar { display:flex; align-items:center; gap:8px; }
+    .grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:8px; }
+    .inline { display:flex; align-items:center; gap:8px; }
+    .inline label { margin:0; display:flex; align-items:center; gap:6px; }
+    .row-actions { display:flex; align-items:center; gap:6px; }
+    .provider-row { cursor:pointer; }
+    .provider-row.selected { background:#1d2630; }
+    .provider-row input { min-width:72px; }
+    .provider-cell { min-width:150px; }
+    .compact-input { max-width:96px; }
+    .add-row { display:grid; grid-template-columns: 1.3fr 1fr 1fr auto; gap:8px; align-items:end; }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
     .muted { color:var(--muted); }
     .ok { color:var(--green); }
     .warn { color:var(--amber); }
@@ -43,10 +58,46 @@
   <main>
     <div class="stack">
       <section>
-        <h2>Limits Config</h2>
-        <label>JSON settings<textarea id="config"></textarea></label>
+        <div class="section-head">
+          <h2>Global Settings</h2>
+          <label><input id="global-enabled" type="checkbox"> Enabled</label>
+        </div>
+        <div class="grid2">
+          <label>Poll, ms<input id="global-poll" type="number" min="100" step="100"></label>
+          <label>Log rows<input id="global-log-limit" type="number" min="1" step="1"></label>
+        </div>
         <div id="error" class="error"></div>
       </section>
+      <section>
+        <div class="section-head">
+          <h2>Provider Limits</h2>
+          <button id="add-provider" class="icon" title="Add provider">+</button>
+        </div>
+        <table>
+          <thead><tr><th>Provider</th><th>Enabled</th><th>Stop $</th><th>Loss $</th><th></th></tr></thead>
+          <tbody id="providers"></tbody>
+        </table>
+      </section>
+      <section>
+        <div class="section-head">
+          <h2>Symbol Overrides</h2>
+          <span id="selected-provider" class="muted"></span>
+        </div>
+        <table>
+          <thead><tr><th>Symbol</th><th>Enabled</th><th>Stop $</th><th>Loss $</th><th></th></tr></thead>
+          <tbody id="symbols"></tbody>
+        </table>
+        <div class="add-row">
+          <label>Symbol<input id="new-symbol" placeholder="ADAUSDT.cfd"></label>
+          <label>Stop $<input id="new-symbol-stop" type="number" min="0" step="0.01"></label>
+          <label>Loss $<input id="new-symbol-loss" type="number" min="0" step="0.01"></label>
+          <button id="add-symbol">Add</button>
+        </div>
+      </section>
+      <details>
+        <summary>Advanced JSON Settings</summary>
+        <label>Config JSON<textarea id="config"></textarea></label>
+      </details>
     </div>
     <div class="stack">
       <section>

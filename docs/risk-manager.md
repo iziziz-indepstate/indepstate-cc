@@ -25,6 +25,8 @@ Settings live in the `risk-manager` section. Each provider can define:
 
 Limits are ignored when missing, `null`, `0`, or negative. Symbol settings override provider settings.
 
+The Risk Manager window provides editable forms for global, provider, and symbol settings, plus an advanced JSON editor for direct config edits.
+
 ## Behavior
 
 Risk Manager tracks only orders and positions created by this app. Pending/working limit and stop orders are checked for maximum stop risk before they open; open positions are checked for both maximum stop risk and current open loss. Tracked items are removed on rejection, cancellation, or close events.
