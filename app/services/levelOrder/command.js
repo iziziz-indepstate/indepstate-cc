@@ -1,5 +1,5 @@
 const { Command } = require('../commands/base');
-const { resolveLevelOrderDefaults } = require('./strategy');
+const { resolveLevelOrderDefaults } = require('./domain/strategy');
 
 const RESERVED_ROW_PROPS = new Set(['cardType', 'ticker', 'level', 'event', 'time']);
 const PROPS_USAGE = 'Usage: levelOrder {ticker} {level} [props=key:value;key2:value2]';

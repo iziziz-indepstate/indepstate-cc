@@ -3,7 +3,8 @@ const {
   PositionAggregate,
   PositionCommand,
   PositionEvent,
-  createPositionBehaviorRegistry
+  createPositionBehaviorRegistry,
+  createOpeningPolicyRegistry
 } = require('../../domain/positions');
 
 function clone(value) {
@@ -13,6 +14,7 @@ function clone(value) {
 class InMemoryPositionRepository {
   constructor(initial = [], opts = {}) {
     this.behaviorRegistry = opts.behaviorRegistry;
+    this.openingPolicyRegistry = opts.openingPolicyRegistry;
     this.positions = new Map();
     for (const snapshot of initial || []) {
       if (snapshot?.id) this.positions.set(snapshot.id, clone(snapshot));
@@ -21,7 +23,10 @@ class InMemoryPositionRepository {
 
   get(id) {
     const snapshot = this.positions.get(id);
-    return snapshot ? new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry }) : null;
+    return snapshot ? new PositionAggregate(snapshot, {
+      behaviorRegistry: this.behaviorRegistry,
+      openingPolicyRegistry: this.openingPolicyRegistry
+    }) : null;
   }
 
   save(position) {
@@ -42,7 +47,10 @@ class InMemoryPositionRepository {
       if (normalizedProvider && String(snapshot.provider || '').toLowerCase() !== normalizedProvider) continue;
       const tickets = Array.isArray(snapshot.tickets) ? snapshot.tickets : [];
       if (tickets.map(String).includes(normalizedTicket) || String(snapshot.primaryTicket || '') === normalizedTicket) {
-        return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
+        return new PositionAggregate(snapshot, {
+          behaviorRegistry: this.behaviorRegistry,
+          openingPolicyRegistry: this.openingPolicyRegistry
+        });
       }
     }
     return null;
@@ -58,7 +66,10 @@ class InMemoryPositionRepository {
         || snapshot.source?.meta?.requestId === id
         || snapshot.source?.requestId === id
       ) {
-        return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
+        return new PositionAggregate(snapshot, {
+          behaviorRegistry: this.behaviorRegistry,
+          openingPolicyRegistry: this.openingPolicyRegistry
+        });
       }
       for (const child of snapshot.children || []) {
         if (
@@ -69,7 +80,10 @@ class InMemoryPositionRepository {
           || child.cid === id
           || child.ticket === id
           || child.providerOrderId === id
-        ) return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
+        ) return new PositionAggregate(snapshot, {
+          behaviorRegistry: this.behaviorRegistry,
+          openingPolicyRegistry: this.openingPolicyRegistry
+        });
       }
     }
     return null;
@@ -77,15 +91,23 @@ class InMemoryPositionRepository {
 
   list() {
     return Array.from(this.positions.values())
-      .map(snapshot => new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry }).snapshot());
+      .map(snapshot => new PositionAggregate(snapshot, {
+        behaviorRegistry: this.behaviorRegistry,
+        openingPolicyRegistry: this.openingPolicyRegistry
+      }).snapshot());
   }
 }
 
 class PositionApplicationService {
-  constructor({ repository, eventBus, executor, clock, behaviorRegistry, positionBehaviors } = {}) {
+  constructor({ repository, eventBus, executor, clock, behaviorRegistry, positionBehaviors, openingPolicyRegistry, openingPolicies } = {}) {
     this.behaviorRegistry = behaviorRegistry || createPositionBehaviorRegistry(positionBehaviors || []);
-    this.repository = repository || new InMemoryPositionRepository([], { behaviorRegistry: this.behaviorRegistry });
+    this.openingPolicyRegistry = openingPolicyRegistry || createOpeningPolicyRegistry(openingPolicies || []);
+    this.repository = repository || new InMemoryPositionRepository([], {
+      behaviorRegistry: this.behaviorRegistry,
+      openingPolicyRegistry: this.openingPolicyRegistry
+    });
     if (repository && !repository.behaviorRegistry) repository.behaviorRegistry = this.behaviorRegistry;
+    if (repository && !repository.openingPolicyRegistry) repository.openingPolicyRegistry = this.openingPolicyRegistry;
     this.eventBus = eventBus;
     this.executor = executor || null;
     this.clock = clock || (() => Date.now());
@@ -96,11 +118,18 @@ class PositionApplicationService {
     return this.behaviorRegistry.register(behavior);
   }
 
+  registerOpeningPolicy(kind, factory) {
+    return this.openingPolicyRegistry.register(kind, factory);
+  }
+
   handle(command = {}) {
     const normalized = { ...command, time: Number.isFinite(command.time) ? command.time : this.clock() };
     let aggregate;
     if (normalized.type === PositionCommand.CREATE) {
-      aggregate = PositionAggregate.create(normalized, { behaviorRegistry: this.behaviorRegistry });
+      aggregate = PositionAggregate.create(normalized, {
+        behaviorRegistry: this.behaviorRegistry,
+        openingPolicyRegistry: this.openingPolicyRegistry
+      });
     } else {
       aggregate = this.repository.get(normalized.positionId || normalized.id);
       if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };

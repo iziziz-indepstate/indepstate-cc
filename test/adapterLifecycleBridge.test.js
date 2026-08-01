@@ -2,13 +2,17 @@ const assert = require('assert');
 const { EventEmitter } = require('events');
 const { createAdapterLifecycleBridge } = require('../app/application/execution');
 const { createPositionApplicationService, legacyOrderPayloadToCreateCommand } = require('../app/application/positions');
-const { createPositionBehaviorRegistry } = require('../app/domain/positions');
-const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
+const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
+const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
 
 function createPositionsWithLevelOrder(opts = {}) {
   return createPositionApplicationService({
     ...opts,
-    behaviorRegistry: opts.behaviorRegistry || createPositionBehaviorRegistry([createLevelOrderPositionBehavior()])
+    behaviorRegistry: opts.behaviorRegistry || createPositionBehaviorRegistry([createLevelOrderPositionBehavior()]),
+    openingPolicyRegistry: opts.openingPolicyRegistry || createOpeningPolicyRegistry([
+      { kind: 'levelOrder', factory: createLevelOrderOpeningPolicy }
+    ])
   });
 }
 

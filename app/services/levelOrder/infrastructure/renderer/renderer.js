@@ -1,4 +1,4 @@
-const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('./strategy');
+const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('../../domain/strategy');
 
 function isLevelOrderChildPosition(position = {}) {
   const meta = position.source?.meta || position.executionIntent?.meta || position.card?.data?.meta || {};

@@ -30,6 +30,7 @@ function childKey(child = {}) {
 class PositionAggregate {
   constructor(snapshot = {}, opts = {}) {
     this.behaviorRegistry = opts.behaviorRegistry || defaultPositionBehaviorRegistry;
+    this.openingPolicyRegistry = opts.openingPolicyRegistry;
     this.id = idFromSeed(snapshot.id);
     this.state = snapshot.state || PositionState.DRAFT;
     this.ticker = snapshot.ticker || snapshot.symbol || '';
@@ -43,7 +44,9 @@ class PositionAggregate {
     this.cardSpec = clone(snapshot.card || snapshot.cardSpec) || {};
     if (snapshot.cardType && !this.cardSpec.type) this.cardSpec.type = snapshot.cardType;
     this.executionIntent = clone(snapshot.executionIntent) || null;
-    this.openingPolicy = createOpeningPolicy(snapshot.openingPolicy || { kind: snapshot.cardType || 'regular' });
+    this.openingPolicy = createOpeningPolicy(snapshot.openingPolicy || { kind: snapshot.cardType || 'regular' }, {
+      openingPolicyRegistry: this.openingPolicyRegistry
+    });
     this.closingPolicy = createClosingPolicy(snapshot.closingPolicy || { kind: 'regular' });
     this.primaryTicket = snapshot.primaryTicket || '';
     this.tickets = new Set(Array.isArray(snapshot.tickets) ? snapshot.tickets.map(normalizeTicket).filter(Boolean) : []);
@@ -162,7 +165,11 @@ class PositionAggregate {
     this.state = PositionState.OPENING;
     this.timestamps.openingAt = now(command);
     this.executionIntent = clone(command.payload || command.executionIntent || this.executionIntent || this.source);
-    if (command.openingPolicy) this.openingPolicy = createOpeningPolicy(command.openingPolicy);
+    if (command.openingPolicy) {
+      this.openingPolicy = createOpeningPolicy(command.openingPolicy, {
+        openingPolicyRegistry: this.openingPolicyRegistry
+      });
+    }
     const built = this.openingPolicy.buildOpenRequest(this, command);
     this.#touch();
     return {

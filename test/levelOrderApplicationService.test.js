@@ -1,14 +1,18 @@
 const assert = require('assert');
 const { createLevelOrderApplicationService, createLevelOrderRuntime } = require('../app/services/levelOrder');
 const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
-const { createPositionBehaviorRegistry } = require('../app/domain/positions');
-const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
+const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
+const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
 
 async function run() {
   const logs = [];
   const positions = createPositionApplicationService({
     clock: () => 2000,
-    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()])
+    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()]),
+    openingPolicyRegistry: createOpeningPolicyRegistry([
+      { kind: 'levelOrder', factory: createLevelOrderOpeningPolicy }
+    ])
   });
   const createdPosition = positions.handle(legacyRowToCreateCommand({
     positionId: 'pos-level-app',

@@ -1,13 +1,17 @@
 const assert = require('assert');
 const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
-const { createPositionBehaviorRegistry } = require('../app/domain/positions');
-const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
+const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
+const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
 const { registerPositionsIpcHandlers, createPositionsChangedPublisher } = require('../app/infrastructure/positions');
 
 async function run() {
   const positions = createPositionApplicationService({
     clock: () => 100,
-    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()])
+    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()]),
+    openingPolicyRegistry: createOpeningPolicyRegistry([
+      { kind: 'levelOrder', factory: createLevelOrderOpeningPolicy }
+    ])
   });
   const createCommand = legacyRowToCreateCommand({
     ticker: 'ADAUSDT',

@@ -68,43 +68,12 @@ class PendingOpeningPolicy extends OpeningPolicy {
   }
 }
 
-class LevelOrderOpeningPolicy extends OpeningPolicy {
-  constructor(config = {}) {
-    super('levelOrder', config);
-  }
-
-  buildOpenRequest(position, command = {}) {
-    const children = Array.isArray(command.children)
-      ? clone(command.children)
-      : Array.isArray(this.config.children)
-        ? clone(this.config.children)
-        : [];
-    const payload = clone(command.payload || position.executionIntent || position.source) || {};
-    return {
-      events: [{
-        type: PositionEvent.LEVEL_CHILDREN_REQUESTED,
-        positionId: position.id,
-        provider: position.provider,
-        expectedChildren: children.length,
-        payload,
-        children
-      }],
-      integrationCommands: [{
-        type: IntegrationCommand.PLACE_LEVEL_CHILDREN,
-        positionId: position.id,
-        provider: position.provider,
-        payload,
-        children
-      }]
-    };
-  }
-}
-
-function createOpeningPolicy(spec = {}) {
+function createOpeningPolicy(spec = {}, opts = {}) {
   if (spec instanceof OpeningPolicy) return spec;
+  const extensionPolicy = opts.openingPolicyRegistry?.create?.(spec);
+  if (extensionPolicy) return extensionPolicy;
   const kind = String(spec.kind || spec.type || 'regular');
   const config = spec.config || spec;
-  if (kind === 'levelOrder') return new LevelOrderOpeningPolicy(config);
   if (kind === 'pending' || kind === 'consolidation' || kind === 'falseBreak' || kind === 'limitByCurrent') {
     return new PendingOpeningPolicy({ ...config, strategy: config.strategy || (kind === 'pending' ? undefined : kind) });
   }
@@ -154,7 +123,6 @@ module.exports = {
   OpeningPolicy,
   RegularOpeningPolicy,
   PendingOpeningPolicy,
-  LevelOrderOpeningPolicy,
   ClosingPolicy,
   createOpeningPolicy,
   createClosingPolicy

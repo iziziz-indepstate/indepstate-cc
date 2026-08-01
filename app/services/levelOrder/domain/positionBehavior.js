@@ -1,9 +1,9 @@
-const { PositionState, PositionEvent } = require('../../domain/positions/types');
+const { PositionState, PositionEvent } = require('../../../domain/positions/types');
 const {
   isActionableState,
   lifecycleActions,
   pick
-} = require('../../domain/positions/cardMetadata');
+} = require('../../../domain/positions/cardMetadata');
 
 const LEVEL_ORDER_ACTIONS = Object.freeze([
   { id: 'LB', label: 'LB', command: 'position.levelOrder.buy', style: 'bl' },

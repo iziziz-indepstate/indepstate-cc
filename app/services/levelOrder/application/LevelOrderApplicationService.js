@@ -1,7 +1,7 @@
 const { detectInstrumentType } = require('../../instruments');
 const { PositionCommand } = require('../../../domain/positions');
-const { calculateLimitBidTradePlan } = require('../strategy');
-const { collectRetryStopEntries, getRetryStopParentIds } = require('../retryStop');
+const { calculateLimitBidTradePlan } = require('../domain/strategy');
+const { collectRetryStopEntries, getRetryStopParentIds } = require('../domain/retryStop');
 const { generateCid } = require('../../../application/execution/orderPayload');
 const {
   buildLevelOrderIntentKey,

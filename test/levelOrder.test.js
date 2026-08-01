@@ -5,7 +5,7 @@ const {
   splitQuantity,
   roundQtyToStep,
   calculateLimitBidTradePlan
-} = require('../app/services/levelOrder/strategy');
+} = require('../app/services/levelOrder/domain/strategy');
 
 const orderCalculator = {
   qty({ riskUsd, stopPts, tickSize, instrumentType }) {

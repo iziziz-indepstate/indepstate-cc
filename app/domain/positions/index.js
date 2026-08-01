@@ -3,6 +3,7 @@ const types = require('./types');
 const policies = require('./policies');
 const cardMetadata = require('./cardMetadata');
 const behaviorRegistry = require('./behaviorRegistry');
+const openingPolicyRegistry = require('./openingPolicyRegistry');
 
 module.exports = {
   PositionAggregate,
@@ -10,5 +11,6 @@ module.exports = {
   ...types,
   ...policies,
   ...cardMetadata,
-  ...behaviorRegistry
+  ...behaviorRegistry,
+  ...openingPolicyRegistry
 };

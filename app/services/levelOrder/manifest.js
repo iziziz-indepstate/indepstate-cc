@@ -2,7 +2,8 @@ const path = require('path');
 const settings = require('../settings');
 const { LevelOrderCommand, LevelOrderPlaceCommand } = require('./command');
 const { createLevelOrderExecutionController } = require('./application');
-const { createLevelOrderPositionBehavior } = require('./positionBehavior');
+const { createLevelOrderPositionBehavior } = require('./domain/positionBehavior');
+const { createLevelOrderOpeningPolicy } = require('./domain/openingPolicy');
 
 settings.register(
   'level-order',
@@ -14,6 +15,7 @@ function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
   if (!Array.isArray(servicesApi.executionCardControllers)) servicesApi.executionCardControllers = [];
   servicesApi.positions?.registerBehavior?.(createLevelOrderPositionBehavior());
+  servicesApi.positions?.registerOpeningPolicy?.('levelOrder', createLevelOrderOpeningPolicy);
   const resolvers = new Map();
   servicesApi.levelOrder = {
     registerLevelResolver(name, fn) {

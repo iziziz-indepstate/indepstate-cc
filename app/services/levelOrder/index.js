@@ -1,6 +1,7 @@
 module.exports = {
   ...require('./command'),
-  ...require('./strategy'),
+  ...require('./domain/strategy'),
   ...require('./application'),
-  ...require('./positionBehavior')
+  ...require('./domain/positionBehavior'),
+  ...require('./domain/openingPolicy')
 };

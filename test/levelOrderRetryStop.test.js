@@ -3,7 +3,7 @@ const {
   levelOrderRetryStopMatches,
   collectRetryStopEntries,
   getRetryStopParentIds
-} = require('../app/services/levelOrder/retryStop');
+} = require('../app/services/levelOrder/domain/retryStop');
 
 const pendingIndex = new Map([
   ['cid-1', {

@@ -6,12 +6,13 @@ const {
   PositionEvent,
   IntegrationCommand,
   RegularOpeningPolicy,
-  LevelOrderOpeningPolicy,
   PendingOpeningPolicy,
   createPositionBehaviorRegistry,
+  createOpeningPolicyRegistry,
   derivePositionCard
 } = require('../app/domain/positions');
-const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
+const { LevelOrderOpeningPolicy, createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
 const {
   createPositionApplicationService,
   legacyOrderPayloadToCreateCommand,
@@ -26,10 +27,15 @@ function levelOrderBehaviorRegistry() {
   return createPositionBehaviorRegistry([createLevelOrderPositionBehavior()]);
 }
 
+function levelOrderOpeningPolicyRegistry() {
+  return createOpeningPolicyRegistry([{ kind: 'levelOrder', factory: createLevelOrderOpeningPolicy }]);
+}
+
 function createPositionsWithLevelOrder(opts = {}) {
   return createPositionApplicationService({
     ...opts,
-    behaviorRegistry: opts.behaviorRegistry || levelOrderBehaviorRegistry()
+    behaviorRegistry: opts.behaviorRegistry || levelOrderBehaviorRegistry(),
+    openingPolicyRegistry: opts.openingPolicyRegistry || levelOrderOpeningPolicyRegistry()
   });
 }
 
