@@ -31,8 +31,7 @@ const {
 } = require('./infrastructure/positions');
 const {
   createLevelOrderApplicationService,
-  createLevelOrderRuntime,
-  levelOrderChildCid
+  createLevelOrderRuntime
 } = require('./services/levelOrder');
 const {
   registerOrderListIpcHandlers,
@@ -142,6 +141,9 @@ const levelOrderRuntime = createLevelOrderRuntime({
   nowTs,
   sendToRenderer
 });
+for (const controller of servicesApi.executionCardControllers || []) {
+  controller?.configureLifecycle?.({ levelOrderPositionMonitors });
+}
 
 const adapterLifecycleBridge = createAdapterLifecycleBridge({
   servicesApi,
@@ -157,8 +159,7 @@ const adapterLifecycleBridge = createAdapterLifecycleBridge({
   confirmedOrderByTicket,
   confirmedOrderByCid,
   groupedOrderLifecycles,
-  levelOrderPositionMonitors,
-  levelOrderChildCid
+  cardControllers: servicesApi.executionCardControllers
 });
 
 function wireAdapter(adapter, providerName) {

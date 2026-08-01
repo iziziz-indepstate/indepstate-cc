@@ -271,7 +271,7 @@ class ExecutionApplicationService {
         : { status: result?.status || 'rejected', provider: execRecord.provider, providerOrderId: result?.providerOrderId, reason: result?.reason, cid };
       this.events?.emit('order:placed', { order: execOrder, result: lifecycleResult });
       if (!tracksStandalonePosition) {
-        // Level-order child orders are represented by their parent Position card.
+        // Extension child orders can be represented by their parent Position card.
       } else if (result?.status === 'ok' || result?.status === 'simulated') {
         this.positions?.recordPlaced?.({
           positionId: execOrder.meta?.positionId,

@@ -17,8 +17,7 @@ function createAdapterLifecycleBridge({
   confirmedOrderByTicket,
   confirmedOrderByCid,
   groupedOrderLifecycles,
-  levelOrderPositionMonitors,
-  levelOrderChildCid,
+  cardControllers,
   extractCid = defaultExtractCid
 } = {}) {
   if (!pendingIndex || !trackerPending || !trackerIndex) {
@@ -29,6 +28,20 @@ function createAdapterLifecycleBridge({
     const mainWindow = getMainWindow();
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, payload);
+    }
+  }
+
+  const lifecycleControllers = Array.isArray(cardControllers) ? cardControllers.filter(Boolean) : [];
+
+  function notifyControllers(method, context) {
+    for (const controller of lifecycleControllers) {
+      const fn = controller?.[method];
+      if (typeof fn !== 'function') continue;
+      try {
+        fn.call(controller, context);
+      } catch (err) {
+        console.warn(`[execution] ${controller.id || 'card controller'} ${method} failed:`, err?.message || String(err));
+      }
     }
   }
 
@@ -75,11 +88,15 @@ function createAdapterLifecycleBridge({
       };
       servicesApi?.positions?.recordPlaced?.(childMeta);
       const parentRequestId = rec.order?.meta?.parentRequestId;
-      const monitor = parentRequestId ? levelOrderPositionMonitors?.get(parentRequestId) : null;
-      if (monitor && normalizedTicket) {
-        const child = monitor.children.find(item => item.requestId === rec.reqId || levelOrderChildCid?.(item) === String(pendingId));
-        if (child) child.providerOrderId = normalizedTicket;
-      }
+      notifyControllers('onOrderConfirmed', {
+        pendingId,
+        ticket: normalizedTicket,
+        mtOrder,
+        rec,
+        providerName,
+        payload,
+        childMeta
+      });
       if (parentRequestId && normalizedTicket) {
         groupedOrderLifecycles?.registerTicket(parentRequestId, {
           provider: providerName,

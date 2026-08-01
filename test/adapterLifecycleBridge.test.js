@@ -6,6 +6,7 @@ const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require(
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
 const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+const { createLevelOrderExecutionController } = require('../app/services/levelOrder');
 
 registerLegacyPositionGuard(createLevelOrderLegacyGuard());
 
@@ -36,6 +37,7 @@ function run() {
   const sent = [];
   const busEvents = [];
   const eventBus = { emit: (name, payload) => busEvents.push({ name, payload }) };
+  const controllerCalls = [];
   const positions = createPositionApplicationService({ eventBus, clock: () => 100 });
   const createCommand = legacyOrderPayloadToCreateCommand({
     symbol: 'AAPL',
@@ -73,7 +75,10 @@ function run() {
       markOpened() {},
       removeTicket() {}
     },
-    levelOrderPositionMonitors: new Map()
+    cardControllers: [{
+      id: 'testController',
+      onOrderConfirmed: (context) => controllerCalls.push(context)
+    }]
   });
 
   bridge.wireAdapter(adapter, 'simulated');
@@ -81,6 +86,9 @@ function run() {
   assert.strictEqual(pendingIndex.has('cidbridge01'), false);
   assert(sent.some(item => item.channel === 'execution:result' && item.payload.providerOrderId === 'T-bridge'));
   assert(busEvents.some(item => item.name === 'order:confirmed'));
+  assert.strictEqual(controllerCalls.length, 1);
+  assert.strictEqual(controllerCalls[0].pendingId, 'cidbridge01');
+  assert.strictEqual(controllerCalls[0].ticket, 'T-bridge');
 
   adapter.emit('position:opened', { ticket: 'T-bridge', order: { symbol: 'AAPL', comment: 'cid:cidbridge01' } });
   const snapshot = positions.snapshot().positions[0];
@@ -123,6 +131,10 @@ function run() {
       }
     }]
   ]);
+  const levelOrderPositionMonitors = new Map([[
+    'level-parent',
+    { children: [{ requestId: 'level-parent_1', result: { providerOrderId: 'pending:cidlevel01' } }] }
+  ]]);
   const levelBridge = createAdapterLifecycleBridge({
     servicesApi: { positions: levelPositions },
     events: eventBus,
@@ -139,7 +151,9 @@ function run() {
       markOpened() {},
       removeTicket() {}
     },
-    levelOrderPositionMonitors: new Map()
+    cardControllers: [
+      createLevelOrderExecutionController({ levelOrderPositionMonitors })
+    ]
   });
   levelBridge.wireAdapter(levelAdapter, 'simulated');
   levelAdapter.emit('order:confirmed', { pendingId: 'cidlevel01', ticket: 'T-level', mtOrder: { comment: 'cid:cidlevel01' } });
@@ -148,6 +162,7 @@ function run() {
   assert.strictEqual(levelSnapshot.expectedChildren, 1);
   assert.strictEqual(levelSnapshot.children[0].requestId, 'level-parent_1');
   assert.strictEqual(levelSnapshot.children[0].ticket, 'T-level');
+  assert.strictEqual(levelOrderPositionMonitors.get('level-parent').children[0].providerOrderId, 'T-level');
 
   levelAdapter.emit('position:opened', { ticket: 'T-level', order: { symbol: 'ES', comment: 'cid:cidlevel01' } });
   levelSnapshot = levelPositions.snapshot().positions[0];
@@ -228,8 +243,7 @@ function run() {
       registerTicket() {},
       markOpened() {},
       removeTicket() {}
-    },
-    levelOrderPositionMonitors: new Map()
+    }
   });
   rejectedBridge.wireAdapter(rejectedAdapter, 'mt5-gerchikco-dwx');
   rejectedAdapter.emit('order:rejected', {
