@@ -6,6 +6,7 @@ const {
   createPositionBehaviorRegistry,
   createOpeningPolicyRegistry
 } = require('../../domain/positions');
+const { registerLegacyPositionGuard } = require('./legacy');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -120,6 +121,10 @@ class PositionApplicationService {
 
   registerOpeningPolicy(kind, factory) {
     return this.openingPolicyRegistry.register(kind, factory);
+  }
+
+  registerLegacyGuard(guard) {
+    return registerLegacyPositionGuard(guard);
   }
 
   handle(command = {}) {

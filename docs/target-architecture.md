@@ -87,17 +87,19 @@ app/services/levelOrder/
     LevelOrderApplicationService.js
     levelOrderRuntime.js
   domain/
-    LevelOrderOpeningPolicy.js
+    openingPolicy.js
   infrastructure/
     providerBridge.js
   interfaces/
-    cardRenderer.js
-  renderer.js
+    renderer/
+      renderer.js
 ```
 
-The exact files can evolve, but the dependency direction should not. During the renderer migration, service-local renderer modules such as `app/services/levelOrder/renderer.js` are the home for extension-specific card rendering and action mapping; the top-level renderer composes them through registries populated from service manifests.
+The exact files can evolve, but the dependency direction should not. During the renderer migration, service-local renderer modules such as `app/services/levelOrder/infrastructure/renderer/renderer.js` are the home for extension-specific card rendering and action mapping; the top-level renderer composes them through registries populated from service manifests.
 
 Generic services are open for extension through composition. A card type that needs special execution behavior should provide a small service-local controller/policy and register it from its manifest. `main.js` should inject the accumulated controller registry into the generic application service. The generic execution service should ask those controllers for decisions instead of branching on `card.type`, strategy names, or service-specific metadata.
+
+During migration, an extension may also expose a temporary `legacyGuard.js` to describe compatibility filters for legacy rows, events, or payload-to-policy mapping. These guards are transitional only: once the extension no longer depends on legacy renderer rows/events, every `legacyGuard.js` should be deleted rather than treated as a permanent extension API.
 
 ## Target LevelOrder Flow
 

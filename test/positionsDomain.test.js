@@ -16,8 +16,12 @@ const { LevelOrderOpeningPolicy, createLevelOrderOpeningPolicy } = require('../a
 const {
   createPositionApplicationService,
   legacyOrderPayloadToCreateCommand,
-  legacyRowToCreateCommand
+  legacyRowToCreateCommand,
+  registerLegacyPositionGuard
 } = require('../app/application/positions');
+const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+
+registerLegacyPositionGuard(createLevelOrderLegacyGuard());
 
 function eventTypes(result) {
   return (result.events || []).map(event => event.type);

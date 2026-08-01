@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const { PositionCommand } = require('../../domain/positions');
 
+const legacyPositionGuards = [];
+
 function hashId(prefix, value) {
   const text = JSON.stringify(value || {});
   return `${prefix}_${crypto.createHash('sha1').update(text).digest('hex').slice(0, 16)}`;
@@ -8,6 +10,15 @@ function hashId(prefix, value) {
 
 function normalizeProvider(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function registerLegacyPositionGuard(guard = {}) {
+  if (!guard || typeof guard !== 'object') return false;
+  legacyPositionGuards.push(guard);
+  return () => {
+    const idx = legacyPositionGuards.indexOf(guard);
+    if (idx >= 0) legacyPositionGuards.splice(idx, 1);
+  };
 }
 
 function legacyRowToCreateCommand(row = {}) {
@@ -25,7 +36,7 @@ function legacyRowToCreateCommand(row = {}) {
     side: row.side || row.kind || '',
     cardType,
     card: {
-      type: cardType === 'levelOrder' ? 'levelOrder' : cardType,
+      type: cardType,
       actions: row.cardActions || row.actions
     },
     openingPolicy: openingPolicyForLegacy(row),
@@ -68,9 +79,9 @@ function legacyOrderPayloadToOpenCommand(payload = {}, positionId) {
 }
 
 function openingPolicyForLegacy(value = {}) {
-  const cardType = String(value.cardType || '').trim();
-  if (cardType === 'levelOrder' || value.meta?.strategy === 'limitBidTrade') {
-    return { kind: 'levelOrder', config: { strategy: value.meta?.strategy || 'limitBidTrade' } };
+  for (const guard of legacyPositionGuards) {
+    const policy = guard.openingPolicyForLegacy?.(value);
+    if (policy) return policy;
   }
   const strategy = value.strategy || value.meta?.strategy;
   if (strategy && ['consolidation', 'falseBreak', 'limitByCurrent'].includes(String(strategy))) {
@@ -113,6 +124,7 @@ function providerCancelledToCommand(event = {}, positionId) {
 }
 
 module.exports = {
+  registerLegacyPositionGuard,
   legacyRowToCreateCommand,
   legacyOrderPayloadToCreateCommand,
   legacyOrderPayloadToOpenCommand,

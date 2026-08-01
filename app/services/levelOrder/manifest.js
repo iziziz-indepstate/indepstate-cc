@@ -4,6 +4,7 @@ const { LevelOrderCommand, LevelOrderPlaceCommand } = require('./command');
 const { createLevelOrderExecutionController } = require('./application');
 const { createLevelOrderPositionBehavior } = require('./domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('./domain/openingPolicy');
+const { createLevelOrderLegacyGuard } = require('./legacyGuard');
 
 settings.register(
   'level-order',
@@ -16,6 +17,7 @@ function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.executionCardControllers)) servicesApi.executionCardControllers = [];
   servicesApi.positions?.registerBehavior?.(createLevelOrderPositionBehavior());
   servicesApi.positions?.registerOpeningPolicy?.('levelOrder', createLevelOrderOpeningPolicy);
+  servicesApi.positions?.registerLegacyGuard?.(createLevelOrderLegacyGuard());
   const resolvers = new Map();
   servicesApi.levelOrder = {
     registerLevelResolver(name, fn) {
@@ -87,4 +89,6 @@ const rendererPositionHandlers = [{
   }
 }];
 
-module.exports = { initService, rendererPositionHandlers };
+const rendererLegacyGuards = [createLevelOrderLegacyGuard()];
+
+module.exports = { initService, rendererPositionHandlers, rendererLegacyGuards };

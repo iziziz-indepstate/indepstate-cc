@@ -1,9 +1,12 @@
 const assert = require('assert');
 const { createLevelOrderApplicationService, createLevelOrderRuntime } = require('../app/services/levelOrder');
-const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
+const { createPositionApplicationService, legacyRowToCreateCommand, registerLegacyPositionGuard } = require('../app/application/positions');
 const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
+const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+
+registerLegacyPositionGuard(createLevelOrderLegacyGuard());
 
 async function run() {
   const logs = [];

@@ -12,42 +12,10 @@ function createPositionsRenderer({
 } = {}) {
   const positionsById = new Map();
 
-  function normalizePositionSnapshot(position) {
-    if (position?.card?.type !== 'levelOrder') return position;
-    const hasOpenedAt = Boolean(position.timestamps?.openedAt || position.openedAt);
-    if (position.state !== 'closed' || hasOpenedAt) return position;
-    const normalized = {
-      ...position,
-      state: 'draft',
-      primaryTicket: '',
-      tickets: [],
-      children: [],
-      expectedChildren: 0,
-      pnlSnapshot: { status: 'unavailable' },
-      card: {
-        ...(position.card || {}),
-        actions: [
-          { id: 'LB', label: 'LB', command: 'position.levelOrder.buy', style: 'bl' },
-          { id: 'LS', label: 'LS', command: 'position.levelOrder.sell', style: 'sl' }
-        ],
-        data: {
-          ...(position.card?.data || {}),
-          state: 'draft',
-          children: [],
-          expectedChildren: 0,
-          tickets: [],
-          pnl: { status: 'unavailable' }
-        }
-      }
-    };
-    return normalized;
-  }
-
   function setPositionSnapshot(position) {
     if (!position || !position.id) return false;
-    const normalized = normalizePositionSnapshot(position);
-    positionsById.set(String(position.id), normalized);
-    if (typeof onPositionSnapshot === 'function') onPositionSnapshot(normalized);
+    positionsById.set(String(position.id), position);
+    if (typeof onPositionSnapshot === 'function') onPositionSnapshot(position);
     return true;
   }
 
@@ -130,7 +98,6 @@ function createPositionsRenderer({
     positionsById,
     setPositionSnapshot,
     removePositionSnapshot,
-    normalizePositionSnapshot,
     renderRegularPositionCard,
     createPositionSnapshotCard,
     mount

@@ -236,8 +236,8 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 0));
   const preOpenCard = document.querySelector('.position-card[data-position-id="pos-preopen-closed"]');
   assert(preOpenCard);
-  assert.deepStrictEqual(Array.from(preOpenCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['LB', 'LS']);
-  assert.strictEqual(t.positionsById.get('pos-preopen-closed').state, 'draft');
+  assert.deepStrictEqual(Array.from(preOpenCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['archive']);
+  assert.strictEqual(t.positionsById.get('pos-preopen-closed').state, 'closed');
   assert.strictEqual(t.cardStates.has('position|pos-preopen-closed'), false);
 
   calls.length = 0;

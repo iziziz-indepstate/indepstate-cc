@@ -1,10 +1,13 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const { createAdapterLifecycleBridge } = require('../app/application/execution');
-const { createPositionApplicationService, legacyOrderPayloadToCreateCommand } = require('../app/application/positions');
+const { createPositionApplicationService, legacyOrderPayloadToCreateCommand, registerLegacyPositionGuard } = require('../app/application/positions');
 const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
+const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+
+registerLegacyPositionGuard(createLevelOrderLegacyGuard());
 
 function createPositionsWithLevelOrder(opts = {}) {
   return createPositionApplicationService({

@@ -717,8 +717,8 @@ function render() {
   const positions = Array.from(positionsById.values());
   positions.sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0));
   for (const position of positions) {
-    if (levelOrderRenderer.isLevelOrderChildPosition(position)) continue;
-    if (position.card?.type !== 'levelOrder' && isPositionRenderedByLegacyRow(position)) continue;
+    if (shouldHidePositionSnapshot(position)) continue;
+    if (!shouldUseSnapshotInsteadOfLegacyRows(position) && isPositionRenderedByLegacyRow(position)) continue;
     const key = positionKey(position);
     const card = createPositionSnapshotCard(position);
     $grid.appendChild(card);
@@ -1060,6 +1060,40 @@ const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDis
 const positionActionHandlers = {};
 const positionCardRenderers = {};
 const positionRemovalHandlers = {};
+const rendererLegacyGuards = [];
+
+function registerRendererLegacyGuard(guard = {}) {
+  if (!guard || typeof guard !== 'object') return false;
+  rendererLegacyGuards.push(guard);
+  return () => {
+    const idx = rendererLegacyGuards.indexOf(guard);
+    if (idx >= 0) rendererLegacyGuards.splice(idx, 1);
+  };
+}
+
+function shouldFilterLegacyRow(row = {}) {
+  return rendererLegacyGuards.some(guard => {
+    if (guard.shouldFilterRow?.(row)) return true;
+    const types = Array.isArray(guard.filteredRowTypes) ? guard.filteredRowTypes : [];
+    return types.map(String).includes(String(row?.cardType || ''));
+  });
+}
+
+function shouldIgnoreLegacyExecutionEvent(rec = {}) {
+  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec));
+}
+
+function shouldIgnoreLegacyPositionEvent(rec = {}) {
+  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec));
+}
+
+function shouldHidePositionSnapshot(position = {}) {
+  return rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position));
+}
+
+function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
+  return shouldFilterLegacyRow({ cardType: position.card?.type || position.source?.cardType });
+}
 
 loadRendererPositionHandlers({
   levelOrderRenderer,
@@ -1077,8 +1111,18 @@ loadRendererPositionHandlers({
   },
   registerPositionRemovalHandler(cardType, handler) {
     if (cardType && typeof handler === 'function') positionRemovalHandlers[cardType] = handler;
-  }
+  },
+  registerRendererLegacyGuard
 });
+
+for (const { dir, manifest } of loadRendererServiceManifests()) {
+  try {
+    const guards = Array.isArray(manifest?.rendererLegacyGuards) ? manifest.rendererLegacyGuards : [];
+    for (const guard of guards) registerRendererLegacyGuard(guard);
+  } catch (err) {
+    console.error('[rendererServiceLoader] Failed to load legacy guards', dir, err.message);
+  }
+}
 
 const positionsRenderer = createPositionsRenderer({
   ipcRenderer,
@@ -1091,7 +1135,7 @@ const positionsRenderer = createPositionsRenderer({
   positionCardRenderers,
   onPositionRemoved: removeLegacyRowsForPosition,
   onPositionSnapshot(position = {}) {
-    if (position.card?.type !== 'levelOrder') return;
+    if (!shouldUseSnapshotInsteadOfLegacyRows(position)) return;
     const key = positionKey(position);
     cardStates.delete(key);
     pendingExecLabels.delete(key);
@@ -1213,7 +1257,7 @@ function cleanupRemovedRow(row, key = rowKey(row)) {
 
 function removeLegacyRowsForPosition(position = {}) {
   const removedByService = positionRemovalHandlers[position.card?.type]?.(position) === true;
-  const matches = state.rows.filter(row => row.cardType === 'levelOrder' && positionMatchesLegacyRow(position, row));
+  const matches = state.rows.filter(row => shouldFilterLegacyRow(row) && positionMatchesLegacyRow(position, row));
   if (matches.length === 0) return removedByService;
   const keys = new Set(matches.map(row => rowKey(row)));
   state.rows = state.rows.filter(row => !keys.has(rowKey(row)));
@@ -1245,7 +1289,7 @@ function scheduleInstantExecution(row) {
 
 // ======= IPC wiring =======
 ipcRenderer.invoke('orders:list', 100).then(rows => {
-  state.rows = Array.isArray(rows) ? rows.filter(row => row?.cardType !== 'levelOrder') : [];
+  state.rows = Array.isArray(rows) ? rows.filter(row => !shouldFilterLegacyRow(row)) : [];
   render();
 }).catch(() => {
 });
@@ -1259,7 +1303,7 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
 
   let key = pendingByReqId.get(reqId);
   if (!key) key = findKeyByTicker(rec?.order?.symbol || rec?.order?.ticker);
-  if (rec?.parentRequestId || rec?.order?.meta?.parentRequestId) return;
+  if (shouldIgnoreLegacyExecutionEvent(rec)) return;
   if (!key) return;
 
   pendingByReqId.set(reqId, key);
@@ -1369,7 +1413,7 @@ ipcRenderer.on('orders:remove', (_evt, filter) => {
 
 // Обновлённая логика получения ивента
 ipcRenderer.on('orders:new', (_evt, row) => {
-  if (row?.cardType === 'levelOrder') return;
+  if (shouldFilterLegacyRow(row)) return;
   // ищем существующую карточку по ТИКЕРУ
   let idx;
   if (row.instrumentType === 'OPT') {
@@ -1437,7 +1481,7 @@ ipcRenderer.on('orders:new', (_evt, row) => {
 ipcRenderer.on('execution:result', (_evt, rec) => {
   const reqId = rec?.order?.meta?.requestId || rec?.reqId;
   if (!reqId) return;
-  if (rec?.parentRequestId || rec?.order?.meta?.parentRequestId) return;
+  if (shouldIgnoreLegacyExecutionEvent(rec)) return;
   const key = pendingByReqId.get(reqId);
   if (!key) return;
 
@@ -1495,7 +1539,7 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
 });
 
 ipcRenderer.on('position:opened', (_evt, rec) => {
-  if (rec?.origOrder?.meta?.parentRequestId) return;
+  if (shouldIgnoreLegacyPositionEvent(rec)) return;
   const ticket = String(rec.ticket);
   let key = ticketToKey.get(ticket);
   if (!key) {
@@ -1513,7 +1557,7 @@ ipcRenderer.on('position:opened', (_evt, rec) => {
 });
 
 ipcRenderer.on('position:closed', (_evt, rec) => {
-  if (rec?.origOrder?.meta?.parentRequestId) return;
+  if (shouldIgnoreLegacyPositionEvent(rec)) return;
   const ticket = String(rec.ticket);
   const key = ticketToKey.get(ticket);
   if (!key) return;
@@ -1527,6 +1571,7 @@ ipcRenderer.on('position:closed', (_evt, rec) => {
 });
 
 ipcRenderer.on('order:cancelled', (_evt, rec) => {
+  if (shouldIgnoreLegacyPositionEvent(rec)) return;
   const ticket = String(rec.ticket);
   const key = ticketToKey.get(ticket);
   if (key) {
