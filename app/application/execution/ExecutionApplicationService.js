@@ -27,7 +27,8 @@ class ExecutionApplicationService {
     pendingIndex,
     resolveOrderProviderName,
     resolveProviderName,
-    providerCanResolveRiskQty
+    providerCanResolveRiskQty,
+    cardControllers
   } = {}) {
     this.getAdapter = getAdapter;
     this.wireAdapter = wireAdapter;
@@ -46,6 +47,7 @@ class ExecutionApplicationService {
     this.resolveOrderProviderName = resolveOrderProviderName;
     this.resolveProviderName = resolveProviderName;
     this.providerCanResolveRiskQty = providerCanResolveRiskQty;
+    this.cardControllers = Array.isArray(cardControllers) ? cardControllers.filter(Boolean) : [];
   }
 
   pickProviderName(instrumentType) {
@@ -65,6 +67,7 @@ class ExecutionApplicationService {
     const providerName = this.resolveOrderProviderName(order);
     let execOrder;
     let cid = '';
+    let tracksStandalonePosition = true;
     try {
       const ts = this.nowTs();
       const reqId = order?.meta?.requestId || `${ts}_${Math.random().toString(36).slice(2, 8)}`;
@@ -88,12 +91,15 @@ class ExecutionApplicationService {
       execOrder.comment = ensureCommentHasCid(execOrder.comment, cid);
       if (!execOrder.meta) execOrder.meta = {};
       execOrder.meta.cid = cid;
-      try {
-        const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
-        execOrder.meta.positionId = createCommand.positionId;
-        this.positions?.createAndOpen?.(createCommand);
-      } catch (err) {
-        console.warn('[positions] failed to record open request:', err?.message || String(err));
+      tracksStandalonePosition = this.shouldTrackStandalonePosition(execOrder, { providerName });
+      if (tracksStandalonePosition) {
+        try {
+          const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
+          execOrder.meta.positionId = createCommand.positionId;
+          this.positions?.createAndOpen?.(createCommand);
+        } catch (err) {
+          console.warn('[positions] failed to record open request:', err?.message || String(err));
+        }
       }
 
       const logOrder = {
@@ -186,14 +192,16 @@ class ExecutionApplicationService {
       if (maybePending.startsWith('pending:')) {
         const pendingId = normalizeCid(maybePending) || cid;
         this.pendingIndex.set(pendingId, { reqId, adapter, providerName, order: execOrder, ts, cid: pendingId });
-        this.positions?.recordPlaced?.({
-          positionId: execOrder.meta?.positionId,
-          requestId: reqId,
-          providerOrderId: result.providerOrderId,
-          provider: providerName,
-          result,
-          payload: execOrder
-        });
+        if (tracksStandalonePosition) {
+          this.positions?.recordPlaced?.({
+            positionId: execOrder.meta?.positionId,
+            requestId: reqId,
+            providerOrderId: result.providerOrderId,
+            provider: providerName,
+            result,
+            payload: execOrder
+          });
+        }
 
         this.#append({
           t: ts,
@@ -262,7 +270,9 @@ class ExecutionApplicationService {
         ? { ...result, provider: execRecord.provider, cid }
         : { status: result?.status || 'rejected', provider: execRecord.provider, providerOrderId: result?.providerOrderId, reason: result?.reason, cid };
       this.events?.emit('order:placed', { order: execOrder, result: lifecycleResult });
-      if (result?.status === 'ok' || result?.status === 'simulated') {
+      if (!tracksStandalonePosition) {
+        // Level-order child orders are represented by their parent Position card.
+      } else if (result?.status === 'ok' || result?.status === 'simulated') {
         this.positions?.recordPlaced?.({
           positionId: execOrder.meta?.positionId,
           requestId: reqId,
@@ -300,14 +310,25 @@ class ExecutionApplicationService {
       this.trackerPending.delete(order?.meta?.requestId);
       console.log('[EXEC][ERR]', { provider: providerName, reqId: order?.meta?.requestId, cid: errorCid || undefined, error: String(err) });
       this.events?.emit('order:placed', { order: execOrder, result: { status: 'rejected', provider: providerName, reason: rej.reason, cid: errorCid || undefined } });
-      this.positions?.recordFailed?.({
-        positionId: execOrder?.meta?.positionId,
-        requestId: order?.meta?.requestId,
-        provider: providerName,
-        reason: rej.reason
-      });
+      if (tracksStandalonePosition) {
+        this.positions?.recordFailed?.({
+          positionId: execOrder?.meta?.positionId,
+          requestId: order?.meta?.requestId,
+          provider: providerName,
+          reason: rej.reason
+        });
+      }
       return rej;
     }
+  }
+
+  shouldTrackStandalonePosition(order, context = {}) {
+    for (const controller of this.cardControllers) {
+      if (typeof controller.shouldTrackStandalonePosition !== 'function') continue;
+      const decision = controller.shouldTrackStandalonePosition(order, context);
+      if (typeof decision === 'boolean') return decision;
+    }
+    return true;
   }
 
   #append(record) {

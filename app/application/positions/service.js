@@ -28,6 +28,10 @@ class InMemoryPositionRepository {
     return snapshot;
   }
 
+  delete(id) {
+    return this.positions.delete(id);
+  }
+
   findByTicket(ticket, provider) {
     const normalizedTicket = String(ticket || '').trim();
     const normalizedProvider = String(provider || '').trim().toLowerCase();
@@ -83,7 +87,18 @@ class PositionApplicationService {
     const result = aggregate.handle(normalized);
     const snapshot = this.repository.save(aggregate);
     this.#publish(result.events, result.integrationCommands, snapshot);
+    if ((result.events || []).some(event => event.type === PositionEvent.REMOVED)) {
+      this.repository.delete(snapshot.id);
+    }
     return { ok: true, position: snapshot, events: result.events, integrationCommands: result.integrationCommands };
+  }
+
+  remove({ positionId, id, reason } = {}) {
+    return this.handle({
+      type: PositionCommand.REMOVE,
+      positionId: positionId || id,
+      reason
+    });
   }
 
   createAndOpen(command = {}) {

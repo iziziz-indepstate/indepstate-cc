@@ -1,5 +1,6 @@
 const assert = require('assert');
 const { createExecutionApplicationService } = require('../app/application/execution');
+const { createLevelOrderExecutionController } = require('../app/services/levelOrder');
 
 async function run() {
   const logs = [];
@@ -43,7 +44,10 @@ async function run() {
     pendingIndex,
     resolveOrderProviderName: () => 'simulated',
     resolveProviderName: () => 'simulated',
-    providerCanResolveRiskQty: () => false
+    providerCanResolveRiskQty: () => false,
+    cardControllers: [
+      createLevelOrderExecutionController()
+    ]
   });
 
   const ok = await service.queuePlaceOrder({
@@ -90,6 +94,30 @@ async function run() {
   assert.strictEqual(pending.providerOrderId, 'pending:cid-3');
   assert.strictEqual(pendingIndex.has('cid-3'), true);
   assert.strictEqual(renderer.some(item => item.channel === 'execution:pending' && item.payload.pendingId === 'cid-3'), true);
+
+  positionCalls.length = 0;
+  placedOrders.length = 0;
+  placeResult = { status: 'ok', provider: 'simulated', providerOrderId: 'ticket-level-child' };
+  const levelChild = await service.queuePlaceOrder({
+    ticker: 'ADAUSDT',
+    kind: 'BL',
+    price: 100,
+    instrumentType: 'EQ',
+    meta: {
+      requestId: 'parent-1_1',
+      parentRequestId: 'parent-1',
+      cid: 'cid-level-child',
+      qty: 1,
+      fixedQty: true,
+      strategy: 'limitBidTrade',
+      riskUsd: 10,
+      stopPts: 5
+    }
+  });
+  assert.strictEqual(levelChild.status, 'ok');
+  assert.strictEqual(placedOrders.length, 1);
+  assert.strictEqual(positionCalls.some(([name]) => name === 'createAndOpen'), false);
+  assert.strictEqual(positionCalls.some(([name]) => name === 'recordPlaced'), false);
 
   console.log('executionApplicationService tests passed');
 }

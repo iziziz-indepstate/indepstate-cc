@@ -63,6 +63,10 @@
  * @property {{configure:Function,getConfig:Function,isEnabled:Function,shouldRetry:Function}} [executionRetry]
  * @property {{configure:Function,save:Function,refreshAll:Function,closePosition:Function,trackPosition:Function,untrackPosition:Function,snapshot:Function}} [riskManager]
  * @property {{listConfigs:Function,readConfig:Function,writeConfig:Function,saveAndApplyConfig:Function,getRestartStatus:Function,onApply:Function}} [settings]
+ * @property {Array<any>} [executionCardControllers]
  */
 
-module.exports = { commands: [] };
+module.exports = {
+  commands: [],
+  executionCardControllers: []
+};

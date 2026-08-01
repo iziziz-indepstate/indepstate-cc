@@ -1,6 +1,7 @@
 const path = require('path');
 const settings = require('../settings');
 const { LevelOrderCommand, LevelOrderPlaceCommand } = require('./command');
+const { createLevelOrderExecutionController } = require('./application');
 
 settings.register(
   'level-order',
@@ -10,6 +11,7 @@ settings.register(
 
 function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
+  if (!Array.isArray(servicesApi.executionCardControllers)) servicesApi.executionCardControllers = [];
   const resolvers = new Map();
   servicesApi.levelOrder = {
     registerLevelResolver(name, fn) {
@@ -33,6 +35,52 @@ function initService(servicesApi = {}) {
     new LevelOrderPlaceCommand('LB', commandOpts),
     new LevelOrderPlaceCommand('LS', commandOpts)
   );
+  if (!servicesApi.executionCardControllers.some(controller => controller?.id === 'levelOrder')) {
+    servicesApi.executionCardControllers.push(createLevelOrderExecutionController());
+  }
 }
 
-module.exports = { initService };
+const rendererPositionHandlers = [{
+  cardType: 'levelOrder',
+  register(context = {}) {
+    const {
+      levelOrderRenderer,
+      placeLevelOrderPositionAction,
+      positionKey,
+      positionCardTitle,
+      btn,
+      dispatchPositionAction,
+      requestRemovePosition
+    } = context;
+    if (!levelOrderRenderer) return;
+
+    context.registerPositionActionHandler?.(
+      'levelOrder',
+      levelOrderRenderer.createSnapshotActionHandler({
+        placePositionAction: placeLevelOrderPositionAction
+      })
+    );
+
+    context.registerPositionCardRenderer?.('levelOrder', (position) => {
+      return levelOrderRenderer.createLevelOrderPositionCard({
+        position,
+        key: positionKey(position),
+        title: positionCardTitle(position),
+        createActionButton: ({ label, kind, className, onClick }) => {
+          const button = btn(label, className, onClick);
+          button.dataset.kind = kind;
+          return button;
+        },
+        createActionsFromSnapshot: (snapshot, action, validated) => dispatchPositionAction(snapshot, action, validated),
+        requestRemove: (snapshot) => requestRemovePosition(snapshot)
+      });
+    });
+
+    context.registerPositionRemovalHandler?.(
+      'levelOrder',
+      position => levelOrderRenderer.onPositionRemoved(position)
+    );
+  }
+}];
+
+module.exports = { initService, rendererPositionHandlers };

@@ -92,21 +92,24 @@ app/services/levelOrder/
     providerBridge.js
   interfaces/
     cardRenderer.js
+  renderer.js
 ```
 
-The exact files can evolve, but the dependency direction should not.
+The exact files can evolve, but the dependency direction should not. During the renderer migration, service-local renderer modules such as `app/services/levelOrder/renderer.js` are the home for extension-specific card rendering and action mapping; the top-level renderer composes them through registries populated from service manifests.
+
+Generic services are open for extension through composition. A card type that needs special execution behavior should provide a small service-local controller/policy and register it from its manifest. `main.js` should inject the accumulated controller registry into the generic application service. The generic execution service should ask those controllers for decisions instead of branching on `card.type`, strategy names, or service-specific metadata.
 
 ## Target LevelOrder Flow
 
 Canonical flow:
 
-1. The application starts and `main.js` composes the level-order extension factory.
+1. The application starts and service manifests register extension commands, execution controllers, and renderer handlers.
 2. A command like `levelOrder ADAUSDT ...` enters through an interface adapter.
 3. The command is routed to the level-order factory.
 4. The factory creates a new `Position` with `LevelOrderOpeningPolicy`.
 5. The position emits a `position.created` domain event.
 6. A read-model publisher exposes the position snapshot.
-7. The UI receives the snapshot and asks the card renderer registry for `card.type === "levelOrder"`.
+7. The UI receives the snapshot and asks the manifest-populated card renderer registry for `card.type === "levelOrder"`.
 8. The renderer builds a composite card from available `card.actions` and `card.data`.
 9. The user presses `LB`.
 10. The action control sends an open-level command through the bus.
@@ -125,10 +128,27 @@ The renderer should become a composite renderer:
 - Card renderer registry selects by `card.type`.
 - Data renderers select by available `card.data` keys.
 - Action renderers select by available `card.actions`.
+- Service manifests register extension-owned card/action/removal handlers into renderer registries.
 - Controls do not mutate lifecycle state locally. They send commands.
 - Renderer state can cache view details, but aggregate snapshots are the source of lifecycle truth.
 
 Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` should gradually move into application read models or infrastructure bridges.
+
+Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.
+
+## Target Execution Extension Points
+
+The generic execution application service owns shared order normalization, validation, provider selection, adapter calls, logs, and generic lifecycle events. It should not own card-specific meanings.
+
+Extension services can contribute execution controllers with narrow hooks such as:
+
+- whether an execution payload should create a standalone `Position`;
+- how child execution records relate to a parent position/card;
+- whether a provider event should be interpreted by an extension read model before generic lifecycle handling.
+
+These controllers should live under the owning service, for example `app/services/levelOrder/application`, be registered by the service manifest, and be passed into the generic execution service as an accumulated registry.
+
+Controller registration should also be manifest-owned. A service manifest should add its controllers to a shared registry, for example `servicesApi.executionCardControllers`, during `initService`. The composition root consumes that registry; it should not import each extension controller directly.
 
 ## Target Provider Boundary
 

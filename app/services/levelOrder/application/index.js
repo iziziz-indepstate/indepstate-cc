@@ -1,4 +1,5 @@
 module.exports = {
   ...require('./LevelOrderApplicationService'),
-  ...require('./levelOrderRuntime')
+  ...require('./levelOrderRuntime'),
+  ...require('./executionController')
 };

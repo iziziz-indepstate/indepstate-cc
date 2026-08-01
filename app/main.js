@@ -26,6 +26,10 @@ const {
 } = require('./application/execution');
 const { registerExecutionIpcHandlers } = require('./infrastructure/execution');
 const {
+  createPositionsChangedPublisher,
+  registerPositionsIpcHandlers
+} = require('./infrastructure/positions');
+const {
   createLevelOrderApplicationService,
   createLevelOrderRuntime,
   levelOrderChildCid
@@ -360,7 +364,8 @@ function setupIpc(orderSvc) {
     pendingIndex,
     resolveOrderProviderName: providerResolution.resolveOrderProviderName,
     resolveProviderName: providerResolution.resolveProviderName,
-    providerCanResolveRiskQty: providerResolution.providerCanResolveRiskQty
+    providerCanResolveRiskQty: providerResolution.providerCanResolveRiskQty,
+    cardControllers: servicesApi.executionCardControllers
   });
 
   servicesApi.execution = {
@@ -419,6 +424,14 @@ function setupIpc(orderSvc) {
     detectInstrumentType,
     resolveProviderName: providerResolution.resolveProviderName,
     normalizeOrderPayload
+  });
+  registerPositionsIpcHandlers({
+    ipcMain,
+    positionsService: servicesApi.positions
+  });
+  createPositionsChangedPublisher({
+    positionsService: servicesApi.positions,
+    getMainWindow: () => mainWindow
   });
   registerOrderListIpcHandlers({
     ipcMain,
