@@ -19,7 +19,6 @@ function createAdapterLifecycleBridge({
   groupedOrderLifecycles,
   levelOrderPositionMonitors,
   levelOrderChildCid,
-  emitLevelOrderPositionsReadyIfComplete,
   extractCid = defaultExtractCid
 } = {}) {
   if (!pendingIndex || !trackerPending || !trackerIndex) {
@@ -98,7 +97,6 @@ function createAdapterLifecycleBridge({
       events?.emit('order:confirmed', { pendingId, ticket: normalizedTicket, order: rec.order, mtOrder, provider: providerName });
       appendJsonl?.(execLog, { t: payload.ts, kind: 'confirm', ...payload, mtOrder });
       send('execution:result', payload);
-      if (parentRequestId) emitLevelOrderPositionsReadyIfComplete?.(parentRequestId);
       const info = trackerPending.get(rec.reqId);
       if (info) {
         const cid = extractCid(mtOrder?.comment || '');
@@ -185,7 +183,6 @@ function createAdapterLifecycleBridge({
           cid: enrichedOrigOrder?.meta?.cid,
           qty: enrichedOrigOrder?.qty ?? order?.size
         });
-        emitLevelOrderPositionsReadyIfComplete?.(parentRequestId);
       }
       send('position:opened', { ticket, order, origOrder: enrichedOrigOrder, provider: providerName });
     });

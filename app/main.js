@@ -158,8 +158,7 @@ const adapterLifecycleBridge = createAdapterLifecycleBridge({
   confirmedOrderByCid,
   groupedOrderLifecycles,
   levelOrderPositionMonitors,
-  levelOrderChildCid,
-  emitLevelOrderPositionsReadyIfComplete: levelOrderRuntime.emitLevelOrderPositionsReadyIfComplete
+  levelOrderChildCid
 });
 
 function wireAdapter(adapter, providerName) {

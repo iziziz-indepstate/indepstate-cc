@@ -196,33 +196,6 @@ function createLevelOrderRuntime({
     levelOrderPositionMonitors.delete(requestId);
   }
 
-  function emitLevelOrderPositionsReadyIfComplete(parentRequestId) {
-    const snapshot = groupedOrderLifecycles.takeReadySnapshot(parentRequestId);
-    if (!snapshot) return false;
-    const payload = {
-      requestId: parentRequestId,
-      parentRequestId,
-      provider: snapshot.provider,
-      symbol: snapshot.symbol,
-      expectedQty: snapshot.expectedQty,
-      foundQty: snapshot.foundQty,
-      expectedCids: snapshot.cids,
-      foundCids: snapshot.cids,
-      foundTickets: snapshot.openedTickets || snapshot.tickets || []
-    };
-    appendJsonl?.(execLog, { t: nowTs(), kind: 'level-order-positions-ready', source: 'lifecycle', ...payload });
-    console.log('[LEVEL][POSITIONS_READY]', {
-      requestId: parentRequestId,
-      symbol: snapshot.symbol,
-      foundQty: snapshot.foundQty,
-      expectedQty: snapshot.expectedQty,
-      source: 'lifecycle'
-    });
-    sendToRenderer('level-order:positions-ready', payload);
-    stopLevelOrderPositionMonitor(parentRequestId);
-    return true;
-  }
-
   async function cancelGroupedOrderUnopenedTickets(groupId) {
     const group = groupedOrderLifecycles.get(groupId);
     if (!group) return { cancelled: 0, errors: [] };
@@ -291,9 +264,8 @@ function createLevelOrderRuntime({
             foundCids: scan.foundCids,
             foundTickets: scan.foundTickets
           };
-          appendJsonl?.(execLog, { t: nowTs(), kind: 'level-order-positions-ready', ...payload });
+          appendJsonl?.(execLog, { t: nowTs(), kind: 'level-order-positions-detected', ...payload });
           console.log('[LEVEL][POSITIONS_READY]', { requestId, symbol, foundQty: scan.foundQty, expectedQty: scan.expectedQty });
-          sendToRenderer('level-order:positions-ready', payload);
           return;
         }
       } catch (err) {
@@ -333,7 +305,6 @@ function createLevelOrderRuntime({
   return {
     levelOrderPositionMonitors,
     stopLevelOrderPositionMonitor,
-    emitLevelOrderPositionsReadyIfComplete,
     cancelGroupedOrderUnopenedTickets,
     startLevelOrderPositionMonitor
   };

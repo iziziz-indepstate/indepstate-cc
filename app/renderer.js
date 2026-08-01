@@ -1512,10 +1512,6 @@ ipcRenderer.on('position:opened', (_evt, rec) => {
   render();
 });
 
-ipcRenderer.on('level-order:positions-ready', (_evt, rec = {}) => {
-  void rec;
-});
-
 ipcRenderer.on('position:closed', (_evt, rec) => {
   if (rec?.origOrder?.meta?.parentRequestId) return;
   const ticket = String(rec.ticket);
