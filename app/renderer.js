@@ -9,7 +9,6 @@ const {detectInstrumentType} = require("./services/instruments");
 const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumentInfo/points');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { createLevelOrderRenderer } = require('./services/levelOrder/renderer');
-const { createLevelOrderRendererLifecycle } = require('./services/levelOrder/rendererLifecycle');
 const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/renderer');
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createOptionStratRenderer } = require('./services/optionstrat/renderer');
@@ -678,10 +677,6 @@ function migrateKey(oldKey, newKey, {preserveUi = false, nextUiPatch = null} = {
     placedOrderByKey.delete(oldKey);
   }
 
-  for (const group of levelOrderGroups.values()) {
-    if (group.key === oldKey) group.key = newKey;
-  }
-
   for (const [ticket, key] of ticketToKey.entries()) {
     if (key === oldKey) ticketToKey.set(ticket, newKey);
   }
@@ -994,24 +989,6 @@ const markRowClosed = (...args) => optionStratRenderer.markRowClosed(...args);
 const emitOptionStratButtonEvent = (...args) => optionStratRenderer.emitButtonEvent(...args);
 optionStratRenderer.startValuationRefresh();
 
-const levelOrderLifecycle = createLevelOrderRendererLifecycle({
-  ipcRenderer,
-  pendingByReqId,
-  pendingIdByReqId,
-  retryCounts,
-  pendingExecLabels,
-  placedOrderByKey,
-  ticketToKey,
-  pendingOptionValuations,
-  findKeyByTicker,
-  detectInstrumentType,
-  toast
-});
-const levelOrderGroups = levelOrderLifecycle.groups;
-const levelOrderChildToGroup = levelOrderLifecycle.childToGroup;
-const levelOrderPendingToGroup = levelOrderLifecycle.pendingToGroup;
-const levelOrderTicketToGroup = levelOrderLifecycle.ticketToGroup;
-
 const orderCardsRenderer = createOrderCardsRenderer({
   el,
   inputNumber,
@@ -1074,14 +1051,6 @@ const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDis
   pendingByReqId,
   retryCounts,
   pendingExecLabels,
-  ensureLevelOrderGroup: levelOrderLifecycle.ensureGroup,
-  clearLevelOrderGroup: levelOrderLifecycle.clearGroup,
-  levelOrderGroups,
-  levelOrderChildToGroup,
-  levelOrderPendingToGroup,
-  registerLevelOrderTicket: levelOrderLifecycle.registerTicket,
-  levelOrderAllPlaced: levelOrderLifecycle.allPlaced,
-  levelOrderAllOpened: levelOrderLifecycle.allOpened,
   cardByKey,
   setCardState,
   toast,
@@ -1120,7 +1089,13 @@ const positionsRenderer = createPositionsRenderer({
   positionCardTitle,
   render,
   positionCardRenderers,
-  onPositionRemoved: removeLegacyRowsForPosition
+  onPositionRemoved: removeLegacyRowsForPosition,
+  onPositionSnapshot(position = {}) {
+    if (position.card?.type !== 'levelOrder') return;
+    const key = positionKey(position);
+    cardStates.delete(key);
+    pendingExecLabels.delete(key);
+  }
 });
 positionCardRenderers.regular = (position) => positionsRenderer.renderRegularPositionCard(position);
 const positionsById = positionsRenderer.positionsById;
@@ -1135,6 +1110,13 @@ async function requestRemovePosition(position = {}) {
   if (!result || result.ok === false) {
     toast(`x ${positionCardTitle(position)}: ${result?.reason || 'Remove failed'}`);
     shakeCard(positionKey(position));
+    return result;
+  }
+  const removed = (result.events || []).some(event => ['position.removed', 'position.archived'].includes(event.type))
+    || ['archived', 'cancelled'].includes(result.position?.state);
+  if (removed) {
+    removePositionSnapshot(position.id);
+    render();
   }
   return result;
 }
@@ -1200,20 +1182,13 @@ function createPositionSnapshotCard(position = {}) {
   return positionsRenderer.createPositionSnapshotCard(position);
 }
 
-const ensureLevelOrderGroup = (...args) => levelOrderLifecycle.ensureGroup(...args);
-const findLevelOrderGroupByReqId = (...args) => levelOrderLifecycle.findByReqId(...args);
-const findLevelOrderGroupByPendingId = (...args) => levelOrderLifecycle.findByPendingId(...args);
-const findOrRegisterLevelOrderGroupFromMeta = (...args) => levelOrderLifecycle.findOrRegisterFromMeta(...args);
-const registerLevelOrderChild = (...args) => levelOrderLifecycle.registerChild(...args);
-const registerLevelOrderTicket = (...args) => levelOrderLifecycle.registerTicket(...args);
-const levelOrderAllPlaced = (...args) => levelOrderLifecycle.allPlaced(...args);
-const levelOrderAllOpened = (...args) => levelOrderLifecycle.allOpened(...args);
-const levelOrderAllClosed = (...args) => levelOrderLifecycle.allClosed(...args);
-const clearLevelOrderGroup = (...args) => levelOrderLifecycle.clearGroup(...args);
-const levelOrderGroupsByKey = (...args) => levelOrderLifecycle.groupsByKey(...args);
-
 function clearPendingByKey(key) {
-  levelOrderLifecycle.clearPendingByKey(key);
+  for (const [rid, pendingKey] of pendingByReqId.entries()) {
+    if (pendingKey === key) {
+      pendingByReqId.delete(rid);
+      pendingIdByReqId.delete(rid);
+    }
+  }
 }
 
 function removeRow(row) {
@@ -1284,8 +1259,7 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
 
   let key = pendingByReqId.get(reqId);
   if (!key) key = findKeyByTicker(rec?.order?.symbol || rec?.order?.ticker);
-  const levelGroup = registerLevelOrderChild(rec, key);
-  if (levelGroup) key = levelGroup.key;
+  if (rec?.parentRequestId || rec?.order?.meta?.parentRequestId) return;
   if (!key) return;
 
   pendingByReqId.set(reqId, key);
@@ -1299,14 +1273,14 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
     if (card) delete card.dataset.pendingId;
   }
   if (card) {
-    card.dataset.reqId = levelGroup ? levelGroup.parentRequestId : reqId;
+    card.dataset.reqId = reqId;
     const rb = card.querySelector('.retry-btn');
     if (rb) rb.textContent = '0';
   }
-  if (!levelGroup && (cardStates.get(key) !== 'pending-exec' || rec?.order?.side)) {
+  if (cardStates.get(key) !== 'pending-exec' || rec?.order?.side) {
     setCardState(key, 'pending');
   }
-  if (!levelGroup && card && rec?.order) {
+  if (card && rec?.order) {
     const ui = uiState.get(key) || {};
     if (rec.order.qty != null) {
       ui.qty = String(rec.order.qty);
@@ -1335,8 +1309,6 @@ ipcRenderer.on('execution:pending', (_evt, rec) => {
 
 ipcRenderer.on('execution:retry', (_evt, rec) => {
   let key = pendingByReqId.get(rec.reqId);
-  const levelGroup = findLevelOrderGroupByReqId(rec.reqId) || findLevelOrderGroupByPendingId(rec.pendingId);
-  if (levelGroup) key = levelGroup.key;
   if (!key) return;
   retryCounts.set(rec.reqId, rec.count);
   const card = cardByKey(key);
@@ -1347,32 +1319,8 @@ ipcRenderer.on('execution:retry', (_evt, rec) => {
 });
 
 ipcRenderer.on('execution:retry-stopped', (_evt, rec) => {
-  const levelGroup = findLevelOrderGroupByReqId(rec.reqId)
-    || findLevelOrderGroupByPendingId(rec.pendingId)
-    || levelOrderGroups.get(rec.parentRequestId || rec.reqId);
   let key = pendingByReqId.get(rec.reqId);
-  if (levelGroup) key = levelGroup.key;
   if (!key) return;
-  if (levelGroup) {
-    const parentReqId = levelGroup.parentRequestId;
-    clearLevelOrderGroup(parentReqId);
-    pendingByReqId.delete(parentReqId);
-    pendingIdByReqId.delete(parentReqId);
-    retryCounts.delete(parentReqId);
-    const card = cardByKey(key);
-    if (card) {
-      delete card.dataset.reqId;
-      delete card.dataset.pendingId;
-      const rb = card.querySelector('.retry-btn');
-      if (rb) {
-        rb.textContent = '0';
-        rb.style.display = 'none';
-      }
-    }
-    setCardState(key, null);
-    render();
-    return;
-  }
   pendingByReqId.delete(rec.reqId);
   retryCounts.delete(rec.reqId);
   const card = cardByKey(key);
@@ -1489,8 +1437,8 @@ ipcRenderer.on('orders:new', (_evt, row) => {
 ipcRenderer.on('execution:result', (_evt, rec) => {
   const reqId = rec?.order?.meta?.requestId || rec?.reqId;
   if (!reqId) return;
-  const levelGroup = registerLevelOrderChild(rec) || findLevelOrderGroupByPendingId(rec?.pendingId || rec?.cid);
-  const key = levelGroup?.key || pendingByReqId.get(reqId);
+  if (rec?.parentRequestId || rec?.order?.meta?.parentRequestId) return;
+  const key = pendingByReqId.get(reqId);
   if (!key) return;
 
   pendingByReqId.delete(reqId);
@@ -1505,37 +1453,6 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
   }
 
   const ok = rec.status === 'ok' || rec.status === 'simulated';
-  if (levelGroup) {
-    if (ok) {
-      levelGroup.placedReqIds.add(reqId);
-      if (rec.providerOrderId) registerLevelOrderTicket(levelGroup, rec.providerOrderId, key);
-      if (levelOrderAllPlaced(levelGroup)) {
-        setCardState(key, levelOrderAllOpened(levelGroup) ? 'executing' : 'pending-exec');
-        const cardEl = cardByKey(key);
-        if (cardEl) {
-          delete cardEl.dataset.reqId;
-          delete cardEl.dataset.pendingId;
-        }
-        toast(`✔ ${rec.order?.symbol || ''}: level order group placed`);
-        render();
-      }
-      return;
-    }
-    if (rec.status === 'unknown' || rec.partial === true) {
-      setCardState(key, 'pending-exec');
-      if (card) card.title = rec.reason || 'Execution state unknown';
-      toast(`... ${rec.order?.symbol || ''}: execution state unknown`);
-      render();
-      return;
-    }
-    setCardState(key, null);
-    render();
-    shakeCard(key);
-    if (card) card.title = rec.reason || 'Rejected';
-    toast(`✖ ${rec.order?.symbol || ''}: ${rec.reason || 'Rejected'}`);
-    return;
-  }
-
   if (ok) {
     const st = cardStates.get(key);
     if (st !== 'executing' && st !== 'profit' && st !== 'loss') {
@@ -1578,44 +1495,17 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
 });
 
 ipcRenderer.on('position:opened', (_evt, rec) => {
+  if (rec?.origOrder?.meta?.parentRequestId) return;
   const ticket = String(rec.ticket);
-  let levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
-  let key = levelGroup?.key || ticketToKey.get(ticket);
-  if (!levelGroup && rec.origOrder?.meta?.parentRequestId) {
-    const groupByMeta = findLevelOrderGroupByReqId(rec.origOrder.meta.requestId)
-      || findOrRegisterLevelOrderGroupFromMeta(rec.origOrder.meta, key || pendingByReqId.get(rec.origOrder.meta.parentRequestId));
-    if (groupByMeta) {
-      levelGroup = groupByMeta;
-      key = key || groupByMeta.key;
-      registerLevelOrderTicket(levelGroup, ticket, key);
-    }
-  }
+  let key = ticketToKey.get(ticket);
   if (!key) {
-    const meta = rec.origOrder?.meta || {};
-    const reqId = meta.requestId;
+    const reqId = rec.origOrder?.meta?.requestId;
     if (reqId) {
-      const fallbackKey = meta.parentRequestId ? pendingByReqId.get(meta.parentRequestId) : null;
-      const groupByReq = findLevelOrderGroupByReqId(reqId) || findOrRegisterLevelOrderGroupFromMeta(meta, fallbackKey);
-      if (groupByReq) levelGroup = groupByReq;
-      key = groupByReq?.key || pendingByReqId.get(reqId);
-      if (key) {
-        ticketToKey.set(ticket, key);
-        if (levelGroup) registerLevelOrderTicket(levelGroup, ticket, key);
-      }
+      key = pendingByReqId.get(reqId);
+      if (key) ticketToKey.set(ticket, key);
     }
   }
   if (!key) return;
-  if (levelGroup) {
-    levelGroup.openedTickets.add(ticket);
-    registerLevelOrderTicket(levelGroup, ticket, key);
-    markRowOpened(key);
-    if (levelOrderAllOpened(levelGroup)) {
-      placedOrderByKey.delete(key);
-      setCardState(key, 'executing');
-      render();
-    }
-    return;
-  }
   placedOrderByKey.delete(key);
   markRowOpened(key);
   setCardState(key, 'executing');
@@ -1623,61 +1513,14 @@ ipcRenderer.on('position:opened', (_evt, rec) => {
 });
 
 ipcRenderer.on('level-order:positions-ready', (_evt, rec = {}) => {
-  const parentRequestId = rec.parentRequestId || rec.requestId;
-  const group = levelOrderGroups.get(parentRequestId);
-  let key = group?.key || pendingByReqId.get(parentRequestId);
-  if ((!key || !cardByKey(key)) && rec.symbol) {
-    const liveKey = findKeyByTicker(rec.symbol);
-    if (liveKey) {
-      if (group) group.key = liveKey;
-      key = liveKey;
-    }
-  }
-  if (!key) return;
-  if (group) {
-    group.lifecycleReady = true;
-    group.foundQty = Number(rec.foundQty);
-    group.expectedQty = Number(rec.expectedQty);
-    for (const cid of rec.foundCids || []) {
-      const normalizedCid = String(cid || '').trim();
-      if (!normalizedCid) continue;
-      levelOrderPendingToGroup.set(normalizedCid, parentRequestId);
-      group.foundCids.add(normalizedCid);
-    }
-    for (const ticket of rec.foundTickets || []) {
-      const normalizedTicket = String(ticket || '').trim();
-      if (!normalizedTicket) continue;
-      group.tickets.add(normalizedTicket);
-      group.openedTickets.add(normalizedTicket);
-      levelOrderTicketToGroup.set(normalizedTicket, parentRequestId);
-      ticketToKey.set(normalizedTicket, key);
-    }
-  }
-  setCardState(key, 'executing');
-  render();
+  void rec;
 });
 
 ipcRenderer.on('position:closed', (_evt, rec) => {
+  if (rec?.origOrder?.meta?.parentRequestId) return;
   const ticket = String(rec.ticket);
-  const levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
-  const key = levelGroup?.key || ticketToKey.get(ticket);
+  const key = ticketToKey.get(ticket);
   if (!key) return;
-  if (levelGroup) {
-    levelGroup.closedTickets.add(ticket);
-    if (typeof rec.profit === 'number') levelGroup.profitByTicket.set(ticket, rec.profit);
-    else levelGroup.profitByTicket.delete(ticket);
-    markRowClosed(key);
-    if (levelOrderAllClosed(levelGroup)) {
-      const tickets = Array.from(levelGroup.openedTickets.size ? levelGroup.openedTickets : levelGroup.tickets);
-      const pnlComplete = tickets.length > 0 && tickets.every(groupTicket => levelGroup.profitByTicket.has(groupTicket));
-      const totalProfit = pnlComplete
-        ? tickets.reduce((sum, groupTicket) => sum + levelGroup.profitByTicket.get(groupTicket), 0)
-        : null;
-      setCardState(key, pnlComplete ? (totalProfit >= 0 ? 'profit' : 'loss') : 'closed');
-      render();
-    }
-    return;
-  }
   markRowClosed(key);
   if (typeof rec.profit === 'number') {
     setCardState(key, rec.profit >= 0 ? 'profit' : 'loss');
@@ -1689,16 +1532,9 @@ ipcRenderer.on('position:closed', (_evt, rec) => {
 
 ipcRenderer.on('order:cancelled', (_evt, rec) => {
   const ticket = String(rec.ticket);
-  const levelGroup = levelOrderGroups.get(levelOrderTicketToGroup.get(ticket));
-  const key = levelGroup?.key || ticketToKey.get(ticket);
+  const key = ticketToKey.get(ticket);
   if (key) {
-    const row = state.rows.find(r => rowKey(r) === key);
     ticketToKey.delete(ticket);
-    if (levelGroup || levelOrderGroupsByKey(key).length > 0) {
-      if (levelGroup) levelGroup.tickets.delete(ticket);
-      levelOrderTicketToGroup.delete(ticket);
-      return;
-    }
     placedOrderByKey.delete(key);
     removeRowByKey(key);
   }
@@ -1746,11 +1582,6 @@ if (typeof module !== 'undefined') {
     pendingByReqId,
     pendingIdByReqId,
     ticketToKey,
-    levelOrderGroups,
-    levelOrderChildToGroup,
-    levelOrderPendingToGroup,
-    levelOrderTicketToGroup,
-    clearLevelOrderGroup,
     retryCounts,
     cardStates,
     pendingExecLabels,

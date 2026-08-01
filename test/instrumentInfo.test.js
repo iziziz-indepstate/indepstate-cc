@@ -86,6 +86,20 @@ async function run() {
   assert.strictEqual(failed.metadata.tickSize, 0.01);
   assert.strictEqual(failed.sources.tickSize, 'config:defaultTickSize');
 
+  let delayedQuoteCalls = 0;
+  adapters.delayed = {
+    async getQuote() {
+      delayedQuoteCalls += 1;
+      return delayedQuoteCalls === 1 ? null : { bid: 30, ask: 32 };
+    }
+  };
+  const delayed = await service.get(
+    { provider: 'delayed', symbol: 'LATE' },
+    { forceQuote: true, quoteRetryMs: 50, quoteRetryIntervalMs: 1 }
+  );
+  assert.strictEqual(delayedQuoteCalls, 2);
+  assert.deepStrictEqual(delayed.quote, { bid: 30, ask: 32, price: 31 });
+
   assert.strictEqual(await service.forget({ provider: 'one', symbol: 'AAA' }), true);
   assert.deepStrictEqual(forgotten, ['AAA']);
   assert.deepStrictEqual(service.peek({ provider: 'one', symbol: 'AAA' }).quote, {});

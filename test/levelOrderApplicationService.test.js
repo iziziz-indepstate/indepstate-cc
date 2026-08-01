@@ -1,8 +1,28 @@
 const assert = require('assert');
 const { createLevelOrderApplicationService, createLevelOrderRuntime } = require('../app/services/levelOrder');
+const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
+const { createPositionBehaviorRegistry } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
 
 async function run() {
   const logs = [];
+  const positions = createPositionApplicationService({
+    clock: () => 2000,
+    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()])
+  });
+  const createdPosition = positions.handle(legacyRowToCreateCommand({
+    positionId: 'pos-level-app',
+    ticker: 'ADAUSDT',
+    provider: 'simulated',
+    cardType: 'levelOrder',
+    level: 100,
+    riskUsd: 12,
+    stopOffsetPts: 1,
+    maxLot: 5,
+    minLot: 1,
+    takeProfitPts: 9,
+    instrumentType: 'EQ'
+  }));
   const startedMonitors = [];
   const placed = [];
   let releaseFirstPlacement;
@@ -41,6 +61,7 @@ async function run() {
       await new Promise(resolve => setTimeout(resolve, 0));
       return { status: 'ok', provider: 'simulated', providerOrderId: `ticket-${payload.meta.childIndex}` };
     },
+    positions,
     pendingIndex: new Map(),
     trackerPending: new Map(),
     levelOrderIntentRegistry: new Map(),
@@ -58,7 +79,8 @@ async function run() {
     takeProfitPts: 9,
     requestId: 'parent-1',
     strategyId: 'strategy-1',
-    instrumentType: 'EQ'
+    instrumentType: 'EQ',
+    positionId: createdPosition.position.id
   };
   const firstPromise = service.queueLevelOrder(payload);
   await waitFor(() => placed.length === 1 && releaseFirstPlacement);
@@ -76,6 +98,13 @@ async function run() {
   assert.strictEqual(placed[0].kind, 'BL');
   assert.strictEqual(startedMonitors.length, 1);
   assert.strictEqual(logs.some(item => item.kind === 'level-order-dedup'), true);
+  const parent = positions.snapshot().positions.find(item => item.id === createdPosition.position.id);
+  assert(parent);
+  assert.strictEqual(parent.state, 'placed');
+  assert.strictEqual(parent.expectedChildren, 3);
+  assert.strictEqual(parent.children.length, 3);
+  assert.deepStrictEqual(parent.children.map(child => child.requestId), ['parent-1_1', 'parent-1_2', 'parent-1_3']);
+  assert.strictEqual(parent.card.data.children.length, 3);
 
   console.log('levelOrderApplicationService tests passed');
 }

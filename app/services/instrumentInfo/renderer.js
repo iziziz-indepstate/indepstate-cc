@@ -25,6 +25,23 @@ function createInstrumentInfoRenderer({
     return `${String(provider || '').trim().toLowerCase()}:${String(ticker || '').trim().toUpperCase()}`;
   }
 
+  function hasUsableQuote(info) {
+    return Number.isFinite(Number(info?.bid))
+      || Number.isFinite(Number(info?.ask))
+      || Number.isFinite(Number(info?.price));
+  }
+
+  function storeInstrumentInfo(requestedKey, ticker, info) {
+    const flat = flattenInstrumentSnapshot(info);
+    if (!flat) return null;
+    instrumentInfo.set(requestedKey, flat);
+    instrumentInfo.set(String(ticker || '').trim().toUpperCase(), flat);
+    if (flat.provider && flat.symbol) {
+      instrumentInfo.set(instrumentInfoKey(flat.symbol, flat.provider), flat);
+    }
+    return flat;
+  }
+
   function allRows() {
     return (getRows() || []).concat(Array.from(trackedRows.values()));
   }
@@ -78,15 +95,23 @@ function createInstrumentInfoRenderer({
     if (!ticker) return;
     if (!allRows().some(r => r.ticker === ticker && r.provider === provider)) return;
     const infoKey = instrumentInfoKey(ticker, provider);
-    if (instrumentInfo.has(infoKey)) return;
+    if (hasUsableQuote(instrumentInfo.get(infoKey))) return;
     if (pendingInstruments.has(infoKey)) return;
     pendingInstruments.add(infoKey);
-    ipcRenderer.invoke('instrument:get', { symbol: ticker, provider }).then(info => {
+    ipcRenderer.invoke('instrument:get', { symbol: ticker, provider, forceQuote: true }).then(info => {
       if (info) {
-        pendingInstruments.delete(infoKey);
-        instrumentInfo.set(infoKey, flattenInstrumentSnapshot(info));
+        const flat = storeInstrumentInfo(infoKey, ticker, info);
         updateSpreadForTicker(ticker);
+        revalidateCardsForTicker(ticker);
         render();
+        if (!hasUsableQuote(flat)) {
+          setTimeoutFn(() => {
+            pendingInstruments.delete(infoKey);
+            ensureInstrument(ticker, provider);
+          }, 250);
+        } else {
+          pendingInstruments.delete(infoKey);
+        }
       } else {
         setTimeoutFn(() => {
           pendingInstruments.delete(infoKey);
@@ -228,7 +253,7 @@ function createInstrumentInfoRenderer({
   }
 
   function startPeriodicRefresh() {
-    setIntervalFn(async () => {
+    const timer = setIntervalFn(async () => {
       if (startPeriodicRefresh.running) return;
       startPeriodicRefresh.running = true;
       try {
@@ -245,9 +270,9 @@ function createInstrumentInfoRenderer({
 
           pendingInstruments.add(infoKey);
           try {
-            const info = await ipcRenderer.invoke('instrument:get', { symbol: t, provider });
+            const info = await ipcRenderer.invoke('instrument:get', { symbol: t, provider, forceQuote: true });
             if (info) {
-              instrumentInfo.set(infoKey, flattenInstrumentSnapshot(info));
+              storeInstrumentInfo(infoKey, t, info);
               updateSpreadForTicker(t);
               revalidateCardsForTicker(t);
             }
@@ -260,6 +285,8 @@ function createInstrumentInfoRenderer({
         startPeriodicRefresh.running = false;
       }
     }, getInstrumentRefreshMs());
+    if (timer && typeof timer.unref === 'function') timer.unref();
+    return timer;
   }
 
   return {

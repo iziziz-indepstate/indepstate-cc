@@ -8,8 +8,10 @@ const {
   RegularOpeningPolicy,
   LevelOrderOpeningPolicy,
   PendingOpeningPolicy,
+  createPositionBehaviorRegistry,
   derivePositionCard
 } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
 const {
   createPositionApplicationService,
   legacyOrderPayloadToCreateCommand,
@@ -18,6 +20,17 @@ const {
 
 function eventTypes(result) {
   return (result.events || []).map(event => event.type);
+}
+
+function levelOrderBehaviorRegistry() {
+  return createPositionBehaviorRegistry([createLevelOrderPositionBehavior()]);
+}
+
+function createPositionsWithLevelOrder(opts = {}) {
+  return createPositionApplicationService({
+    ...opts,
+    behaviorRegistry: opts.behaviorRegistry || levelOrderBehaviorRegistry()
+  });
 }
 
 function runAggregateLifecycleTest() {
@@ -140,7 +153,7 @@ function runCardMetadataTests() {
       takeProfitPts: 12,
       pointSize: 0.001
     }
-  });
+  }, { behaviorRegistry: levelOrderBehaviorRegistry() });
   level.handle({ type: PositionCommand.CREATE });
   let snapshot = level.snapshot();
   assert.strictEqual(snapshot.card.type, 'levelOrder');
@@ -166,10 +179,164 @@ function runCardMetadataTests() {
   assert.strictEqual(regularCard.data.price, 100);
 }
 
+function runLevelOrderParentLifecycleTest() {
+  const service = createPositionsWithLevelOrder({ clock: () => 100 });
+  const created = service.handle(legacyRowToCreateCommand({
+    positionId: 'level-parent',
+    ticker: 'ES',
+    provider: 'simulated',
+    cardType: 'levelOrder',
+    level: 100,
+    riskUsd: 50,
+    stopOffsetPts: 4,
+    maxLot: 2
+  }));
+  const opened = service.handle({
+    type: PositionCommand.OPEN,
+    positionId: created.position.id,
+    payload: { ticker: 'ES', cardType: 'levelOrder' },
+    openingPolicy: { kind: 'levelOrder' }
+  }, { behaviorRegistry: levelOrderBehaviorRegistry() });
+  assert.strictEqual(opened.position.state, PositionState.OPENING);
+
+  const placed1 = service.recordPlaced({
+    positionId: opened.position.id,
+    requestId: 'parent-1_1',
+    parentRequestId: 'parent-1',
+    childIndex: 1,
+    childCount: 2,
+    pendingId: 'cid-1',
+    providerOrderId: 'ticket-1',
+    provider: 'simulated',
+    payload: { meta: { requestId: 'parent-1_1', parentRequestId: 'parent-1', childIndex: 1, childCount: 2 } }
+  }, { behaviorRegistry: levelOrderBehaviorRegistry() });
+  assert.strictEqual(placed1.position.state, PositionState.PLACED);
+  assert.strictEqual(placed1.position.expectedChildren, 2);
+  assert.strictEqual(placed1.position.children.length, 1);
+  assert.strictEqual(placed1.position.card.data.expectedChildren, 2);
+  assert.strictEqual(placed1.position.card.data.children.length, 1);
+
+  service.recordPlaced({
+    positionId: opened.position.id,
+    requestId: 'parent-1_2',
+    parentRequestId: 'parent-1',
+    childIndex: 2,
+    childCount: 2,
+    providerOrderId: 'ticket-2',
+    provider: 'simulated',
+    payload: { meta: { requestId: 'parent-1_2', parentRequestId: 'parent-1', childIndex: 2, childCount: 2 } }
+  });
+  const oneOpened = service.recordOpened({
+    positionId: opened.position.id,
+    requestId: 'parent-1_1',
+    parentRequestId: 'parent-1',
+    childIndex: 1,
+    childCount: 2,
+    ticket: 'ticket-1',
+    provider: 'simulated'
+  });
+  assert.strictEqual(oneOpened.position.state, PositionState.PLACED);
+
+  const allOpened = service.recordOpened({
+    positionId: opened.position.id,
+    requestId: 'parent-1_2',
+    parentRequestId: 'parent-1',
+    childIndex: 2,
+    childCount: 2,
+    ticket: 'ticket-2',
+    provider: 'simulated'
+  });
+  assert.strictEqual(allOpened.position.state, PositionState.ACTIVE);
+
+  const closeRequested = service.remove({ positionId: opened.position.id, reason: 'test.close' });
+  assert.strictEqual(closeRequested.position.state, PositionState.CLOSING);
+
+  const firstClosed = service.recordClosed({
+    positionId: opened.position.id,
+    requestId: 'parent-1_1',
+    parentRequestId: 'parent-1',
+    ticket: 'ticket-1',
+    provider: 'simulated',
+    trade: { pnlStatus: 'reported', profit: 5 },
+    final: false
+  });
+  assert.strictEqual(firstClosed.position.state, PositionState.CLOSING);
+
+  const secondClosed = service.recordClosed({
+    positionId: opened.position.id,
+    requestId: 'parent-1_2',
+    parentRequestId: 'parent-1',
+    ticket: 'ticket-2',
+    provider: 'simulated',
+    trade: { pnlStatus: 'reported', profit: -2 },
+    final: false
+  });
+  assert.strictEqual(secondClosed.position.state, PositionState.CLOSED);
+  assert.strictEqual(secondClosed.position.pnlSnapshot.value, 3);
+}
+
+function runLevelOrderPartialPlacementTest() {
+  const service = createPositionsWithLevelOrder();
+  const created = service.handle(legacyRowToCreateCommand({ positionId: 'partial-parent', ticker: 'NQ', provider: 'simulated', cardType: 'levelOrder' }));
+  service.handle({ type: PositionCommand.OPEN, positionId: created.position.id, payload: { ticker: 'NQ' }, openingPolicy: { kind: 'levelOrder' } });
+  service.recordPlaced({
+    positionId: created.position.id,
+    requestId: 'partial_1',
+    parentRequestId: 'partial',
+    childIndex: 1,
+    childCount: 2,
+    providerOrderId: 'ticket-p1',
+    provider: 'simulated'
+  });
+  const rejected = service.recordRejected({
+    positionId: created.position.id,
+    requestId: 'partial_2',
+    parentRequestId: 'partial',
+    childIndex: 2,
+    childCount: 2,
+    provider: 'simulated',
+    reason: 'No quote'
+  });
+  assert.strictEqual(rejected.position.state, PositionState.DRAFT);
+  assert.strictEqual(rejected.position.children.length, 0);
+  assert.strictEqual(service.snapshot().positions.length, 1);
+}
+
+function runLevelOrderPreOpenClosedResetsDraftTest() {
+  const service = createPositionsWithLevelOrder();
+  const created = service.handle(legacyRowToCreateCommand({ positionId: 'closed-before-open', ticker: 'YM', provider: 'simulated', cardType: 'levelOrder' }));
+  service.handle({ type: PositionCommand.OPEN, positionId: created.position.id, payload: { ticker: 'YM' }, openingPolicy: { kind: 'levelOrder' } });
+  service.recordPlaced({
+    positionId: created.position.id,
+    requestId: 'preopen_1',
+    parentRequestId: 'preopen',
+    childIndex: 1,
+    childCount: 1,
+    providerOrderId: 'ticket-preopen',
+    provider: 'simulated'
+  });
+  const closed = service.recordClosed({
+    positionId: created.position.id,
+    requestId: 'preopen_1',
+    parentRequestId: 'preopen',
+    ticket: 'ticket-preopen',
+    provider: 'simulated',
+    trade: { pnlStatus: 'unavailable', reason: 'Broker rejected before open' },
+    final: false
+  });
+  assert.strictEqual(closed.position.state, PositionState.DRAFT);
+  assert.deepStrictEqual(closed.position.card.actions.map(action => action.id), ['LB', 'LS']);
+  assert.strictEqual(closed.position.children.length, 0);
+  assert.strictEqual(closed.position.tickets.length, 0);
+}
+
 runAggregateLifecycleTest();
 runRejectedCancelledTest();
 runPolicyTests();
 runApplicationAndLegacyTests();
 runCardMetadataTests();
+runLevelOrderParentLifecycleTest();
+runLevelOrderPartialPlacementTest();
+runLevelOrderPreOpenClosedResetsDraftTest();
 
 console.log('positionsDomain tests passed');

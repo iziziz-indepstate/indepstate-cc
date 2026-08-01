@@ -5,6 +5,8 @@ const points = require('./points');
 const DEFAULT_QUOTE_TTL_MS = 1000;
 const DEFAULT_METADATA_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_TIMEOUT_MS = 10000;
+const DEFAULT_QUOTE_RETRY_MS = 1500;
+const DEFAULT_QUOTE_RETRY_INTERVAL_MS = 100;
 
 const METADATA_FIELDS = [
   'tickSize',
@@ -102,6 +104,10 @@ function withTimeout(promise, timeoutMs) {
       err => { clearTimeout(timer); reject(err); }
     );
   });
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function createInstrumentInfoService({
@@ -217,11 +223,27 @@ function createInstrumentInfoService({
     return true;
   }
 
+  async function readQuoteWithRetry(resolved, adapter, options = {}) {
+    if (typeof adapter?.getQuote !== 'function') return undefined;
+    const retryUntil = options.forceQuote === true
+      ? Date.now() + (Number(options.quoteRetryMs) || DEFAULT_QUOTE_RETRY_MS)
+      : 0;
+    const intervalMs = Number(options.quoteRetryIntervalMs) || DEFAULT_QUOTE_RETRY_INTERVAL_MS;
+    let raw = null;
+    do {
+      raw = await adapter.getQuote?.(resolved.symbol);
+      const quote = normalizeQuote(raw);
+      if (Object.keys(quote).length) return raw;
+      if (!retryUntil || Date.now() >= retryUntil) return raw;
+      await delay(intervalMs);
+    } while (true);
+  }
+
   async function loadQuote(resolved, adapter, options) {
     const key = keyOf(resolved);
     if (!quoteInflight.has(key)) {
       const task = Promise.resolve()
-        .then(() => adapter.getQuote?.(resolved.symbol))
+        .then(() => readQuoteWithRetry(resolved, adapter, options))
         .then(raw => {
           const record = ensureRecord(resolved);
           const quote = normalizeQuote(raw);
@@ -286,7 +308,12 @@ function createInstrumentInfoService({
     const needsQuote = readQuote && (options.forceQuote === true || !record.quoteUpdatedAt || quoteAge >= quoteMaxAge);
     const needsMetadata = readMetadata && (options.forceMetadata === true || !record.metadataUpdatedAt || metadataAge >= metadataMaxAge);
     const adapter = brokerage.getAdapter(resolved.provider);
-    const requestOptions = { timeoutMs: options.timeoutMs ?? timeoutMs };
+    const requestOptions = {
+      timeoutMs: options.timeoutMs ?? timeoutMs,
+      forceQuote: options.forceQuote === true,
+      quoteRetryMs: options.quoteRetryMs,
+      quoteRetryIntervalMs: options.quoteRetryIntervalMs
+    };
     const tasks = [];
     if (needsMetadata && typeof adapter.getInstrumentMetadata === 'function') tasks.push(loadMetadata(resolved, adapter, requestOptions));
     if (needsQuote) tasks.push(loadQuote(resolved, adapter, requestOptions));

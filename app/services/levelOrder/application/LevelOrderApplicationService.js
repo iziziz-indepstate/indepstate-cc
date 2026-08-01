@@ -1,4 +1,5 @@
 const { detectInstrumentType } = require('../../instruments');
+const { PositionCommand } = require('../../../domain/positions');
 const { calculateLimitBidTradePlan } = require('../strategy');
 const { collectRetryStopEntries, getRetryStopParentIds } = require('../retryStop');
 const { generateCid } = require('../../../application/execution/orderPayload');
@@ -20,6 +21,7 @@ class LevelOrderApplicationService {
     sendToRenderer = () => {},
     resolveProviderName,
     queuePlaceOrder,
+    positions,
     pendingIndex,
     trackerPending,
     levelOrderIntentRegistry,
@@ -35,6 +37,7 @@ class LevelOrderApplicationService {
     this.sendToRenderer = sendToRenderer;
     this.resolveProviderName = resolveProviderName;
     this.queuePlaceOrder = queuePlaceOrder;
+    this.positions = positions;
     this.pendingIndex = pendingIndex || new Map();
     this.trackerPending = trackerPending || new Map();
     this.levelOrderIntentRegistry = levelOrderIntentRegistry || new Map();
@@ -112,6 +115,18 @@ class LevelOrderApplicationService {
 
       const intentRecord = { status: 'placing', updatedAt: this.nowTs(), result: null, promise: null };
       this.levelOrderIntentRegistry.set(intentKey, intentRecord);
+      this.positions?.handle?.({
+        type: PositionCommand.OPEN,
+        positionId: payload.positionId,
+        payload: {
+          ...payload,
+          provider: providerName,
+          strategyId,
+          requestId,
+          instrumentType
+        },
+        openingPolicy: { kind: 'levelOrder', config: { strategy: 'limitBidTrade' } }
+      });
       const placementPromise = (async () => {
         const results = [];
         for (let i = 0; i < plan.childQtys.length; i += 1) {
@@ -151,6 +166,15 @@ class LevelOrderApplicationService {
           };
           const res = await this.queuePlaceOrder(childPayload);
           results.push({ requestId: childReqId, qty: plan.childQtys[i], result: res });
+          this.#recordChildPlacement({
+            parentPositionId: payload.positionId,
+            parentRequestId: requestId,
+            strategyId,
+            providerName,
+            childPayload,
+            childResult: res,
+            childCount: plan.childQtys.length
+          });
           if (!res || res.status === 'rejected' || res.status === 'error') {
             const accepted = results.filter(item => item.result && item.result.status !== 'rejected' && item.result.status !== 'error');
             const result = accepted.length
@@ -179,6 +203,15 @@ class LevelOrderApplicationService {
                 children: results
               });
             }
+            this.#recordPartialResult({
+              parentPositionId: payload.positionId,
+              parentRequestId: requestId,
+              providerName,
+              strategyId,
+              plan,
+              results,
+              result
+            });
             this.#append({ t: this.nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result });
             return result;
           }
@@ -198,6 +231,15 @@ class LevelOrderApplicationService {
           strategyId,
           symbol,
           children: results
+        });
+        this.#recordPartialResult({
+          parentPositionId: payload.positionId,
+          parentRequestId: requestId,
+          providerName,
+          strategyId,
+          plan,
+          results,
+          result: ok
         });
         this.#append({ t: this.nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result: ok });
         return ok;
@@ -313,6 +355,53 @@ class LevelOrderApplicationService {
 
   #append(record) {
     this.appendJsonl?.(this.execLog, record);
+  }
+
+  #recordChildPlacement({ parentPositionId, parentRequestId, strategyId, providerName, childPayload, childResult, childCount }) {
+    const meta = childPayload?.meta || {};
+    const cmd = {
+      positionId: parentPositionId,
+      requestId: meta.requestId,
+      parentRequestId,
+      childIndex: meta.childIndex,
+      childCount,
+      pendingId: childResult?.cid,
+      cid: childResult?.cid,
+      ticket: childResult?.ticket,
+      providerOrderId: childResult?.providerOrderId,
+      provider: childResult?.provider || providerName,
+      result: childResult,
+      payload: childPayload,
+      order: childPayload,
+      origOrder: childPayload,
+      reason: childResult?.reason
+    };
+    if (childResult?.status === 'rejected' || childResult?.status === 'error') {
+      this.positions?.recordRejected?.(cmd);
+      return;
+    }
+    this.positions?.recordPlaced?.(cmd);
+  }
+
+  #recordPartialResult({ parentPositionId, parentRequestId, providerName, strategyId, plan, results, result }) {
+    if (!parentPositionId) return;
+    const expectedChildren = plan?.childQtys?.length || results?.length || 0;
+    for (let index = 0; index < expectedChildren; index += 1) {
+      const child = results[index];
+      if (child) continue;
+      this.positions?.recordPlaced?.({
+        positionId: parentPositionId,
+        requestId: `${parentRequestId}_${index + 1}`,
+        parentRequestId,
+        childIndex: index + 1,
+        childCount: expectedChildren,
+        provider: providerName,
+        providerOrderId: '',
+        result: { status: 'unknown', provider: providerName, strategyId },
+        payload: { meta: { requestId: `${parentRequestId}_${index + 1}`, parentRequestId, childIndex: index + 1, childCount: expectedChildren, strategyId } },
+        reason: result?.reason
+      });
+    }
   }
 }
 

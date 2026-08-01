@@ -69,6 +69,11 @@ async function run() {
       if (ch === 'actions-bus:set-enabled') return [];
       if (ch === 'instrument:get') return { quote: { bid: 0.163, ask: 0.165 }, metadata: { tickSize: 0.001 }, provider: payload.provider, symbol: payload.symbol };
       if (ch === 'level-order:place') return { status: 'ok', providerOrderId: 'level:test' };
+      if (ch === 'positions:remove') return {
+        ok: true,
+        position: { id: payload.positionId, state: 'archived' },
+        events: [{ type: 'position.archived', positionId: payload.positionId }]
+      };
       return {};
     }
   };
@@ -179,11 +184,69 @@ async function run() {
   assert(document.querySelector('.position-card[data-position-id="pos-1"]'));
   assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT"]:not(.position-card)'), null);
 
+  const placedPosition = levelOrderSnapshot('pos-1', [
+    { id: 'close', label: 'Close', command: 'position.close', style: 'close' }
+  ]);
+  placedPosition.state = 'placed';
+  placedPosition.card.data.state = 'placed';
+  placedPosition.expectedChildren = 2;
+  placedPosition.tickets = ['ticket-1', 'ticket-2'];
+  placedPosition.children = [
+    { requestId: `${levelOrderCall.payload.requestId}_1`, parentRequestId: levelOrderCall.payload.requestId, state: 'placed', ticket: 'ticket-1' },
+    { requestId: `${levelOrderCall.payload.requestId}_2`, parentRequestId: levelOrderCall.payload.requestId, state: 'placed', ticket: 'ticket-2' }
+  ];
+  placedPosition.card.data.expectedChildren = 2;
+  placedPosition.card.data.tickets = placedPosition.tickets;
+  placedPosition.card.data.children = placedPosition.children;
+  handlers['positions:changed'](null, { event: { type: 'position.placed' }, position: placedPosition });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  card = document.querySelector('.position-card[data-position-id="pos-1"]');
+  assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['close']);
+  assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT"]:not(.position-card)'), null);
+
+  const closedPosition = {
+    ...placedPosition,
+    state: 'closed',
+    timestamps: { openedAt: 100, closedAt: 200 },
+    card: {
+      ...placedPosition.card,
+      actions: [{ id: 'archive', label: 'Archive', command: 'position.remove', style: 'archive' }],
+      data: { ...placedPosition.card.data, state: 'closed', pnl: { status: 'reported', value: 12 } }
+    },
+    pnlSnapshot: { status: 'reported', value: 12 }
+  };
+  handlers['positions:changed'](null, { event: { type: 'position.closed' }, position: closedPosition });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  card = document.querySelector('.position-card[data-position-id="pos-1"]');
+  assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['archive']);
+
+  const preOpenClosedPosition = {
+    ...placedPosition,
+    id: 'pos-preopen-closed',
+    state: 'closed',
+    timestamps: { openedAt: null, closedAt: 300 },
+    card: {
+      ...placedPosition.card,
+      actions: [{ id: 'archive', label: 'Archive', command: 'position.remove', style: 'archive' }],
+      data: { ...placedPosition.card.data, state: 'closed' }
+    }
+  };
+  t.cardStates.set('position|pos-preopen-closed', 'closed');
+  handlers['positions:changed'](null, { event: { type: 'position.closed' }, position: preOpenClosedPosition });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const preOpenCard = document.querySelector('.position-card[data-position-id="pos-preopen-closed"]');
+  assert(preOpenCard);
+  assert.deepStrictEqual(Array.from(preOpenCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['LB', 'LS']);
+  assert.strictEqual(t.positionsById.get('pos-preopen-closed').state, 'draft');
+  assert.strictEqual(t.cardStates.has('position|pos-preopen-closed'), false);
+
+  calls.length = 0;
+  card = document.querySelector('.position-card[data-position-id="pos-1"]');
   card.querySelector('.card__close').click();
   await new Promise(resolve => setTimeout(resolve, 20));
   const removeCall = calls.find(call => call.ch === 'positions:remove' && call.payload.positionId === 'pos-1');
   assert(removeCall);
-  assert(document.querySelector('.position-card[data-position-id="pos-1"]'));
+  assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-1"]'), null);
 
   handlers['positions:changed'](null, {
     event: { type: 'position.removed', positionId: 'pos-1' },
@@ -192,7 +255,7 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(t.positionsById.has('pos-1'), false);
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-1"]'), null);
-  assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT"]'), null);
+  assert.strictEqual(document.querySelector('.card[data-position-id="pos-1"]'), null);
 
   Module._load = originalLoad;
   console.log('positionsRenderer tests passed');

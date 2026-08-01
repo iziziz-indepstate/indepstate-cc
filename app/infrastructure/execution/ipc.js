@@ -118,7 +118,10 @@ function registerExecutionIpcHandlers({
       const provider = typeof arg === 'object' ? arg.provider : undefined;
       const instrumentType = detectInstrumentType(String(symbol || ''));
       const providerName = resolveProviderName({ provider, payload: typeof arg === 'object' ? arg : {}, symbol, instrumentType });
-      return await instrumentInfo.get({ provider: providerName, symbol, instrumentType, payload: typeof arg === 'object' ? arg : {} });
+      return await instrumentInfo.get(
+        { provider: providerName, symbol, instrumentType, payload: typeof arg === 'object' ? arg : {} },
+        { forceQuote: typeof arg === 'object' && arg.forceQuote === true }
+      );
     } catch {
       return null;
     }

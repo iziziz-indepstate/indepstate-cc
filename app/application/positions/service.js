@@ -2,7 +2,8 @@ const { EventEmitter } = require('events');
 const {
   PositionAggregate,
   PositionCommand,
-  PositionEvent
+  PositionEvent,
+  createPositionBehaviorRegistry
 } = require('../../domain/positions');
 
 function clone(value) {
@@ -10,7 +11,8 @@ function clone(value) {
 }
 
 class InMemoryPositionRepository {
-  constructor(initial = []) {
+  constructor(initial = [], opts = {}) {
+    this.behaviorRegistry = opts.behaviorRegistry;
     this.positions = new Map();
     for (const snapshot of initial || []) {
       if (snapshot?.id) this.positions.set(snapshot.id, clone(snapshot));
@@ -19,7 +21,7 @@ class InMemoryPositionRepository {
 
   get(id) {
     const snapshot = this.positions.get(id);
-    return snapshot ? new PositionAggregate(snapshot) : null;
+    return snapshot ? new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry }) : null;
   }
 
   save(position) {
@@ -40,7 +42,7 @@ class InMemoryPositionRepository {
       if (normalizedProvider && String(snapshot.provider || '').toLowerCase() !== normalizedProvider) continue;
       const tickets = Array.isArray(snapshot.tickets) ? snapshot.tickets : [];
       if (tickets.map(String).includes(normalizedTicket) || String(snapshot.primaryTicket || '') === normalizedTicket) {
-        return new PositionAggregate(snapshot);
+        return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
       }
     }
     return null;
@@ -50,35 +52,55 @@ class InMemoryPositionRepository {
     const id = String(requestId || '').trim();
     if (!id) return null;
     for (const snapshot of this.positions.values()) {
-      if (snapshot.executionIntent?.meta?.requestId === id || snapshot.source?.meta?.requestId === id) {
-        return new PositionAggregate(snapshot);
+      if (
+        snapshot.executionIntent?.meta?.requestId === id
+        || snapshot.executionIntent?.requestId === id
+        || snapshot.source?.meta?.requestId === id
+        || snapshot.source?.requestId === id
+      ) {
+        return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
       }
       for (const child of snapshot.children || []) {
-        if (child.requestId === id || child.childRequestId === id) return new PositionAggregate(snapshot);
+        if (
+          child.requestId === id
+          || child.childRequestId === id
+          || child.parentRequestId === id
+          || child.pendingId === id
+          || child.cid === id
+          || child.ticket === id
+          || child.providerOrderId === id
+        ) return new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry });
       }
     }
     return null;
   }
 
   list() {
-    return Array.from(this.positions.values()).map(clone);
+    return Array.from(this.positions.values())
+      .map(snapshot => new PositionAggregate(snapshot, { behaviorRegistry: this.behaviorRegistry }).snapshot());
   }
 }
 
 class PositionApplicationService {
-  constructor({ repository, eventBus, executor, clock } = {}) {
-    this.repository = repository || new InMemoryPositionRepository();
+  constructor({ repository, eventBus, executor, clock, behaviorRegistry, positionBehaviors } = {}) {
+    this.behaviorRegistry = behaviorRegistry || createPositionBehaviorRegistry(positionBehaviors || []);
+    this.repository = repository || new InMemoryPositionRepository([], { behaviorRegistry: this.behaviorRegistry });
+    if (repository && !repository.behaviorRegistry) repository.behaviorRegistry = this.behaviorRegistry;
     this.eventBus = eventBus;
     this.executor = executor || null;
     this.clock = clock || (() => Date.now());
     this.events = new EventEmitter();
   }
 
+  registerBehavior(behavior) {
+    return this.behaviorRegistry.register(behavior);
+  }
+
   handle(command = {}) {
     const normalized = { ...command, time: Number.isFinite(command.time) ? command.time : this.clock() };
     let aggregate;
     if (normalized.type === PositionCommand.CREATE) {
-      aggregate = PositionAggregate.create(normalized);
+      aggregate = PositionAggregate.create(normalized, { behaviorRegistry: this.behaviorRegistry });
     } else {
       aggregate = this.repository.get(normalized.positionId || normalized.id);
       if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
@@ -118,31 +140,44 @@ class PositionApplicationService {
     };
   }
 
-  recordPlaced({ positionId, requestId, ticket, providerOrderId, provider, result, payload } = {}) {
+  recordPlaced({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, ticket, providerOrderId, provider, result, payload, order, origOrder, reason } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByRequestId(requestId) || this.repository.findByTicket(ticket || providerOrderId, provider);
+      : this.repository.findByRequestId(parentRequestId || requestId) || this.repository.findByTicket(ticket || providerOrderId, provider);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_PLACED,
       positionId: aggregate.id,
       requestId,
+      parentRequestId,
+      childIndex,
+      childCount,
+      pendingId,
+      cid,
       ticket: ticket || providerOrderId || result?.providerOrderId,
       providerOrderId: providerOrderId || result?.providerOrderId,
       provider: provider || result?.provider,
-      payload
+      payload: payload || order || origOrder,
+      order,
+      origOrder,
+      reason
     });
   }
 
-  recordOpened({ positionId, requestId, ticket, provider, order, origOrder } = {}) {
+  recordOpened({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, ticket, provider, order, origOrder } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByRequestId(requestId || origOrder?.meta?.requestId) || this.repository.findByTicket(ticket, provider);
+      : this.repository.findByRequestId(parentRequestId || requestId || origOrder?.meta?.parentRequestId || origOrder?.meta?.requestId) || this.repository.findByTicket(ticket, provider);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_OPENED,
       positionId: aggregate.id,
       requestId: requestId || origOrder?.meta?.requestId,
+      parentRequestId: parentRequestId || origOrder?.meta?.parentRequestId,
+      childIndex: childIndex ?? origOrder?.meta?.childIndex,
+      childCount: childCount ?? origOrder?.meta?.childCount,
+      pendingId,
+      cid: cid || origOrder?.meta?.cid,
       ticket,
       provider,
       payload: order,
@@ -150,58 +185,96 @@ class PositionApplicationService {
     });
   }
 
-  recordClosed({ positionId, ticket, provider, trade, profit, final = true } = {}) {
+  recordClosed({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, ticket, provider, trade, profit, final = true, order, origOrder } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByTicket(ticket, provider);
+      : this.repository.findByRequestId(parentRequestId || requestId || origOrder?.meta?.parentRequestId || origOrder?.meta?.requestId) || this.repository.findByTicket(ticket, provider);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_CLOSED,
       positionId: aggregate.id,
+      requestId: requestId || origOrder?.meta?.requestId,
+      parentRequestId: parentRequestId || origOrder?.meta?.parentRequestId,
+      childIndex: childIndex ?? origOrder?.meta?.childIndex,
+      childCount: childCount ?? origOrder?.meta?.childCount,
+      pendingId,
+      cid: cid || origOrder?.meta?.cid,
       ticket,
       provider,
       trade,
       profit,
-      final
+      final,
+      payload: order || origOrder,
+      order,
+      origOrder
     });
   }
 
-  recordCancelled({ positionId, ticket, provider } = {}) {
+  recordCancelled({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, ticket, provider, order, origOrder } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByTicket(ticket, provider);
+      : this.repository.findByRequestId(parentRequestId || requestId || origOrder?.meta?.parentRequestId || origOrder?.meta?.requestId) || this.repository.findByTicket(ticket, provider);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_CANCELLED,
       positionId: aggregate.id,
+      requestId: requestId || origOrder?.meta?.requestId,
+      parentRequestId: parentRequestId || origOrder?.meta?.parentRequestId,
+      childIndex: childIndex ?? origOrder?.meta?.childIndex,
+      childCount: childCount ?? origOrder?.meta?.childCount,
+      pendingId,
+      cid: cid || origOrder?.meta?.cid,
       ticket,
-      provider
+      provider,
+      payload: order || origOrder,
+      order,
+      origOrder
     });
   }
 
-  recordRejected({ positionId, requestId, provider, reason, result } = {}) {
+  recordRejected({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, provider, reason, result, payload, order, origOrder } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByRequestId(requestId);
+      : this.repository.findByRequestId(parentRequestId || requestId);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_REJECTED,
       positionId: aggregate.id,
+      requestId,
+      parentRequestId,
+      childIndex,
+      childCount,
+      pendingId,
+      cid,
       provider,
-      reason: reason || result?.reason
+      providerOrderId: result?.providerOrderId,
+      reason: reason || result?.reason,
+      payload: payload || order || origOrder,
+      order,
+      origOrder
     });
   }
 
-  recordFailed({ positionId, requestId, provider, reason } = {}) {
+  recordFailed({ positionId, requestId, parentRequestId, childIndex, childCount, pendingId, cid, provider, reason, result, payload, order, origOrder } = {}) {
     const aggregate = positionId
       ? this.repository.get(positionId)
-      : this.repository.findByRequestId(requestId);
+      : this.repository.findByRequestId(parentRequestId || requestId);
     if (!aggregate) return { ok: false, reason: 'Position not found', events: [], integrationCommands: [] };
     return this.handle({
       type: PositionCommand.PROVIDER_FAILED,
       positionId: aggregate.id,
+      requestId,
+      parentRequestId,
+      childIndex,
+      childCount,
+      pendingId,
+      cid,
       provider,
-      reason
+      providerOrderId: result?.providerOrderId,
+      reason: reason || result?.reason,
+      payload: payload || order || origOrder,
+      order,
+      origOrder
     });
   }
 

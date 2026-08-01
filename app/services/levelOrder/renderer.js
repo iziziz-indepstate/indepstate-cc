@@ -362,14 +362,6 @@ function createLevelOrderRenderer({
     pendingByReqId,
     retryCounts,
     pendingExecLabels,
-    ensureLevelOrderGroup,
-    clearLevelOrderGroup,
-    levelOrderGroups,
-    levelOrderChildToGroup,
-    levelOrderPendingToGroup,
-    registerLevelOrderTicket,
-    levelOrderAllPlaced,
-    levelOrderAllOpened,
     cardByKey,
     setCardState,
     toast,
@@ -383,7 +375,6 @@ function createLevelOrderRenderer({
       const requestId = `${now()}_${random().toString(36).slice(2, 8)}`;
       const strategyId = `${requestId}_${String(id).toLowerCase()}`;
       pendingByReqId.set(requestId, key);
-      ensureLevelOrderGroup(requestId, key);
       retryCounts.set(requestId, 0);
       pendingExecLabels.set(key, action.label || id);
       setCardState(key, 'pending-exec');
@@ -401,7 +392,6 @@ function createLevelOrderRenderer({
           strategyId
         });
         if (!res || res.status === 'rejected' || res.status === 'error') {
-          clearLevelOrderGroup(requestId);
           pendingByReqId.delete(requestId);
           retryCounts.delete(requestId);
           setCardState(key, null);
@@ -410,35 +400,13 @@ function createLevelOrderRenderer({
           render();
           return res;
         }
-        const group = levelOrderGroups.get(requestId);
-        if (group && res.raw?.plan?.childQtys) group.total = res.raw.plan.childQtys.length;
-        if (group && Array.isArray(res.raw?.results)) {
-          for (const child of res.raw.results) {
-            const childReqId = child?.requestId;
-            const childStatus = child?.result?.status;
-            if (!childReqId || (childStatus !== 'ok' && childStatus !== 'simulated')) continue;
-            group.childReqIds.add(childReqId);
-            levelOrderChildToGroup.set(childReqId, group.parentRequestId);
-            const providerOrderId = String(child?.result?.providerOrderId || '');
-            if (providerOrderId.startsWith('pending:')) {
-              levelOrderPendingToGroup.set(providerOrderId.slice('pending:'.length), group.parentRequestId);
-            } else if (providerOrderId) {
-              registerLevelOrderTicket(group, providerOrderId, key);
-            }
-          }
-        }
-        if (group && levelOrderAllPlaced(group)) {
-          setCardState(key, levelOrderAllOpened(group) ? 'executing' : 'pending-exec');
-        } else {
-          setCardState(key, 'pending-exec');
-        }
+        setCardState(key, 'pending-exec');
         toast(res.status === 'unknown'
           ? `... ${title}: level order state unknown, waiting reconciliation`
           : `... ${title}: level order sent`);
         render();
         return res;
       } catch (err) {
-        clearLevelOrderGroup(requestId);
         pendingByReqId.delete(requestId);
         retryCounts.delete(requestId);
         setCardState(key, null);
@@ -463,6 +431,10 @@ function createLevelOrderRenderer({
     return action.command === 'position.close' && position.card?.type === 'levelOrder';
   }
 
+  function isLevelOrderArchiveAction(position = {}, action = {}) {
+    return action.command === 'position.remove' && position.card?.type === 'levelOrder';
+  }
+
   function createSnapshotActionHandler({ placePositionAction } = {}) {
     return function handleLevelOrderSnapshotAction(position = {}, action = {}, base = {}) {
       if (isLevelOrderPlacementAction(action)) {
@@ -471,12 +443,23 @@ function createLevelOrderRenderer({
       }
 
       if (isLevelOrderCloseAction(position, action)) {
+        ipcRenderer.invoke('positions:remove', {
+          positionId: position.id,
+          reason: 'renderer.levelOrder.close'
+        }).catch(() => {});
         return ipcRenderer.invoke('execution:close-level-order-positions', {
           ...base,
           tickets: position.tickets || [],
           expectedIds: (position.children || [])
             .map(child => child.ticket || child.requestId || child.providerOrderId)
             .filter(Boolean)
+        });
+      }
+
+      if (isLevelOrderArchiveAction(position, action)) {
+        return ipcRenderer.invoke('positions:remove', {
+          positionId: position.id,
+          reason: 'renderer.levelOrder.archive'
         });
       }
 

@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { PositionState, PositionCommand, PositionEvent } = require('./types');
 const { createOpeningPolicy, createClosingPolicy } = require('./policies');
 const { derivePositionCard } = require('./cardMetadata');
+const { defaultPositionBehaviorRegistry } = require('./behaviorRegistry');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -22,12 +23,13 @@ function normalizeTicket(ticket) {
   return text || '';
 }
 
-function childKey(command = {}) {
-  return String(command.childRequestId || command.requestId || command.cid || command.ticket || '').trim();
+function childKey(child = {}) {
+  return String(child.childRequestId || child.requestId || child.pendingId || child.cid || child.ticket || child.providerOrderId || '').trim();
 }
 
 class PositionAggregate {
-  constructor(snapshot = {}) {
+  constructor(snapshot = {}, opts = {}) {
+    this.behaviorRegistry = opts.behaviorRegistry || defaultPositionBehaviorRegistry;
     this.id = idFromSeed(snapshot.id);
     this.state = snapshot.state || PositionState.DRAFT;
     this.ticker = snapshot.ticker || snapshot.symbol || '';
@@ -37,9 +39,11 @@ class PositionAggregate {
     this.provider = snapshot.provider || '';
     this.side = snapshot.side || '';
     this.source = clone(snapshot.source) || {};
+    if (snapshot.cardType && !this.source.cardType) this.source.cardType = snapshot.cardType;
     this.cardSpec = clone(snapshot.card || snapshot.cardSpec) || {};
+    if (snapshot.cardType && !this.cardSpec.type) this.cardSpec.type = snapshot.cardType;
     this.executionIntent = clone(snapshot.executionIntent) || null;
-    this.openingPolicy = createOpeningPolicy(snapshot.openingPolicy || { kind: snapshot.cardType === 'levelOrder' ? 'levelOrder' : 'regular' });
+    this.openingPolicy = createOpeningPolicy(snapshot.openingPolicy || { kind: snapshot.cardType || 'regular' });
     this.closingPolicy = createClosingPolicy(snapshot.closingPolicy || { kind: 'regular' });
     this.primaryTicket = snapshot.primaryTicket || '';
     this.tickets = new Set(Array.isArray(snapshot.tickets) ? snapshot.tickets.map(normalizeTicket).filter(Boolean) : []);
@@ -64,8 +68,8 @@ class PositionAggregate {
     this.version = Number(snapshot.version) || 0;
   }
 
-  static create(command = {}) {
-    const aggregate = new PositionAggregate({
+  static create(command = {}, opts = {}) {
+    return new PositionAggregate({
       id: command.positionId || command.id,
       ticker: command.ticker || command.symbol,
       symbol: command.symbol || command.ticker,
@@ -79,8 +83,7 @@ class PositionAggregate {
       openingPolicy: command.openingPolicy,
       closingPolicy: command.closingPolicy,
       cardType: command.cardType
-    });
-    return aggregate;
+    }, opts);
   }
 
   handle(command = {}) {
@@ -125,6 +128,21 @@ class PositionAggregate {
       ticker: this.ticker,
       symbol: this.symbol,
       ...data
+    };
+  }
+
+  #behavior(command = {}) {
+    return this.behaviorRegistry?.resolve?.(this, command) || null;
+  }
+
+  #behaviorContext() {
+    return {
+      clone,
+      now,
+      normalizeTicket,
+      normalizePnlSnapshot,
+      event: (type, data) => this.#event(type, data),
+      touch: () => this.#touch()
     };
   }
 
@@ -180,6 +198,8 @@ class PositionAggregate {
   }
 
   #providerPlaced(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerPlaced) return behavior.providerPlaced(this, command, this.#behaviorContext());
     const ticket = normalizeTicket(command.ticket || command.providerOrderId);
     if (ticket && this.tickets.has(ticket) && [PositionState.PLACED, PositionState.ACTIVE, PositionState.CLOSING, PositionState.CLOSED].includes(this.state)) {
       return { events: [], integrationCommands: [] };
@@ -187,8 +207,6 @@ class PositionAggregate {
     if (ticket) {
       this.primaryTicket = this.primaryTicket || ticket;
       this.tickets.add(ticket);
-      const key = childKey(command);
-      if (key) this.children.set(key, { ...(this.children.get(key) || {}), ...clone(command), ticket, state: PositionState.PLACED });
     }
     if (![PositionState.ACTIVE, PositionState.CLOSING, PositionState.CLOSED].includes(this.state)) {
       this.state = PositionState.PLACED;
@@ -199,6 +217,8 @@ class PositionAggregate {
   }
 
   #providerOpened(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerOpened) return behavior.providerOpened(this, command, this.#behaviorContext());
     const ticket = normalizeTicket(command.ticket || command.providerOrderId);
     if (ticket && this.tickets.has(ticket) && [PositionState.ACTIVE, PositionState.CLOSING, PositionState.CLOSED].includes(this.state)) {
       return { events: [], integrationCommands: [] };
@@ -206,8 +226,6 @@ class PositionAggregate {
     if (ticket) {
       this.primaryTicket = this.primaryTicket || ticket;
       this.tickets.add(ticket);
-      const key = childKey(command);
-      if (key) this.children.set(key, { ...(this.children.get(key) || {}), ...clone(command), ticket, state: PositionState.ACTIVE });
     }
     this.state = PositionState.ACTIVE;
     this.timestamps.openedAt = this.timestamps.openedAt || now(command);
@@ -216,28 +234,21 @@ class PositionAggregate {
   }
 
   #providerClosed(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerClosed) return behavior.providerClosed(this, command, this.#behaviorContext());
     const ticket = normalizeTicket(command.ticket || command.providerOrderId);
-    if (ticket) {
-      const key = childKey(command) || ticket;
-      if (this.children.has(key)) {
-        this.children.set(key, { ...(this.children.get(key) || {}), ticket, state: PositionState.CLOSED });
-      }
-    }
     if (command.pnlSnapshot || command.profit != null || command.trade) {
       this.pnlSnapshot = normalizePnlSnapshot(command);
     }
-    const allChildrenClosed = this.children.size > 0
-      && this.expectedChildren > 0
-      && Array.from(this.children.values()).filter(child => child.state === PositionState.CLOSED).length >= this.expectedChildren;
-    if (this.children.size === 0 || allChildrenClosed || command.final !== false) {
-      this.state = PositionState.CLOSED;
-      this.timestamps.closedAt = this.timestamps.closedAt || now(command);
-    }
+    this.state = PositionState.CLOSED;
+    this.timestamps.closedAt = this.timestamps.closedAt || now(command);
     this.#touch();
     return { events: [this.#event(PositionEvent.CLOSED, { ticket, pnlSnapshot: clone(this.pnlSnapshot), timestamp: this.timestamps.closedAt })], integrationCommands: [] };
   }
 
   #providerCancelled(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerCancelled) return behavior.providerCancelled(this, command, this.#behaviorContext());
     const ticket = normalizeTicket(command.ticket || command.providerOrderId);
     if (ticket) this.tickets.delete(ticket);
     this.state = PositionState.CANCELLED;
@@ -246,6 +257,8 @@ class PositionAggregate {
   }
 
   #providerRejected(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerRejected) return behavior.providerRejected(this, command, this.#behaviorContext());
     this.state = PositionState.REJECTED;
     this.lastReason = command.reason || '';
     this.#touch();
@@ -253,6 +266,8 @@ class PositionAggregate {
   }
 
   #providerFailed(command) {
+    const behavior = this.#behavior(command);
+    if (behavior?.providerFailed) return behavior.providerFailed(this, command, this.#behaviorContext());
     this.state = PositionState.FAILED;
     this.lastReason = command.reason || '';
     this.#touch();
@@ -288,7 +303,7 @@ class PositionAggregate {
       lastReason: this.lastReason,
       version: this.version
     };
-    snapshot.card = derivePositionCard(snapshot, { card: this.cardSpec });
+    snapshot.card = derivePositionCard(snapshot, { card: this.cardSpec, behaviorRegistry: this.behaviorRegistry });
     return snapshot;
   }
 }
@@ -307,5 +322,8 @@ function normalizePnlSnapshot(command = {}) {
 
 module.exports = {
   PositionAggregate,
+  clone,
+  now,
+  normalizeTicket,
   normalizePnlSnapshot
 };

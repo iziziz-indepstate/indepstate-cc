@@ -9,11 +9,6 @@ const DEFAULT_REGULAR_ACTIONS = Object.freeze([
   { id: 'SFB', label: 'SFB', command: 'position.openPending', style: 'sc' }
 ]);
 
-const LEVEL_ORDER_ACTIONS = Object.freeze([
-  { id: 'LB', label: 'LB', command: 'position.levelOrder.buy', style: 'bl' },
-  { id: 'LS', label: 'LS', command: 'position.levelOrder.sell', style: 'sl' }
-]);
-
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -67,9 +62,10 @@ function pick(source = {}, keys = []) {
 
 function derivePositionCard(position = {}, opts = {}) {
   const source = position.source || {};
-  const policyKind = String(position.openingPolicy?.kind || '');
   const explicit = opts.card || position.cardSpec || {};
-  const type = explicit.type || source.cardType || (policyKind === 'levelOrder' ? 'levelOrder' : 'regular');
+  const behaviorCard = opts.behaviorRegistry?.deriveCard?.(position, opts);
+  if (behaviorCard) return behaviorCard;
+  const type = explicit.type || source.cardType || 'regular';
   const baseData = {
     ticker: position.ticker || position.symbol || source.ticker || source.symbol,
     symbol: position.symbol || source.symbol || source.ticker,
@@ -78,29 +74,6 @@ function derivePositionCard(position = {}, opts = {}) {
     pnl: position.pnlSnapshot || { status: 'unavailable' },
     timestamps: position.timestamps || {}
   };
-
-  if (type === 'levelOrder') {
-    const data = {
-      ...baseData,
-      ...pick(source, [
-        'level',
-        'risk',
-        'riskUsd',
-        'stopOffsetPts',
-        'maxLot',
-        'minLot',
-        'takeProfitPts',
-        'pointSize',
-        'buyPriceSource',
-        'sellPriceSource'
-      ])
-    };
-    return {
-      type: 'levelOrder',
-      actions: isActionableState(position.state) ? clone(LEVEL_ORDER_ACTIONS) : lifecycleActions(position),
-      data
-    };
-  }
 
   const sourceActions = source.cardActions || source.actions || explicit.actions || opts.defaultActions;
   const actions = isActionableState(position.state)
@@ -120,6 +93,8 @@ function derivePositionCard(position = {}, opts = {}) {
 
 module.exports = {
   DEFAULT_REGULAR_ACTIONS,
-  LEVEL_ORDER_ACTIONS,
+  lifecycleActions,
+  isActionableState,
+  pick,
   derivePositionCard
 };

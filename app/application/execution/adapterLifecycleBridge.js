@@ -59,6 +59,22 @@ function createAdapterLifecycleBridge({
         order: rec.order
       };
       const normalizedTicket = String(ticket || '');
+      const childMeta = {
+        requestId: rec.reqId,
+        parentRequestId: rec.order?.meta?.parentRequestId,
+        childIndex: rec.order?.meta?.childIndex,
+        childCount: rec.order?.meta?.childCount,
+        pendingId,
+        cid: rec.cid || rec.order?.meta?.cid || pendingId,
+        ticket: normalizedTicket,
+        providerOrderId: normalizedTicket,
+        provider: providerName,
+        result: payload,
+        payload: rec.order,
+        order: rec.order,
+        origOrder: rec.order
+      };
+      servicesApi?.positions?.recordPlaced?.(childMeta);
       const parentRequestId = rec.order?.meta?.parentRequestId;
       const monitor = parentRequestId ? levelOrderPositionMonitors?.get(parentRequestId) : null;
       if (monitor && normalizedTicket) {
@@ -108,6 +124,20 @@ function createAdapterLifecycleBridge({
         order: rec.order
       };
       appendJsonl?.(execLog, { t: payload.ts, kind: 'reject', ...payload, msg });
+      servicesApi?.positions?.recordRejected?.({
+        requestId: rec.reqId,
+        parentRequestId: rec.order?.meta?.parentRequestId,
+        childIndex: rec.order?.meta?.childIndex,
+        childCount: rec.order?.meta?.childCount,
+        pendingId,
+        cid: rec.cid || rec.order?.meta?.cid || pendingId,
+        provider: providerName,
+        reason: payload.reason,
+        result: payload,
+        payload: rec.order,
+        order: rec.order,
+        origOrder: rec.order
+      });
       events?.emit('order:rejected', { pendingId, reason: payload.reason, order: rec.order, provider: providerName });
       send('execution:result', payload);
       trackerPending.delete(rec.reqId);
@@ -127,7 +157,17 @@ function createAdapterLifecycleBridge({
         || confirmedOrderByTicket?.get(normalizedTicket)
         || (cid ? confirmedOrderByCid?.get(cid) : null)
         || (cid ? pendingIndex.get(cid)?.order : null);
-      servicesApi?.positions?.recordOpened?.({ ticket, order, origOrder: enrichedOrigOrder, provider: providerName });
+      servicesApi?.positions?.recordOpened?.({
+        requestId: enrichedOrigOrder?.meta?.requestId,
+        parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
+        childIndex: enrichedOrigOrder?.meta?.childIndex,
+        childCount: enrichedOrigOrder?.meta?.childCount,
+        cid: enrichedOrigOrder?.meta?.cid || cid,
+        ticket,
+        order,
+        origOrder: enrichedOrigOrder,
+        provider: providerName
+      });
       events?.emit('position:opened', { ticket, order, origOrder: enrichedOrigOrder, provider: providerName });
       const parentRequestId = enrichedOrigOrder?.meta?.parentRequestId;
       console.log('[EXEC][POSITION_OPENED]', {
@@ -151,7 +191,21 @@ function createAdapterLifecycleBridge({
     });
 
     adapter.on('position:closed', ({ ticket, trade }) => {
-      servicesApi?.positions?.recordClosed?.({ ticket, trade, profit: trade?.profit, provider: providerName });
+      const normalizedTicket = String(ticket || '');
+      const enrichedOrigOrder = confirmedOrderByTicket?.get(normalizedTicket);
+      servicesApi?.positions?.recordClosed?.({
+        requestId: enrichedOrigOrder?.meta?.requestId,
+        parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
+        childIndex: enrichedOrigOrder?.meta?.childIndex,
+        childCount: enrichedOrigOrder?.meta?.childCount,
+        cid: enrichedOrigOrder?.meta?.cid,
+        ticket,
+        trade,
+        profit: trade?.profit,
+        provider: providerName,
+        origOrder: enrichedOrigOrder,
+        final: !enrichedOrigOrder?.meta?.parentRequestId
+      });
       events?.emit('position:closed', { ticket, trade, provider: providerName });
       const profit = trade?.profit;
       if (trackerIndex.get(String(ticket))) trackerIndex.delete(String(ticket));
@@ -159,7 +213,18 @@ function createAdapterLifecycleBridge({
     });
 
     adapter.on('order:cancelled', ({ ticket }) => {
-      servicesApi?.positions?.recordCancelled?.({ ticket, provider: providerName });
+      const normalizedTicket = String(ticket || '');
+      const enrichedOrigOrder = confirmedOrderByTicket?.get(normalizedTicket);
+      servicesApi?.positions?.recordCancelled?.({
+        requestId: enrichedOrigOrder?.meta?.requestId,
+        parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
+        childIndex: enrichedOrigOrder?.meta?.childIndex,
+        childCount: enrichedOrigOrder?.meta?.childCount,
+        cid: enrichedOrigOrder?.meta?.cid,
+        ticket,
+        provider: providerName,
+        origOrder: enrichedOrigOrder
+      });
       events?.emit('order:cancelled', { ticket, provider: providerName });
       trackerIndex.delete(String(ticket));
       groupedOrderLifecycles?.removeTicket(ticket, providerName);

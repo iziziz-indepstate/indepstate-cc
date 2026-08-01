@@ -1,9 +1,14 @@
 const assert = require('assert');
 const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
+const { createPositionBehaviorRegistry } = require('../app/domain/positions');
+const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/positionBehavior');
 const { registerPositionsIpcHandlers, createPositionsChangedPublisher } = require('../app/infrastructure/positions');
 
 async function run() {
-  const positions = createPositionApplicationService({ clock: () => 100 });
+  const positions = createPositionApplicationService({
+    clock: () => 100,
+    behaviorRegistry: createPositionBehaviorRegistry([createLevelOrderPositionBehavior()])
+  });
   const createCommand = legacyRowToCreateCommand({
     ticker: 'ADAUSDT',
     cardType: 'levelOrder',

@@ -401,6 +401,7 @@ function setupIpc(orderSvc) {
     sendToRenderer,
     resolveProviderName: providerResolution.resolveProviderName,
     queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
+    positions: servicesApi.positions,
     pendingIndex,
     trackerPending,
     levelOrderIntentRegistry,
