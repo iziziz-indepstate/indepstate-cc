@@ -1,5 +1,8 @@
 const assert = require('assert');
-const { registerMainIpcHandlers } = require('../app/services/levelOrder/manifest');
+const {
+  registerMainApplicationServices,
+  registerMainIpcHandlers
+} = require('../app/services/levelOrder/manifest');
 
 async function run() {
   const handlers = new Map();
@@ -26,8 +29,11 @@ async function run() {
 
   registerMainIpcHandlers({
     ipcMain,
-    servicesApi: {},
-    levelOrderService
+    servicesApi: {
+      levelOrder: {
+        applicationService: levelOrderService
+      }
+    }
   });
 
   assert.strictEqual(handlers.has('level-order:place'), true);
@@ -51,6 +57,34 @@ async function run() {
     ['stopRetry', 'req-1'],
     ['closeLevelOrderPositions', { symbol: 'ADAUSDT' }]
   ]);
+
+  const servicesApi = {
+    execution: {},
+    levelOrder: {},
+    positions: { handle() {} }
+  };
+  const executionService = {
+    queuePlaceOrder: async (payload) => ({ status: 'queued', payload })
+  };
+  const applicationService = registerMainApplicationServices({
+    servicesApi,
+    getAdapter: () => ({}),
+    wireAdapter: (adapter) => adapter,
+    instrumentInfo: {},
+    orderCalc: {},
+    appendJsonl: () => {},
+    execLog: 'test-executions.jsonl',
+    nowTs: () => 1,
+    sendToRenderer: () => {},
+    resolveProviderName: () => 'simulated',
+    executionService,
+    pendingIndex: new Map(),
+    trackerPending: new Map(),
+    groupedOrderLifecycles: new Map()
+  });
+
+  assert.strictEqual(servicesApi.levelOrder.applicationService, applicationService);
+  assert.strictEqual(typeof servicesApi.execution.queueLevelOrder, 'function');
 
   console.log('levelOrderManifestIpc tests passed');
 }

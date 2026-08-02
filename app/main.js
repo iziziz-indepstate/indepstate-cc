@@ -30,10 +30,6 @@ const {
   registerPositionsIpcHandlers
 } = require('./infrastructure/positions');
 const {
-  createLevelOrderApplicationService,
-  createLevelOrderRuntime
-} = require('./services/levelOrder');
-const {
   registerOrderListIpcHandlers,
   registerWindowStateIpcHandlers
 } = require('./infrastructure/electron');
@@ -64,6 +60,16 @@ function loadServices(servicesApi = {}) {
 }
 
 const serviceManifests = loadServices(servicesApi);
+function registerServiceMainApplicationServices(context = {}) {
+  for (const { dir, manifest } of serviceManifests) {
+    if (typeof manifest?.registerMainApplicationServices !== 'function') continue;
+    try {
+      manifest.registerMainApplicationServices({ ...context, serviceDir: dir });
+    } catch (err) {
+      console.error('[serviceLoader] Failed to register application services for', dir, err);
+    }
+  }
+}
 function registerServiceMainIpcHandlers(context = {}) {
   for (const { dir, manifest } of serviceManifests) {
     if (typeof manifest?.registerMainIpcHandlers !== 'function') continue;
@@ -129,8 +135,6 @@ const confirmedOrderByTicket = new Map(); // provider ticket -> original normali
 const confirmedOrderByCid = new Map(); // cid/pendingId -> original normalized order
 const trackerPending = new Map(); // reqId -> { ticker, tp, sp }
 const trackerIndex = new Map(); // ticket -> { ticker, tp, sp, cid }
-const levelOrderPositionMonitors = new Map(); // parent requestId -> { timer, children, ... }
-const levelOrderIntentRegistry = new Map(); // intentKey -> { status, promise, result, updatedAt }
 const groupedOrderLifecycles = new GroupedOrderLifecycleRegistry();
 
 function appendJsonl(file, obj) {
@@ -142,20 +146,6 @@ function sendToRenderer(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send(channel, payload);
   }
-}
-
-const levelOrderRuntime = createLevelOrderRuntime({
-  getAdapter,
-  wireAdapter,
-  groupedOrderLifecycles,
-  levelOrderPositionMonitors,
-  appendJsonl,
-  execLog: EXEC_LOG,
-  nowTs,
-  sendToRenderer
-});
-for (const controller of servicesApi.executionCardControllers || []) {
-  controller?.configureLifecycle?.({ levelOrderPositionMonitors });
 }
 
 const adapterLifecycleBridge = createAdapterLifecycleBridge({
@@ -386,6 +376,23 @@ function setupIpc(orderSvc) {
     pickProviderName: (instrumentType) => executionService.pickProviderName(instrumentType)
   };
 
+  registerServiceMainApplicationServices({
+    servicesApi,
+    getAdapter,
+    wireAdapter,
+    instrumentInfo,
+    orderCalc,
+    appendJsonl,
+    execLog: EXEC_LOG,
+    nowTs,
+    sendToRenderer,
+    resolveProviderName: providerResolution.resolveProviderName,
+    executionService,
+    pendingIndex,
+    trackerPending,
+    groupedOrderLifecycles
+  });
+
   const pendingHub = createPendingOrderHub({
     subscribe: (provider, symbols) => {
       const adapter = getAdapter(provider);
@@ -403,28 +410,9 @@ function setupIpc(orderSvc) {
     queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload)
   });
 
-  const levelOrderService = createLevelOrderApplicationService({
-    getAdapter,
-    wireAdapter,
-    instrumentInfo,
-    orderCalc,
-    appendJsonl,
-    execLog: EXEC_LOG,
-    nowTs,
-    sendToRenderer,
-    resolveProviderName: providerResolution.resolveProviderName,
-    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
-    positions: servicesApi.positions,
-    pendingIndex,
-    trackerPending,
-    levelOrderIntentRegistry,
-    runtime: levelOrderRuntime
-  });
-  servicesApi.execution.queueLevelOrder = (payload) => levelOrderService.queueLevelOrder(payload);
   registerServiceMainIpcHandlers({
     ipcMain,
-    servicesApi,
-    levelOrderService
+    servicesApi
   });
 
   registerExecutionIpcHandlers({

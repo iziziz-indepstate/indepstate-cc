@@ -1,7 +1,11 @@
 const path = require('path');
 const settings = require('../settings');
 const { LevelOrderCommand, LevelOrderPlaceCommand } = require('./command');
-const { createLevelOrderExecutionController } = require('./application');
+const {
+  createLevelOrderApplicationService,
+  createLevelOrderExecutionController,
+  createLevelOrderRuntime
+} = require('./application');
 const { createLevelOrderPositionBehavior } = require('./domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('./domain/openingPolicy');
 const { createLevelOrderLegacyGuard } = require('./legacyGuard');
@@ -12,6 +16,10 @@ settings.register(
   path.join(__dirname, 'config', 'level-order.json'),
   path.join(__dirname, 'config', 'level-order-settings-descriptor.json')
 );
+
+const levelOrderPositionMonitors = new Map();
+const levelOrderIntentRegistry = new Map();
+let levelOrderService = null;
 
 function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
@@ -43,24 +51,77 @@ function initService(servicesApi = {}) {
     new LevelOrderPlaceCommand('LS', commandOpts)
   );
   if (!servicesApi.executionCardControllers.some(controller => controller?.id === 'levelOrder')) {
-    servicesApi.executionCardControllers.push(createLevelOrderExecutionController());
+    servicesApi.executionCardControllers.push(createLevelOrderExecutionController({ levelOrderPositionMonitors }));
   }
+}
+
+function registerMainApplicationServices({
+  servicesApi = {},
+  getAdapter,
+  wireAdapter,
+  instrumentInfo,
+  orderCalc,
+  appendJsonl,
+  execLog,
+  nowTs,
+  sendToRenderer,
+  resolveProviderName,
+  executionService,
+  pendingIndex,
+  trackerPending,
+  groupedOrderLifecycles
+} = {}) {
+  if (!servicesApi.execution) servicesApi.execution = {};
+  const runtime = createLevelOrderRuntime({
+    getAdapter,
+    wireAdapter,
+    groupedOrderLifecycles,
+    levelOrderPositionMonitors,
+    appendJsonl,
+    execLog,
+    nowTs,
+    sendToRenderer
+  });
+  levelOrderService = createLevelOrderApplicationService({
+    getAdapter,
+    wireAdapter,
+    instrumentInfo,
+    orderCalc,
+    appendJsonl,
+    execLog,
+    nowTs,
+    sendToRenderer,
+    resolveProviderName,
+    queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
+    positions: servicesApi.positions,
+    pendingIndex,
+    trackerPending,
+    levelOrderIntentRegistry,
+    runtime
+  });
+  servicesApi.execution.queueLevelOrder = (payload) => levelOrderService.queueLevelOrder(payload);
+  servicesApi.levelOrder = {
+    ...(servicesApi.levelOrder || {}),
+    applicationService: levelOrderService
+  };
+  return levelOrderService;
 }
 
 function registerMainIpcHandlers({
   ipcMain,
-  levelOrderService
+  servicesApi = {}
 } = {}) {
   if (!ipcMain || typeof ipcMain.handle !== 'function') {
     throw new Error('ipcMain with handle() is required');
   }
-  if (!levelOrderService) {
-    throw new Error('levelOrderService is required');
+  const service = levelOrderService || servicesApi.levelOrder?.applicationService;
+  if (!service) {
+    throw new Error('LevelOrder application service is not registered; call registerMainApplicationServices before registerMainIpcHandlers');
   }
 
-  ipcMain.handle('level-order:place', async (_evt, payload = {}) => levelOrderService.queueLevelOrder(payload));
-  ipcMain.handle('execution:stop-retry', async (_evt, reqId) => levelOrderService.stopRetry(reqId));
-  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => levelOrderService.closeLevelOrderPositions(payload));
+  ipcMain.handle('level-order:place', async (_evt, payload = {}) => service.queueLevelOrder(payload));
+  ipcMain.handle('execution:stop-retry', async (_evt, reqId) => service.stopRetry(reqId));
+  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => service.closeLevelOrderPositions(payload));
 }
 
 const rendererPositionHandlers = [{
@@ -169,4 +230,10 @@ const rendererPositionHandlers = [{
 
 const rendererLegacyGuards = [createLevelOrderLegacyGuard()];
 
-module.exports = { initService, registerMainIpcHandlers, rendererPositionHandlers, rendererLegacyGuards };
+module.exports = {
+  initService,
+  registerMainApplicationServices,
+  registerMainIpcHandlers,
+  rendererPositionHandlers,
+  rendererLegacyGuards
+};
