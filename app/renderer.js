@@ -8,7 +8,6 @@ const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const {detectInstrumentType} = require("./services/instruments");
 const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumentInfo/points');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
-const { createLevelOrderRenderer } = require('./services/levelOrder/infrastructure/renderer/renderer');
 const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/renderer');
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createOptionStratRenderer } = require('./services/optionstrat/renderer');
@@ -16,7 +15,6 @@ const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createOrderCardsRenderer } = require('./services/orderCards/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
 let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
-let levelOrderCfg = loadConfig('../services/levelOrder/config/level-order.json');
 
 let SHOW_BID_ASK = !!(orderCardsCfg && orderCardsCfg.showBidAsk);
 let SHOW_SPREAD = !!(orderCardsCfg && orderCardsCfg.showSpread);
@@ -173,10 +171,6 @@ settingsRuntime.onApply('ui', ({ config }) => {
 });
 settingsRuntime.onApply('order-cards', ({ config }) => applyOrderCardsConfig(config));
 settingsRuntime.onApply('order-calculator', () => render());
-settingsRuntime.onApply('level-order', ({ config }) => {
-  levelOrderCfg = config || {};
-  render();
-});
 settingsRuntime.onApply('optionstrat', ({ config }) => {
   const ms = Number(config?.valuationRefreshMs);
   if (Number.isFinite(ms) && ms > 0) optionStratValuationRefreshMs = optionStratRenderer.setValuationRefreshMs(ms);
@@ -1027,36 +1021,6 @@ const place = (...args) => orderCardsRenderer.place(...args);
 
 const pendingOrdersRenderer = createPendingOrdersRenderer();
 
-const levelOrderRenderer = createLevelOrderRenderer({
-  getConfig: () => levelOrderCfg,
-  el,
-  inputNumber,
-  normNum: _normNum,
-  instrumentInfoFor,
-  tickSize,
-  isPos,
-  isSL,
-  markTouched,
-  uiState,
-  orderCalc,
-  detectInstrumentType,
-  createPositionDataGrid,
-  ipcRenderer,
-  trackInstrument: row => instrumentInfoRenderer.trackInstrument(row),
-  untrackInstrument: row => instrumentInfoRenderer.untrackInstrument(row)
-});
-const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDispatcher({
-  positionKey,
-  positionCardTitle,
-  pendingByReqId,
-  retryCounts,
-  pendingExecLabels,
-  cardByKey,
-  setCardState,
-  toast,
-  shakeCard,
-  render
-});
 const positionActionHandlers = {};
 const positionCardRenderers = {};
 const positionRemovalHandlers = {};
@@ -1096,10 +1060,33 @@ function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
 }
 
 loadRendererPositionHandlers({
-  levelOrderRenderer,
-  placeLevelOrderPositionAction,
+  loadConfig,
+  settingsRuntime,
+  el,
+  inputNumber,
+  normNum: _normNum,
+  instrumentInfoFor,
+  tickSize,
+  isPos,
+  isSL,
+  markTouched,
+  uiState,
+  orderCalc,
+  detectInstrumentType,
+  createPositionDataGrid,
+  ipcRenderer,
+  trackInstrument: row => instrumentInfoRenderer.trackInstrument(row),
+  untrackInstrument: row => instrumentInfoRenderer.untrackInstrument(row),
   positionKey,
   positionCardTitle,
+  pendingByReqId,
+  retryCounts,
+  pendingExecLabels,
+  cardByKey,
+  setCardState,
+  toast,
+  shakeCard,
+  render,
   btn,
   dispatchPositionAction,
   requestRemovePosition,
@@ -1635,9 +1622,6 @@ if (typeof module !== 'undefined') {
     instrumentInfo,
     settingsForms,
     migrateKey,
-    setLevelOrderConfig(config) {
-      levelOrderCfg = config || {};
-    },
     setOptionStratDisplayFields(fields) {
       optionStratRenderer.setDisplayFields(fields);
     },

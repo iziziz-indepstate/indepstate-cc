@@ -5,6 +5,7 @@ const { createLevelOrderExecutionController } = require('./application');
 const { createLevelOrderPositionBehavior } = require('./domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('./domain/openingPolicy');
 const { createLevelOrderLegacyGuard } = require('./legacyGuard');
+const { createLevelOrderRenderer } = require('./infrastructure/renderer/renderer');
 
 settings.register(
   'level-order',
@@ -50,15 +51,76 @@ const rendererPositionHandlers = [{
   cardType: 'levelOrder',
   register(context = {}) {
     const {
-      levelOrderRenderer,
-      placeLevelOrderPositionAction,
+      loadConfig,
+      settingsRuntime,
+      el,
+      inputNumber,
+      normNum,
+      instrumentInfoFor,
+      tickSize,
+      isPos,
+      isSL,
+      markTouched,
+      uiState,
+      orderCalc,
+      detectInstrumentType,
+      createPositionDataGrid,
+      ipcRenderer,
+      trackInstrument,
+      untrackInstrument,
       positionKey,
       positionCardTitle,
+      pendingByReqId,
+      retryCounts,
+      pendingExecLabels,
+      cardByKey,
+      setCardState,
+      toast,
+      shakeCard,
+      render,
       btn,
       dispatchPositionAction,
       requestRemovePosition
     } = context;
-    if (!levelOrderRenderer) return;
+
+    let levelOrderCfg = typeof loadConfig === 'function'
+      ? loadConfig('../services/levelOrder/config/level-order.json')
+      : {};
+    settingsRuntime?.onApply?.('level-order', ({ config }) => {
+      levelOrderCfg = config || {};
+      render?.();
+    });
+
+    const levelOrderRenderer = createLevelOrderRenderer({
+      getConfig: () => levelOrderCfg,
+      el,
+      inputNumber,
+      normNum,
+      instrumentInfoFor,
+      tickSize,
+      isPos,
+      isSL,
+      markTouched,
+      uiState,
+      orderCalc,
+      detectInstrumentType,
+      createPositionDataGrid,
+      ipcRenderer,
+      trackInstrument,
+      untrackInstrument
+    });
+    const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDispatcher({
+      positionKey,
+      positionCardTitle,
+      pendingByReqId,
+      retryCounts,
+      pendingExecLabels,
+      cardByKey,
+      setCardState,
+      toast,
+      shakeCard,
+      render
+    });
 
     context.registerPositionActionHandler?.(
       'levelOrder',
