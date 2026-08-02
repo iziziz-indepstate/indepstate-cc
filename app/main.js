@@ -42,15 +42,17 @@ let uiCfg = loadConfig('../services/ui/config/ui.json');
 
 function loadServices(servicesApi = {}) {
   let dirs = [];
+  const manifests = [];
   try {
     dirs = loadConfig('../services/settings/config/services.json');
   } catch {
     dirs = [];
   }
-  if (!Array.isArray(dirs)) return;
+  if (!Array.isArray(dirs)) return manifests;
   for (const dir of dirs) {
     try {
       const manifest = require(path.join(__dirname, dir, 'manifest.js'));
+      manifests.push({ dir, manifest });
       if (typeof manifest?.initService === 'function') {
         manifest.initService(servicesApi);
       }
@@ -58,9 +60,20 @@ function loadServices(servicesApi = {}) {
       console.error('[serviceLoader] Failed to load', dir, err);
     }
   }
+  return manifests;
 }
 
-loadServices(servicesApi);
+const serviceManifests = loadServices(servicesApi);
+function registerServiceMainIpcHandlers(context = {}) {
+  for (const { dir, manifest } of serviceManifests) {
+    if (typeof manifest?.registerMainIpcHandlers !== 'function') continue;
+    try {
+      manifest.registerMainIpcHandlers({ ...context, serviceDir: dir });
+    } catch (err) {
+      console.error('[serviceLoader] Failed to register IPC handlers for', dir, err);
+    }
+  }
+}
 const { getAdapter, resolveProvider } = servicesApi.brokerage || {};
 const instrumentInfo = servicesApi.instrumentInfo;
 const providerResolution = createProviderResolution({ resolveProvider });
@@ -408,11 +421,15 @@ function setupIpc(orderSvc) {
     runtime: levelOrderRuntime
   });
   servicesApi.execution.queueLevelOrder = (payload) => levelOrderService.queueLevelOrder(payload);
+  registerServiceMainIpcHandlers({
+    ipcMain,
+    servicesApi,
+    levelOrderService
+  });
 
   registerExecutionIpcHandlers({
     ipcMain,
     executionService,
-    levelOrderService,
     getAdapter,
     wireAdapter,
     appendJsonl,

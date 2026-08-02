@@ -22,20 +22,6 @@ async function run() {
     executionService: {
       resolveOrderProviderName: () => 'simulated'
     },
-    levelOrderService: {
-      queueLevelOrder: async (payload) => {
-        calls.push(['queueLevelOrder', payload]);
-        return { status: 'ok', providerOrderId: 'level:test' };
-      },
-      stopRetry: async (reqId) => {
-        calls.push(['stopRetry', reqId]);
-        return { status: 'ok', stopped: 1 };
-      },
-      closeLevelOrderPositions: async (payload) => {
-        calls.push(['closeLevelOrderPositions', payload]);
-        return { status: 'ok', closed: 1 };
-      }
-    },
     getAdapter: (provider) => adapters.get(provider),
     wireAdapter: () => {},
     appendJsonl: () => {},
@@ -57,15 +43,12 @@ async function run() {
     normalizeOrderPayload: (payload) => ({ ...payload, symbol: payload.symbol || payload.ticker })
   });
 
-  assert.strictEqual(handlers.has('level-order:place'), true);
-  assert.strictEqual(handlers.has('execution:stop-retry'), true);
+  assert.strictEqual(handlers.has('level-order:place'), false);
+  assert.strictEqual(handlers.has('execution:stop-retry'), false);
+  assert.strictEqual(handlers.has('execution:close-level-order-positions'), false);
   assert.strictEqual(handlers.has('execution:cancel-order'), true);
   assert.strictEqual(handlers.has('optionstrat:estimate'), true);
   assert.strictEqual(handlers.has('instrument:get'), true);
-
-  assert.deepStrictEqual(await handlers.get('level-order:place')(null, { ticker: 'ADAUSDT' }), { status: 'ok', providerOrderId: 'level:test' });
-  assert.deepStrictEqual(await handlers.get('execution:stop-retry')(null, 'req-1'), { status: 'ok', stopped: 1 });
-  assert.deepStrictEqual(await handlers.get('execution:close-level-order-positions')(null, { symbol: 'ADAUSDT' }), { status: 'ok', closed: 1 });
 
   const cancel = await handlers.get('execution:cancel-order')(null, { provider: 'simulated', ticket: 't1', symbol: 'ADAUSDT' });
   assert.strictEqual(cancel.status, 'ok');

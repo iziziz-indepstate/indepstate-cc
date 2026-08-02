@@ -1,7 +1,6 @@
 function registerExecutionIpcHandlers({
   ipcMain,
   executionService,
-  levelOrderService,
   getAdapter,
   wireAdapter,
   appendJsonl,
@@ -26,10 +25,6 @@ function registerExecutionIpcHandlers({
     }
     return { ok: false, reason: 'actions-bus is not available' };
   });
-
-  ipcMain.handle('level-order:place', async (_evt, payload = {}) => levelOrderService.queueLevelOrder(payload));
-  ipcMain.handle('execution:stop-retry', async (_evt, reqId) => levelOrderService.stopRetry(reqId));
-  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => levelOrderService.closeLevelOrderPositions(payload));
 
   ipcMain.handle('execution:cancel-order', async (_evt, payload = {}) => {
     const providerNameRaw = payload.provider;

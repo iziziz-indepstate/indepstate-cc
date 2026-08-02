@@ -47,6 +47,22 @@ function initService(servicesApi = {}) {
   }
 }
 
+function registerMainIpcHandlers({
+  ipcMain,
+  levelOrderService
+} = {}) {
+  if (!ipcMain || typeof ipcMain.handle !== 'function') {
+    throw new Error('ipcMain with handle() is required');
+  }
+  if (!levelOrderService) {
+    throw new Error('levelOrderService is required');
+  }
+
+  ipcMain.handle('level-order:place', async (_evt, payload = {}) => levelOrderService.queueLevelOrder(payload));
+  ipcMain.handle('execution:stop-retry', async (_evt, reqId) => levelOrderService.stopRetry(reqId));
+  ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => levelOrderService.closeLevelOrderPositions(payload));
+}
+
 const rendererPositionHandlers = [{
   cardType: 'levelOrder',
   register(context = {}) {
@@ -153,4 +169,4 @@ const rendererPositionHandlers = [{
 
 const rendererLegacyGuards = [createLevelOrderLegacyGuard()];
 
-module.exports = { initService, rendererPositionHandlers, rendererLegacyGuards };
+module.exports = { initService, registerMainIpcHandlers, rendererPositionHandlers, rendererLegacyGuards };
