@@ -105,7 +105,7 @@ Buttons:
 
 ## Execution
 
-The renderer sends `level-order:place` to the main process. The main process runs the level-order flow:
+The renderer sends `level-order:place` to the levelOrder service manifest/application runtime. The service runs the level-order flow:
 
 1. Resolve provider through regular execution routing.
 2. Get quote through `adapter.getQuote(symbol)`.
@@ -159,9 +159,9 @@ If the monitor times out, it logs `[LEVEL][POSITIONS_TIMEOUT]` with a visible te
 
 - `app/services/levelOrder/command.js`: command parsing and row creation.
 - `app/services/levelOrder/strategy.js`: default resolution, sizing, stop math, and split math.
-- `app/services/levelOrder/manifest.js`: settings and command registration.
+- `app/services/levelOrder/manifest.js`: settings, command registration, IPC registration, and runtime wiring.
+- `app/services/levelOrder/application/*`: submission flow and terminal-position monitoring.
 - `app/services/levelTrack/*`: saved active-level tracking and `f:levelTrack:<key>` resolver.
-- `app/main.js`: `level-order:place`, child submission, and terminal-position monitoring.
 - `app/renderer.js`: card UI, IPC payload, grouped child lifecycle, and status transitions.
 - `test/levelOrder.test.js`: command and strategy tests.
 - `test/levelOrderRenderer.test.js`: renderer/card lifecycle tests.

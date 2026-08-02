@@ -30,7 +30,6 @@ const PositionEvent = Object.freeze({
   OPEN_REQUESTED: 'position.openRequested',
   EXECUTION_REQUESTED: 'position.executionRequested',
   PENDING_OPEN_REQUESTED: 'position.pendingOpenRequested',
-  LEVEL_CHILDREN_REQUESTED: 'position.levelChildrenRequested',
   PLACED: 'position.placed',
   OPENED: 'position.opened',
   CLOSE_REQUESTED: 'position.closeRequested',
@@ -46,7 +45,6 @@ const PositionEvent = Object.freeze({
 const IntegrationCommand = Object.freeze({
   PLACE_ORDER: 'execution.placeOrder',
   PLACE_PENDING_ORDER: 'execution.placePendingOrder',
-  PLACE_LEVEL_CHILDREN: 'execution.placeLevelChildren',
   CLOSE_POSITION: 'execution.closePosition',
   CANCEL_ORDER: 'execution.cancelOrder'
 });

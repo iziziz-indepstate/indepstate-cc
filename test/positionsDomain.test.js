@@ -13,6 +13,7 @@ const {
 } = require('../app/domain/positions');
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { LevelOrderOpeningPolicy, createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
+const { LevelOrderIntegrationCommand } = require('../app/services/levelOrder/domain/types');
 const {
   createPositionApplicationService,
   legacyOrderPayloadToCreateCommand,
@@ -115,7 +116,7 @@ function runPolicyTests() {
 
   const level = new LevelOrderOpeningPolicy({ children: [{ requestId: 'c1' }, { requestId: 'c2' }] });
   const levelResult = level.buildOpenRequest({ id: 'p3', provider: 'dwx', source: { symbol: 'ES' } }, {});
-  assert.deepStrictEqual(levelResult.integrationCommands.map(cmd => cmd.type), [IntegrationCommand.PLACE_LEVEL_CHILDREN]);
+  assert.deepStrictEqual(levelResult.integrationCommands.map(cmd => cmd.type), [LevelOrderIntegrationCommand.PLACE_CHILDREN]);
   assert.strictEqual(levelResult.integrationCommands[0].children.length, 2);
 }
 

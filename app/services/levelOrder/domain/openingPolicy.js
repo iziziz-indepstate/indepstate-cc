@@ -1,8 +1,10 @@
 const {
-  OpeningPolicy,
-  IntegrationCommand,
-  PositionEvent
+  OpeningPolicy
 } = require('../../../domain/positions');
+const {
+  LevelOrderIntegrationCommand,
+  LevelOrderPositionEvent
+} = require('./types');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -22,7 +24,7 @@ class LevelOrderOpeningPolicy extends OpeningPolicy {
     const payload = clone(command.payload || position.executionIntent || position.source) || {};
     return {
       events: [{
-        type: PositionEvent.LEVEL_CHILDREN_REQUESTED,
+        type: LevelOrderPositionEvent.CHILDREN_REQUESTED,
         positionId: position.id,
         provider: position.provider,
         expectedChildren: children.length,
@@ -30,7 +32,7 @@ class LevelOrderOpeningPolicy extends OpeningPolicy {
         children
       }],
       integrationCommands: [{
-        type: IntegrationCommand.PLACE_LEVEL_CHILDREN,
+        type: LevelOrderIntegrationCommand.PLACE_CHILDREN,
         positionId: position.id,
         provider: position.provider,
         payload,
