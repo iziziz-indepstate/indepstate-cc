@@ -69,19 +69,19 @@ Command templates also expose range aliases for numeric strategy arguments. `{mi
 
 If `instantExecution` is `true`, the renderer opens the OptionStrat position immediately after creating the card.
 
-`root` is optional. When present, the live option chain request uses `root`, while strategy symbols still use `ticker`. For example `ticker: "SPXW"` and `root: "SPX"` fetches `/quote/chain/live/SPX` but creates legs like `.SPXW260531C755`.
+`root` is optional. When present, the live option chain request uses `root` as `symbol`, while the `series` query value and strategy symbols still use `ticker`. For example `ticker: "SPXW"` and `root: "SPX"` fetches `/quote/chain/live?symbol=SPX&series=SPXW260531` but creates legs like `.SPXW260531C755`.
 
 ## Expiration And Pricing
 
 `expiration` uses `{n}DTE` format. `0DTE` resolves to today's UTC expiration, `1DTE` to tomorrow, and so on. If the live chain does not contain the target expiration, the order is rejected with a clear reason.
 
-Opening and closing both read `GET /quote/chain/live/{TICKER}`. If OptionStrat returns `X-Protect: 1`, the adapter decodes the protected raw-DEFLATE payload before parsing JSON.
+Opening and closing both read `GET /quote/chain/live?symbol={ROOT_OR_TICKER}&series={TICKER}{YYMMDD}`. If OptionStrat returns `X-Protect: 1`, the adapter decodes the protected raw-DEFLATE payload before parsing JSON.
 
 For each leg, the adapter uses mid price `(bid + ask) / 2`. If bid or ask is missing, that leg is rejected instead of guessing.
 
 ## Live Valuation
 
-After an OptionStrat position is successfully opened, the renderer polls `GET /quote/chain/live/{TICKER}` through the adapter and shows the strategy value change in a compact details row on the card.
+After an OptionStrat position is successfully opened, the renderer polls the same live chain endpoint through the adapter and shows the strategy value change in a compact details row on the card.
 
 The calculation is:
 

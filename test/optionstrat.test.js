@@ -278,7 +278,7 @@ async function run() {
     fetch: async (url, opts = {}) => {
       noRootCalls.push({ url, opts });
       assert.strictEqual(opts.headers.Cookie, 'session=abc');
-      if (url.endsWith('/quote/chain/live/SPY')) return response(chainSample());
+      if (url.endsWith('/quote/chain/live?symbol=SPY&series=SPY260531')) return response(chainSample());
       if (url.endsWith('/strategy') && opts.method === 'POST') {
         const body = JSON.parse(opts.body);
         assert.strictEqual(body.strategy.symbol, 'SPY');
@@ -337,7 +337,7 @@ async function run() {
       { symbol: '.SPY260531C756', basis: 1.2, current: 1.2, quantity: -10, value: -1200 }
     ]
   });
-  assert.strictEqual(noRootCalls[0].url.endsWith('/quote/chain/live/SPY'), true);
+  assert.strictEqual(noRootCalls[0].url.endsWith('/quote/chain/live?symbol=SPY&series=SPY260531'), true);
 
   const calls = [];
   let rootQuoteCalls = 0;
@@ -349,7 +349,7 @@ async function run() {
     fetch: async (url, opts = {}) => {
       calls.push({ url, opts });
       assert.strictEqual(opts.headers.Cookie, 'session=abc');
-      if (url.endsWith('/quote/chain/live/SPX')) {
+      if (url.endsWith('/quote/chain/live?symbol=SPX&series=SPXW260531')) {
         rootQuoteCalls += 1;
         return response(rootQuoteCalls === 4 ? rootCloseChainSample() : rootChainSample());
       }

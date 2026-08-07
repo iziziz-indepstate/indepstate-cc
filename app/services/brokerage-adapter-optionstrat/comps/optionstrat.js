@@ -133,6 +133,13 @@ function resolveExpirationByDte(response, symbol, expirationDte, now = new Date(
   return String(found.exp);
 }
 
+function resolveExpirationRequestDate(expiration, now = new Date()) {
+  const value = String(expiration || '0DTE').trim();
+  if (/^\d{6}$/.test(value)) return value;
+  const dte = parseDte(value);
+  return formatYyMmDd(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + dte)));
+}
+
 function normalizeOptionSide(value) {
   const side = String(value || '').trim().toUpperCase();
   if (side === 'C' || side === 'CALL') return 'CALL';
@@ -151,6 +158,10 @@ function formatStrike(strike) {
 function buildOptionSymbol(ticker, expiration, option, strike) {
   const side = normalizeOptionSide(option) === 'CALL' ? 'C' : 'P';
   return `.${String(ticker || '').toUpperCase()}${expiration}${side}${formatStrike(strike)}`;
+}
+
+function buildOptionSeries(ticker, expiration) {
+  return `${String(ticker || '').toUpperCase()}${expiration}`;
 }
 
 function signedLegQuantity(leg) {
@@ -405,7 +416,8 @@ class OptionStratAdapter extends ExecutionAdapter {
 
   async _request(path, opts = {}) {
     const cfg = this._runtimeConfig();
-    const response = await this.fetch(`${cfg.baseURL}${path}`, {
+    const url = `${cfg.baseURL}${path}`;
+    const response = await this.fetch(url, {
       timeout: cfg.timeoutMs,
       ...opts,
       headers: this._headers(opts.headers)
@@ -414,11 +426,27 @@ class OptionStratAdapter extends ExecutionAdapter {
   }
 
   async fetchChain(symbol) {
-    return this._request(`/quote/chain/live/${encodeURIComponent(String(symbol || '').toUpperCase())}`);
+    const chainSymbol = String(symbol || '').toUpperCase();
+    return this._request(`/quote/chain/live?symbol=${encodeURIComponent(chainSymbol)}`);
+  }
+
+  async fetchChainSeries(symbol, series) {
+    const chainSymbol = String(symbol || '').toUpperCase();
+    const optionSeries = String(series || '').toUpperCase();
+    const params = new URLSearchParams({ symbol: chainSymbol });
+    if (optionSeries) params.set('series', optionSeries);
+    return this._request(`/quote/chain/live?${params.toString()}`);
   }
 
   _chainSymbol(orderOrStrategy) {
     return String(orderOrStrategy?.root || orderOrStrategy?.chainRoot || orderOrStrategy?.ticker || orderOrStrategy?.symbol || '').toUpperCase();
+  }
+
+  _strategySeries(created, fallbackTicker = '') {
+    const item = created?.strategy?.items?.find?.(strategyItem => strategyItem?.symbol);
+    if (!item) return '';
+    const parsed = parseOptionSymbol(item.symbol);
+    return buildOptionSeries(parsed.ticker || fallbackTicker, parsed.expiration);
   }
 
   async estimateOrder(order) {
@@ -432,7 +460,8 @@ class OptionStratAdapter extends ExecutionAdapter {
       }
       const ticker = String(order.ticker || order.symbol || '').toUpperCase();
       const chainSymbol = this._chainSymbol(order) || ticker;
-      const chain = await this.fetchChain(chainSymbol);
+      const expirationRequestDate = resolveExpirationRequestDate(order.expirationDte || order.expiration || '0DTE', this.now());
+      const chain = await this.fetchChainSeries(chainSymbol, buildOptionSeries(ticker, expirationRequestDate));
       const expiration = resolveExpirationByDte(chain, chainSymbol, order.expirationDte || order.expiration || '0DTE', this.now());
       const rows = normalizeOptionChain(chain, chainSymbol);
       const payload = buildOpenStrategyPayload({ ...order, ticker }, expiration, rows, runtime.account);
@@ -460,7 +489,8 @@ class OptionStratAdapter extends ExecutionAdapter {
       }
       const ticker = String(order.ticker || order.symbol || '').toUpperCase();
       const chainSymbol = this._chainSymbol(order) || ticker;
-      const chain = await this.fetchChain(chainSymbol);
+      const expirationRequestDate = resolveExpirationRequestDate(order.expirationDte || order.expiration || '0DTE', this.now());
+      const chain = await this.fetchChainSeries(chainSymbol, buildOptionSeries(ticker, expirationRequestDate));
       const expiration = resolveExpirationByDte(chain, chainSymbol, order.expirationDte || order.expiration || '0DTE', this.now());
       const rows = normalizeOptionChain(chain, chainSymbol);
       const payload = buildOpenStrategyPayload({ ...order, ticker }, expiration, rows, runtime.account);
@@ -497,7 +527,7 @@ class OptionStratAdapter extends ExecutionAdapter {
       }
       const ticker = String(symbol || created?.strategy?.symbol || '').toUpperCase();
       const chainSymbol = this._chainSymbol(created) || ticker;
-      const chain = await this.fetchChain(chainSymbol);
+      const chain = await this.fetchChainSeries(chainSymbol, this._strategySeries(created, ticker));
       const rows = normalizeOptionChain(chain, chainSymbol);
       const valuation = calculateStrategyValuation(created.strategy, rows);
       created.valuation = valuation;
@@ -517,7 +547,7 @@ class OptionStratAdapter extends ExecutionAdapter {
       }
       const ticker = String(symbol || created?.strategy?.symbol || '').toUpperCase();
       const chainSymbol = this._chainSymbol(created) || ticker;
-      const chain = await this.fetchChain(chainSymbol);
+      const chain = await this.fetchChainSeries(chainSymbol, this._strategySeries(created, ticker));
       const rows = normalizeOptionChain(chain, chainSymbol);
       const payload = buildCloseStrategyPayload(created, rows);
       const valuation = calculateStrategyValuation(payload.strategy, [], { currentField: 'close' });
