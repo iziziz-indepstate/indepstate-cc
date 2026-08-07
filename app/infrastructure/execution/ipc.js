@@ -1,31 +1,15 @@
 function registerExecutionIpcHandlers({
   ipcMain,
-  executionService,
   getAdapter,
   wireAdapter,
   appendJsonl,
   execLog,
   nowTs = () => Date.now(),
   events,
-  buildOptionStratHedgePayload,
-  servicesApi,
   instrumentInfo,
   detectInstrumentType,
-  resolveProviderName,
-  normalizeOrderPayload
+  resolveProviderName
 } = {}) {
-  ipcMain.handle('optionstrat:button-event', async (_evt, payload = {}) => {
-    const { eventName, payload: eventPayload } = buildOptionStratHedgePayload(payload.action, payload.row || {});
-    if (!eventPayload.hedgeOpenSide) {
-      return { ok: false, reason: 'Unsupported OptionStrat strategy for hedge automation' };
-    }
-    if (servicesApi.actionBus && typeof servicesApi.actionBus.emit === 'function') {
-      servicesApi.actionBus.emit(eventName, eventPayload);
-      return { ok: true, event: eventName, payload: eventPayload };
-    }
-    return { ok: false, reason: 'actions-bus is not available' };
-  });
-
   ipcMain.handle('execution:cancel-order', async (_evt, payload = {}) => {
     const providerNameRaw = payload.provider;
     const ticketRaw = payload.ticket;
@@ -66,44 +50,6 @@ function registerExecutionIpcHandlers({
       const reason = err?.message || String(err || '');
       appendJsonl(execLog, { t: nowTs(), kind: 'cancel', provider: providerName, ticket, symbol, error: reason });
       return { status: 'error', provider: providerName, reason };
-    }
-  });
-
-  ipcMain.handle('optionstrat:estimate', async (_evt, payload = {}) => {
-    const order = normalizeOrderPayload({
-      ...payload,
-      instrumentType: 'OPT',
-      provider: payload.provider || payload.meta?.provider || 'optionstrat'
-    });
-    const providerName = executionService.resolveOrderProviderName
-      ? executionService.resolveOrderProviderName(order)
-      : resolveProviderName({ payload: order, symbol: order?.symbol || order?.ticker, instrumentType: order?.instrumentType, meta: order?.meta });
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.estimateOrder !== 'function') {
-        return { status: 'unsupported', provider: providerName };
-      }
-      return await adapter.estimateOrder(order);
-    } catch (err) {
-      return { status: 'rejected', provider: providerName, reason: err?.message || String(err) };
-    }
-  });
-
-  ipcMain.handle('optionstrat:valuation', async (_evt, payload = {}) => {
-    const providerName = payload.provider || payload.meta?.provider || 'optionstrat';
-    const ticket = typeof payload.ticket === 'string' ? payload.ticket : String(payload.ticket || '');
-    const symbol = typeof payload.symbol === 'string' ? payload.symbol : (payload.symbol == null ? undefined : String(payload.symbol));
-    if (!ticket) return { status: 'error', provider: providerName, reason: 'ticket required' };
-    try {
-      const adapter = getAdapter(providerName);
-      wireAdapter(adapter, providerName);
-      if (typeof adapter?.getStrategyValuation !== 'function') {
-        return { status: 'unsupported', provider: providerName };
-      }
-      return await adapter.getStrategyValuation(ticket, symbol);
-    } catch (err) {
-      return { status: 'error', provider: providerName, reason: err?.message || String(err) };
     }
   });
 

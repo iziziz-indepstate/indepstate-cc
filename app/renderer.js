@@ -1044,19 +1044,45 @@ function shouldFilterLegacyRow(row = {}) {
 }
 
 function shouldIgnoreLegacyExecutionEvent(rec = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec));
+  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec, legacyGuardContext()));
 }
 
 function shouldIgnoreLegacyPositionEvent(rec = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec));
+  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec, legacyGuardContext()));
 }
 
 function shouldHidePositionSnapshot(position = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position));
+  return rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position, legacyGuardContext()));
+}
+
+function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
+  return rendererLegacyGuards.some(guard => guard.shouldRemoveLegacyRowForPosition?.(position, row, legacyGuardContext()));
+}
+
+function shouldResetLegacyRowForPosition(position = {}, row = {}) {
+  return rendererLegacyGuards.some(guard => guard.shouldResetLegacyRowForPosition?.(position, row, legacyGuardContext()));
+}
+
+function shouldIgnoreLegacyRowForExistingPosition(row = {}) {
+  const context = legacyGuardContext();
+  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
+}
+
+function shouldRemovePositionSnapshotForLegacyRowRemoval(row = {}, position = {}) {
+  const context = legacyGuardContext();
+  return rendererLegacyGuards.some(guard => guard.shouldRemovePositionSnapshotForLegacyRowRemoval?.(row, position, context));
+}
+
+function legacyGuardContext() {
+  return {
+    positions: Array.from(positionsById.values()),
+    rows: state.rows
+  };
 }
 
 function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
-  return shouldFilterLegacyRow({ cardType: position.card?.type || position.source?.cardType });
+  if (shouldFilterLegacyRow({ cardType: position.card?.type || position.source?.cardType })) return true;
+  return state.rows.some(row => shouldRemoveLegacyRowForPosition(position, row));
 }
 
 loadRendererPositionHandlers({
@@ -1122,6 +1148,8 @@ const positionsRenderer = createPositionsRenderer({
   positionCardRenderers,
   onPositionRemoved: removeLegacyRowsForPosition,
   onPositionSnapshot(position = {}) {
+    resetLegacyRowsForPosition(position);
+    removeLegacyRowsForPosition(position);
     if (!shouldUseSnapshotInsteadOfLegacyRows(position)) return;
     const key = positionKey(position);
     cardStates.delete(key);
@@ -1218,12 +1246,14 @@ function clearPendingByKey(key) {
     if (pendingKey === key) {
       pendingByReqId.delete(rid);
       pendingIdByReqId.delete(rid);
+      retryCounts.delete(rid);
     }
   }
 }
 
 function removeRow(row) {
   const key = rowKey(row);
+  removePositionSnapshotsForLegacyRow(row);
   const before = state.rows.length;
   state.rows = state.rows.filter(r => r !== row);
   if (state.rows.length === before) {
@@ -1234,23 +1264,60 @@ function removeRow(row) {
   forgetInstrument(row.ticker, row.provider);
 }
 
+function removePositionSnapshotsForLegacyRow(row = {}) {
+  const matches = Array.from(positionsById.values())
+    .filter(position => shouldRemovePositionSnapshotForLegacyRowRemoval(row, position));
+  for (const position of matches) {
+    const key = positionKey(position);
+    cardStates.delete(key);
+    pendingExecLabels.delete(key);
+    removePositionSnapshot(position.id);
+    ipcRenderer.invoke('positions:remove', {
+      positionId: position.id,
+      reason: 'renderer.remove-legacy-row'
+    }).catch(() => {});
+  }
+  return matches.length > 0;
+}
+
 function cleanupRemovedRow(row, key = rowKey(row)) {
+  clearLegacyExecutionState(row, key);
   uiState.delete(key);
+  userTouchedByTicker.delete(row.ticker); // reset touched flag for ticker
+}
+
+function clearLegacyExecutionState(_row, key) {
   cardStates.delete(key);
+  pendingExecLabels.delete(key);
   placedOrderByKey.delete(key);
   clearPendingByKey(key);
-  userTouchedByTicker.delete(row.ticker); // reset touched flag for ticker
+  for (const [ticket, ticketKey] of ticketToKey.entries()) {
+    if (ticketKey === key) ticketToKey.delete(ticket);
+  }
 }
 
 function removeLegacyRowsForPosition(position = {}) {
   const removedByService = positionRemovalHandlers[position.card?.type]?.(position) === true;
-  const matches = state.rows.filter(row => shouldFilterLegacyRow(row) && positionMatchesLegacyRow(position, row));
+  const matches = state.rows.filter(row => (
+    shouldFilterLegacyRow(row)
+      ? positionMatchesLegacyRow(position, row)
+      : shouldRemoveLegacyRowForPosition(position, row)
+  ));
   if (matches.length === 0) return removedByService;
   const keys = new Set(matches.map(row => rowKey(row)));
   state.rows = state.rows.filter(row => !keys.has(rowKey(row)));
   for (const row of matches) {
     cleanupRemovedRow(row);
     forgetInstrument(row.ticker, row.provider);
+  }
+  return true;
+}
+
+function resetLegacyRowsForPosition(position = {}) {
+  const matches = state.rows.filter(row => shouldResetLegacyRowForPosition(position, row));
+  if (matches.length === 0) return false;
+  for (const row of matches) {
+    clearLegacyExecutionState(row, rowKey(row));
   }
   return true;
 }
@@ -1276,7 +1343,9 @@ function scheduleInstantExecution(row) {
 
 // ======= IPC wiring =======
 ipcRenderer.invoke('orders:list', 100).then(rows => {
-  state.rows = Array.isArray(rows) ? rows.filter(row => !shouldFilterLegacyRow(row)) : [];
+  state.rows = Array.isArray(rows)
+    ? rows.filter(row => !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
+    : [];
   render();
 }).catch(() => {
 });
@@ -1401,6 +1470,7 @@ ipcRenderer.on('orders:remove', (_evt, filter) => {
 // Обновлённая логика получения ивента
 ipcRenderer.on('orders:new', (_evt, row) => {
   if (shouldFilterLegacyRow(row)) return;
+  if (shouldIgnoreLegacyRowForExistingPosition(row)) return;
   // ищем существующую карточку по ТИКЕРУ
   let idx;
   if (row.instrumentType === 'OPT') {

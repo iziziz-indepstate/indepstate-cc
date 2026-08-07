@@ -12,6 +12,14 @@ function normalizeProvider(value) {
   return String(value || '').trim().toLowerCase();
 }
 
+function positionIdSeedForLegacy(value = {}) {
+  for (const guard of legacyPositionGuards) {
+    const seed = guard.positionIdSeedForLegacy?.(value);
+    if (seed) return seed;
+  }
+  return null;
+}
+
 function registerLegacyPositionGuard(guard = {}) {
   if (!guard || typeof guard !== 'object') return false;
   legacyPositionGuards.push(guard);
@@ -23,7 +31,7 @@ function registerLegacyPositionGuard(guard = {}) {
 
 function legacyRowToCreateCommand(row = {}) {
   const ticker = String(row.ticker || row.symbol || '').trim();
-  const idSeed = row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
+  const idSeed = positionIdSeedForLegacy(row) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
   const cardType = row.cardType || (row.instrumentType === 'OPT' ? 'option' : 'regular');
   return {
     type: PositionCommand.CREATE,
@@ -49,18 +57,20 @@ function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
   const meta = payload.meta || {};
   const ticker = String(payload.ticker || payload.symbol || '').trim();
   const requestId = meta.requestId || payload.requestId || payload.cid || meta.cid;
+  const idSeed = positionIdSeedForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider });
+  const cardType = payload.cardType || (payload.instrumentType === 'OPT' ? 'option' : undefined);
   return {
     type: PositionCommand.CREATE,
-    positionId: requestId ? hashId('pos', requestId) : hashId('pos', payload),
+    positionId: idSeed ? hashId('pos', idSeed) : requestId ? hashId('pos', requestId) : hashId('pos', payload),
     ticker,
     symbol: String(payload.symbol || ticker).trim(),
     instrumentType: payload.instrumentType || '',
     qty: payload.qty ?? meta.qty,
     provider: normalizeProvider(resolvedProvider || payload.provider || meta.provider),
     side: payload.side || payload.kind || payload.action || '',
-    cardType: payload.cardType,
+    cardType,
     card: {
-      type: payload.cardType,
+      type: cardType,
       actions: payload.cardActions || payload.actions
     },
     openingPolicy: openingPolicyForLegacy(payload),

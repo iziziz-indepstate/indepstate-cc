@@ -15,7 +15,6 @@ const { createPendingOrderHub, registerPendingOrdersIpcHandlers } = require('./s
 const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const loadConfig = require('./config/load');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
-const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
 const { GroupedOrderLifecycleRegistry } = require('./services/brokerage/comps/groupedOrderLifecycle');
 const { legacyRowToCreateCommand } = require('./application/positions');
 const {
@@ -387,6 +386,7 @@ function setupIpc(orderSvc) {
     nowTs,
     sendToRenderer,
     resolveProviderName: providerResolution.resolveProviderName,
+    normalizeOrderPayload,
     executionService,
     pendingIndex,
     trackerPending,
@@ -417,19 +417,15 @@ function setupIpc(orderSvc) {
 
   registerExecutionIpcHandlers({
     ipcMain,
-    executionService,
     getAdapter,
     wireAdapter,
     appendJsonl,
     execLog: EXEC_LOG,
     nowTs,
     events,
-    buildOptionStratHedgePayload,
-    servicesApi,
     instrumentInfo,
     detectInstrumentType,
-    resolveProviderName: providerResolution.resolveProviderName,
-    normalizeOrderPayload
+    resolveProviderName: providerResolution.resolveProviderName
   });
   registerPositionsIpcHandlers({
     ipcMain,

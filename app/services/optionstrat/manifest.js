@@ -3,12 +3,16 @@ const settings = require('../settings');
 const loadConfig = require('../../config/load');
 const { createOptionStratCommands } = require('./command');
 const { optionLegs, optionLegPair } = require('./actionFunctions');
+const { createOptionStratApplicationService } = require('./application');
+const { createOptionStratLegacyGuard } = require('./legacyGuard');
 
 settings.register(
   'optionstrat',
   path.join(__dirname, 'config', 'optionstrat.json'),
   path.join(__dirname, 'config', 'optionstrat-settings-descriptor.json')
 );
+
+let optionStratService = null;
 
 function registerActionFunctions(servicesApi = {}) {
   const bus = servicesApi.actionBus;
@@ -20,6 +24,7 @@ function registerActionFunctions(servicesApi = {}) {
 }
 
 function initService(servicesApi = {}) {
+  servicesApi.positions?.registerLegacyGuard?.(createOptionStratLegacyGuard());
   registerActionFunctions(servicesApi);
   let cfg = {};
   try {
@@ -42,4 +47,50 @@ function initService(servicesApi = {}) {
   });
 }
 
-module.exports = { initService, registerActionFunctions };
+function registerMainApplicationServices({
+  servicesApi = {},
+  getAdapter,
+  wireAdapter,
+  executionService,
+  resolveProviderName,
+  normalizeOrderPayload
+} = {}) {
+  optionStratService = createOptionStratApplicationService({
+    servicesApi,
+    getAdapter,
+    wireAdapter,
+    executionService,
+    resolveProviderName,
+    normalizeOrderPayload
+  });
+  servicesApi.optionstrat = {
+    ...(servicesApi.optionstrat || {}),
+    applicationService: optionStratService
+  };
+  return optionStratService;
+}
+
+function registerMainIpcHandlers({
+  ipcMain,
+  servicesApi = {}
+} = {}) {
+  if (!ipcMain || typeof ipcMain.handle !== 'function') {
+    throw new Error('ipcMain with handle() is required');
+  }
+  const service = optionStratService || servicesApi.optionstrat?.applicationService;
+  if (!service) {
+    throw new Error('OptionStrat application service is not registered; call registerMainApplicationServices before registerMainIpcHandlers');
+  }
+
+  ipcMain.handle('optionstrat:button-event', async (_evt, payload = {}) => service.handleButtonEvent(payload));
+  ipcMain.handle('optionstrat:estimate', async (_evt, payload = {}) => service.estimate(payload));
+  ipcMain.handle('optionstrat:valuation', async (_evt, payload = {}) => service.valuation(payload));
+}
+
+module.exports = {
+  initService,
+  registerActionFunctions,
+  registerMainApplicationServices,
+  registerMainIpcHandlers,
+  rendererLegacyGuards: [createOptionStratLegacyGuard()]
+};

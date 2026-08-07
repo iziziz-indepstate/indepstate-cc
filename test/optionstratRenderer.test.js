@@ -130,6 +130,8 @@ async function run() {
   assert.strictEqual(buttonEvents[0].row.strategyCommand, 'lcs');
   assert.strictEqual(queuedOrders.length, 1);
   assert.strictEqual(queuedOrders[0].side, 'OPEN');
+  assert.strictEqual(queuedOrders[0].event, 'optionstrat');
+  assert.strictEqual(queuedOrders[0].time, 1);
 
   t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: row.name, strategyCommand: 'lcs', payoff });
   row.valuation = { initialValue: 900, currentValue: 950, change: 50, changePct: 5.56 };
