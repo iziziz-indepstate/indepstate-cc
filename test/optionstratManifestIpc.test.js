@@ -18,6 +18,7 @@ async function run() {
   const emitted = [];
   const executionPayloadPolicies = orderPayloadPolicyRegistry();
   const registeredPolicies = [];
+  const registeredLifecycleEnrichers = [];
   const registerExecutionPayloadPolicy = executionPayloadPolicies.register;
   executionPayloadPolicies.register = (policy) => {
     registeredPolicies.push(policy);
@@ -41,6 +42,10 @@ async function run() {
       registerAdapterFactory(name, factory) {
         calls.push(['registerAdapterFactory', name, factory]);
         return () => true;
+      },
+      registerExecutionProviderDefaults(extension) {
+        calls.push(['registerExecutionProviderDefaults', extension]);
+        return {};
       }
     },
     actionBus: {
@@ -60,12 +65,25 @@ async function run() {
         emitted.push([name, payload]);
       }
     },
+    outboundWebhooks: {
+      registerLifecycleEnricher(enricher) {
+        registeredLifecycleEnrichers.push(enricher);
+        return () => true;
+      }
+    },
     executionPayloadPolicies
   };
   initService(servicesApi);
   const adapterRegistration = calls.find(call => call[0] === 'registerAdapterFactory');
   assert.strictEqual(adapterRegistration?.[1], 'optionstrat');
   assert.strictEqual(typeof adapterRegistration?.[2], 'function');
+  const executionDefaultsRegistration = calls.find(call => call[0] === 'registerExecutionProviderDefaults');
+  assert.strictEqual(executionDefaultsRegistration?.[1]?.routingDefaults?.byInstrumentType?.OPT, 'optionstrat');
+  assert.strictEqual(executionDefaultsRegistration?.[1]?.providers?.optionstrat?.adapter, 'optionstrat');
+  assert.strictEqual(
+    executionDefaultsRegistration?.[1]?.settingsDescriptor?.options?.providers?.optionstrat?.timeoutMs?.type,
+    'number'
+  );
   assert.strictEqual(servicesApi.executionPayloadPolicies, executionPayloadPolicies);
   assert.strictEqual(typeof servicesApi.executionPayloadPolicies?.register, 'function');
   assert.strictEqual(registeredPolicies.length, 1);
@@ -74,6 +92,76 @@ async function run() {
     servicesApi.executionPayloadPolicies.policies.some(policy => policy?.id === 'optionstrat'),
     true
   );
+  assert.strictEqual(registeredLifecycleEnrichers.length, 1);
+  assert.strictEqual(typeof registeredLifecycleEnrichers[0], 'function');
+  const enrichOptionLifecycle = registeredLifecycleEnrichers[0];
+  const openEnriched = { provider: 'optionstrat', legs: [
+    { option: 'CALL', side: 'buy', strike: 7500, quantity: 1 },
+    { option: 'CALL', side: 'sell', strike: 7510, quantity: 1 }
+  ] };
+  const openPatch = enrichOptionLifecycle({
+    eventName: 'order:placed',
+    payload: {
+      order: { provider: 'optionstrat', symbol: 'SPXW' },
+      result: {
+        status: 'ok',
+        provider: 'optionstrat',
+        raw: {
+          strategy: {
+            items: [
+              { symbol: '.SPXW260531C7500', basis: 1.2, quantity: 1 },
+              { symbol: '.SPXW260531C7510', basis: 0.45, quantity: -1 }
+            ]
+          }
+        }
+      }
+    },
+    enriched: openEnriched
+  });
+  assert.strictEqual(openPatch.legsText, '+1C7500/-1C7510');
+  assert.strictEqual(openPatch.legsPair, '7500/7510');
+  assert.strictEqual(openPatch.optionOpenLegsText, '+1C7500@1.20/-1C7510@0.45');
+  assert.strictEqual(openPatch.optionOpenNetPrice, 0.75);
+
+  const closePatch = enrichOptionLifecycle({
+    eventName: 'order:closed',
+    payload: {
+      provider: 'optionstrat',
+      result: {
+        status: 'ok',
+        provider: 'optionstrat',
+        valuation: {
+          change: 600,
+          legs: [
+            { symbol: '.SPXW260531C7500', basis: 1.2, current: 1.75, quantity: 1 },
+            { symbol: '.SPXW260531C7510', basis: 0.45, current: 0.3, quantity: -1 }
+          ]
+        },
+        raw: {
+          strategy: {
+            items: [
+              { symbol: '.SPXW260531C7500', basis: 1.2, close: 1.75, quantity: 1 },
+              { symbol: '.SPXW260531C7510', basis: 0.45, close: 0.3, quantity: -1 }
+            ]
+          }
+        }
+      }
+    },
+    enriched: { provider: 'optionstrat' }
+  });
+  assert.strictEqual(closePatch.optionCloseLegsText, '+1C7500@1.75/-1C7510@0.30');
+  assert.strictEqual(closePatch.optionCloseNetPrice, 1.45);
+  assert.strictEqual(closePatch.optionPnl, 600);
+  assert.deepStrictEqual(enrichOptionLifecycle({
+    eventName: 'order:placed',
+    payload: { result: { status: 'rejected', provider: 'optionstrat', reason: 'no account' } },
+    enriched: { provider: 'optionstrat' }
+  }), {});
+  assert.deepStrictEqual(enrichOptionLifecycle({
+    eventName: 'order:closed',
+    payload: { result: { status: 'error', provider: 'optionstrat', reason: 'missing strategy' } },
+    enriched: { provider: 'optionstrat' }
+  }), {});
   const closeController = servicesApi.executionCloseControllers.find(controller => controller?.id === 'optionstrat');
   assert(closeController);
   assert.strictEqual(typeof closeController.onCancelOrderResult, 'function');

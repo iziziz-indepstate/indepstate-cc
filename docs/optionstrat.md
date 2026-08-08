@@ -4,7 +4,7 @@ OptionStrat is used as an option-position logging provider. It opens and closes 
 
 ## Setup
 
-The execution provider is configured in `app/services/brokerage/config/execution.json`:
+The `app/services/optionstrat` service registers its execution defaults with brokerage at startup:
 
 ```json
 {
@@ -22,6 +22,8 @@ The execution provider is configured in `app/services/brokerage/config/execution
   }
 }
 ```
+
+The base brokerage defaults intentionally do not hard-code `OPT` or the `optionstrat` provider. User overrides in `config/execution.json` still win over these module defaults.
 
 The same API fields are also exposed in the `OptionStrat` settings section:
 

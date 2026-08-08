@@ -21,12 +21,6 @@
       "maxOpenLossUsd": 5,
       "symbols": {}
     },
-    "optionstrat": {
-      "enabled": false,
-      "maxStopRiskUsd": 50,
-      "maxOpenLossUsd": 25,
-      "symbols": {}
-    },
     "simulated": {
       "enabled": true,
       "maxStopRiskUsd": 10,

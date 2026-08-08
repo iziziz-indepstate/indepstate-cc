@@ -4,20 +4,12 @@
         "CX": "ccxt-binance-futures",
         "EQ": "dwx",
         "FX": "dwx",
-        "CFD": "dwx",
-        "OPT": "optionstrat"
+        "CFD": "dwx"
     },
     "bySymbol": {},
     "providers": {
         "simulated": {
             "adapter": "simulated"
-        },
-        "optionstrat": {
-            "adapter": "optionstrat",
-            "baseURL": "https://optionstrat.com/api",
-            "cookie": "${ENV:OPTIONSTRAT_COOKIE}",
-            "account": "${ENV:OPTIONSTRAT_ACCOUNT}",
-            "timeoutMs": 10000
         },
         "j2t": {
             "adapter": "j2t",

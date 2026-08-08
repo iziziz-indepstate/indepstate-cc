@@ -5,6 +5,8 @@ const {
   getExecutionConfig,
   getProviderConfig,
   registerAdapterFactory,
+  registerExecutionProviderDefaults: registerExecutionProviderDefaultsInRegistry,
+  executionDefaultsFromExtension,
   hasAdapterFactory,
   listAdapterFactories
 } = require('./adapterRegistry');
@@ -30,6 +32,13 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   initExecutionConfig(cfg);
+  const registerExecutionProviderDefaults = (extension = {}) => {
+    settings.registerDefaultsFragment('execution', executionDefaultsFromExtension(extension));
+    if (extension.settingsDescriptor || extension.descriptor) {
+      settings.registerDescriptorFragment('execution', extension.settingsDescriptor || extension.descriptor);
+    }
+    return registerExecutionProviderDefaultsInRegistry(extension);
+  };
   servicesApi.brokerage = {
     getAdapter,
     getExecutionConfig,
@@ -37,6 +46,7 @@ function initService(servicesApi = {}) {
     resolveProvider,
     resolveAdapter,
     registerAdapterFactory,
+    registerExecutionProviderDefaults,
     hasAdapterFactory,
     listAdapterFactories
   };

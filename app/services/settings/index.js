@@ -6,6 +6,8 @@ const registry = new Map(); // key -> { defaultsPath, descriptorPath, baseline, 
 const applyHandlers = new Map();
 const runtimeConfigs = new Map();
 const restartRequired = new Map();
+const defaultFragments = new Map();
+const descriptorFragments = new Map();
 const APPLY_POLICIES = {
   ui: { livePaths: ['*'] },
   'order-cards': {
@@ -27,7 +29,6 @@ const APPLY_POLICIES = {
   'execution-retry': { livePaths: ['*'] },
   'risk-manager': { livePaths: ['*'] },
   'tv-listener': { livePaths: ['*'] },
-  optionstrat: { livePaths: ['*'] },
   'command-line': { livePaths: ['*'] },
   'auto-updater': {
     livePaths: ['autoDownload', 'allowPrerelease', 'provider', 'owner', 'repo'],
@@ -37,6 +38,33 @@ const APPLY_POLICIES = {
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function fillMissing(target, defaults) {
+  if (!isPlainObject(target) || !isPlainObject(defaults)) return false;
+  let changed = false;
+  for (const key of Object.keys(defaults)) {
+    const defaultValue = defaults[key];
+    if (!Object.prototype.hasOwnProperty.call(target, key)) {
+      target[key] = clone(defaultValue);
+      changed = true;
+      continue;
+    }
+    if (isPlainObject(target[key]) && isPlainObject(defaultValue)) {
+      changed = fillMissing(target[key], defaultValue) || changed;
+    }
+  }
+  return changed;
+}
+
+function applyFragments(value, fragments = []) {
+  const next = clone(value) || {};
+  for (const fragment of fragments) fillMissing(next, fragment);
+  return next;
 }
 
 function pathMatches(pathName, prefixes = []) {
@@ -93,6 +121,7 @@ function register(key, defaultsPath, descriptorPath, policy = {}) {
   const existing = registry.get(key);
   const defaultPolicy = APPLY_POLICIES[key] || {};
   const info = {
+    key,
     defaultsPath,
     descriptorPath,
     policy: {
@@ -101,7 +130,7 @@ function register(key, defaultsPath, descriptorPath, policy = {}) {
     }
   };
   try {
-    info.baseline = clone(loadConfig(defaultsPath));
+    info.baseline = applyFragments(loadConfig(defaultsPath), defaultFragments.get(key));
   } catch {
     info.baseline = {};
   }
@@ -128,19 +157,46 @@ function onApply(key, handler) {
 }
 
 function loadWithOverrides(info) {
-  return loadConfig(info.defaultsPath);
+  return applyFragments(loadConfig(info.defaultsPath), info?.key ? defaultFragments.get(info.key) : undefined);
+}
+
+function readDescriptor(info, key) {
+  let descriptor = {};
+  if (info.descriptorPath) {
+    try {
+      descriptor = JSON.parse(fs.readFileSync(info.descriptorPath, 'utf8'));
+    } catch {}
+  }
+  return applyFragments(descriptor, descriptorFragments.get(key));
+}
+
+function registerDefaultsFragment(key, fragment = {}) {
+  if (!isPlainObject(fragment)) return false;
+  const fragments = defaultFragments.get(key) || [];
+  fragments.push(clone(fragment));
+  defaultFragments.set(key, fragments);
+  const info = registry.get(key);
+  if (info) {
+    info.baseline = applyFragments(info.baseline || {}, [fragment]);
+    const runtime = applyFragments(runtimeConfigs.get(key) || {}, [fragment]);
+    runtimeConfigs.set(key, runtime);
+  }
+  return true;
+}
+
+function registerDescriptorFragment(key, fragment = {}) {
+  if (!isPlainObject(fragment)) return false;
+  const fragments = descriptorFragments.get(key) || [];
+  fragments.push(clone(fragment));
+  descriptorFragments.set(key, fragments);
+  return true;
 }
 
 function listConfigs() {
   const meta = [];
   for (const [key, info] of registry.entries()) {
     let props = {};
-    if (info.descriptorPath) {
-      try {
-        const desc = JSON.parse(fs.readFileSync(info.descriptorPath, 'utf8'));
-        props = desc.properties || {};
-      } catch {}
-    }
+    props = readDescriptor(info, key).properties || {};
     meta.push({
       key,
       name: props.name || key,
@@ -179,12 +235,7 @@ function readConfig(name) {
   const info = registry.get(name);
   if (!info) return {};
   const cfg = loadWithOverrides(info);
-  let descriptor = {};
-  if (info.descriptorPath) {
-    try {
-      descriptor = JSON.parse(fs.readFileSync(info.descriptorPath, 'utf8'));
-    } catch {}
-  }
+  const descriptor = readDescriptor(info, name);
   return { config: cfg, descriptor };
 }
 
@@ -293,6 +344,8 @@ function getRestartStatus() {
 module.exports = {
   register,
   setApplyPolicy,
+  registerDefaultsFragment,
+  registerDescriptorFragment,
   onApply,
   listConfigs,
   readConfig,

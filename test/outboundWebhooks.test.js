@@ -7,7 +7,12 @@ const {
   resolveEnvRefs
 } = require('../app/services/outboundWebhooks');
 const { WebhookCommand } = require('../app/services/outboundWebhooks/command');
-const { enrichLifecyclePayload } = require('../app/services/outboundWebhooks/manifest');
+const {
+  enrichLifecyclePayload,
+  registerLifecycleEnricher,
+  resetLifecycleEnrichers
+} = require('../app/services/outboundWebhooks/manifest');
+const { createOptionStratLifecycleEnricher } = require('../app/services/optionstrat/manifest');
 const { createCommandService } = require('../app/services/commandLine');
 
 function response(status, body = '') {
@@ -20,6 +25,7 @@ function response(status, body = '') {
 }
 
 async function run() {
+  resetLifecycleEnrichers();
   process.env.OUTBOUND_TEST_TOKEN = 'tok-123';
   process.env.OUTBOUND_TEST_SECRET = 'relay-secret';
 
@@ -126,8 +132,6 @@ async function run() {
       { option: 'PUT', side: 'buy', strike: 7290, quantity: 1 },
       { option: 'PUT', side: 'sell', strike: 7280, quantity: 1 }
     ],
-    legsText: '+1P7290/-1P7280',
-    legsPair: '7290/7280',
     qty: 2,
     price: 1.25,
     order: {
@@ -143,9 +147,32 @@ async function run() {
     result: { cid: 'cid-1' }
   });
 
+  const openWithoutEnricher = enrichLifecyclePayload('order:placed', {
+    order: {
+      symbol: 'SPXW',
+      name: 'BCS 7500/7510'
+    },
+    result: {
+      status: 'ok',
+      provider: 'optionstrat',
+      providerOrderId: 'deal-1',
+      raw: {
+        strategy: {
+          items: [
+            { symbol: '.SPXW260531C7500', basis: 1.2, quantity: 1 },
+            { symbol: '.SPXW260531C7510', basis: 0.45, quantity: -1 }
+          ]
+        }
+      }
+    }
+  });
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(openWithoutEnricher, 'optionOpenLegs'), false);
+
+  const unregisterOptionEnricher = registerLifecycleEnricher(createOptionStratLifecycleEnricher());
   assert.deepStrictEqual(enrichLifecyclePayload('order:placed', {
     order: {
       symbol: 'SPXW',
+      provider: 'optionstrat',
       name: 'BCS 7500/7510'
     },
     result: {
@@ -166,7 +193,7 @@ async function run() {
     { symbol: '.SPXW260531C7510', option: 'CALL', strike: 7510, quantity: -1, basis: 0.45 }
   ]);
   const enrichedOpen = enrichLifecyclePayload('order:placed', {
-    order: { symbol: 'SPXW', name: 'BCS 7500/7510' },
+    order: { symbol: 'SPXW', provider: 'optionstrat', name: 'BCS 7500/7510' },
     result: {
       status: 'ok',
       provider: 'optionstrat',
@@ -228,6 +255,7 @@ async function run() {
     result: { status: 'error', provider: 'optionstrat', reason: 'missing strategy' }
   });
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rejectedClose, 'optionCloseLegsText'), false);
+  unregisterOptionEnricher();
 
   const requests = [];
   const sleeps = [];

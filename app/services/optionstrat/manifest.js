@@ -8,15 +8,51 @@ const { createOptionStratLegacyGuard } = require('./legacyGuard');
 const { createOptionStratCloseController } = require('./closeController');
 const { createOptionStratRenderer } = require('./renderer');
 const { createOptionStratExecutionPolicy } = require('./executionPolicy');
+const { createOptionStratLifecycleEnricher } = require('./lifecycleEnricher');
 const { OptionStratAdapter } = require('./infrastructure/adapter');
 
 settings.register(
   'optionstrat',
   path.join(__dirname, 'config', 'optionstrat.json'),
-  path.join(__dirname, 'config', 'optionstrat-settings-descriptor.json')
+  path.join(__dirname, 'config', 'optionstrat-settings-descriptor.json'),
+  { livePaths: ['*'] }
 );
 
 let optionStratService = null;
+
+const optionStratExecutionExtension = {
+  routingDefaults: {
+    byInstrumentType: {
+      OPT: 'optionstrat'
+    }
+  },
+  providers: {
+    optionstrat: {
+      adapter: 'optionstrat',
+      baseURL: 'https://optionstrat.com/api',
+      cookie: '${ENV:OPTIONSTRAT_COOKIE}',
+      account: '${ENV:OPTIONSTRAT_ACCOUNT}',
+      timeoutMs: 10000
+    }
+  },
+  settingsDescriptor: {
+    options: {
+      byInstrumentType: {
+        OPT: { type: 'string', description: 'Provider for option block instruments' }
+      },
+      providers: {
+        optionstrat: {
+          description: 'OptionStrat provider settings',
+          adapter: { type: 'string', description: 'Adapter name' },
+          baseURL: { type: 'string', description: 'API base URL' },
+          cookie: { type: 'string', description: 'Full Cookie header value' },
+          account: { type: 'string', description: 'Collection/account ID' },
+          timeoutMs: { type: 'number', description: 'Request timeout ms' }
+        }
+      }
+    }
+  }
+};
 
 function registerActionFunctions(servicesApi = {}) {
   const bus = servicesApi.actionBus;
@@ -32,7 +68,9 @@ function initService(servicesApi = {}) {
     'optionstrat',
     (cfg = {}, providerName) => new OptionStratAdapter(cfg, providerName)
   );
+  servicesApi.brokerage.registerExecutionProviderDefaults?.(optionStratExecutionExtension);
   servicesApi.executionPayloadPolicies?.register?.(createOptionStratExecutionPolicy());
+  servicesApi.outboundWebhooks?.registerLifecycleEnricher?.(createOptionStratLifecycleEnricher());
   if (!Array.isArray(servicesApi.executionCloseControllers)) servicesApi.executionCloseControllers = [];
   servicesApi.positions?.registerLegacyGuard?.(createOptionStratLegacyGuard());
   if (!servicesApi.executionCloseControllers.some(controller => controller?.id === 'optionstrat')) {
@@ -288,5 +326,7 @@ module.exports = {
   registerMainApplicationServices,
   registerMainIpcHandlers,
   rendererHandlers,
-  rendererLegacyGuards: [createOptionStratLegacyGuard()]
+  rendererLegacyGuards: [createOptionStratLegacyGuard()],
+  optionStratExecutionExtension,
+  createOptionStratLifecycleEnricher
 };

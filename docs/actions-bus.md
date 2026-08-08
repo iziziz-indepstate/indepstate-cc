@@ -124,7 +124,7 @@ The registration call returns a disposer, and `unregisterActionFunction(name)` i
 
 ## OptionStrat lifecycle placeholders
 
-Successful OptionStrat `order:placed` events expose `{optionOpenLegsText}` and
+The OptionStrat service enriches successful OptionStrat `order:placed` events with `{optionOpenLegsText}` and
 `{optionOpenNetPrice}`. Successful `order:closed` events expose
 `{optionCloseLegsText}`, `{optionCloseNetPrice}`, and `{optionPnl}` when the close
 result includes leg prices and valuation change.

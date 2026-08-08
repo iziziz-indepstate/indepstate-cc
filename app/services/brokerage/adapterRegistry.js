@@ -10,6 +10,40 @@ const instances = new Map(); // name -> adapter instance
 
 function deepClone(obj){ return obj ? JSON.parse(JSON.stringify(obj)) : obj; }
 
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function fillMissing(target, defaults) {
+  if (!isPlainObject(target) || !isPlainObject(defaults)) return false;
+  let changed = false;
+  for (const key of Object.keys(defaults)) {
+    const defaultValue = defaults[key];
+    if (!Object.prototype.hasOwnProperty.call(target, key)) {
+      target[key] = deepClone(defaultValue);
+      changed = true;
+      continue;
+    }
+    if (isPlainObject(target[key]) && isPlainObject(defaultValue)) {
+      changed = fillMissing(target[key], defaultValue) || changed;
+    }
+  }
+  return changed;
+}
+
+function executionDefaultsFromExtension(extension = {}) {
+  const defaults = {};
+  const routing = extension.routingDefaults || {};
+  const byInstrumentType = extension.byInstrumentType || routing.byInstrumentType;
+  const bySymbol = extension.bySymbol || routing.bySymbol;
+  const providers = extension.providers || extension.providerDefaults;
+  if (Object.prototype.hasOwnProperty.call(extension, 'default')) defaults.default = extension.default;
+  if (isPlainObject(byInstrumentType)) defaults.byInstrumentType = byInstrumentType;
+  if (isPlainObject(bySymbol)) defaults.bySymbol = bySymbol;
+  if (isPlainObject(providers)) defaults.providers = providers;
+  return defaults;
+}
+
 function loadExecutionConfigFromDisk() {
   try {
     return loadConfig('../services/brokerage/config/execution.json');
@@ -86,6 +120,16 @@ function updateExecutionRouting(cfg = {}, paths = []) {
   return unavailablePaths;
 }
 
+function registerExecutionProviderDefaults(extension = {}) {
+  const next = deepClone(getExecutionConfig()) || {};
+  const changed = fillMissing(next, executionDefaultsFromExtension(extension));
+  if (changed) {
+    executionConfig = next;
+    instances.clear();
+  }
+  return deepClone(getExecutionConfig());
+}
+
 function getExecutionConfig(){
   if (!executionConfig) executionConfig = loadExecutionConfigFromDisk();
   return executionConfig;
@@ -158,6 +202,8 @@ module.exports = {
   getExecutionConfig,
   getProviderConfig,
   registerAdapterFactory,
+  registerExecutionProviderDefaults,
   hasAdapterFactory,
-  listAdapterFactories
+  listAdapterFactories,
+  executionDefaultsFromExtension
 };

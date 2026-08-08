@@ -54,6 +54,20 @@ async function run() {
   assert.strictEqual(result.errors[0].includes('super-secret'), false);
   assert.strictEqual(result.errors[0].includes('[redacted]'), true);
 
+  const unknownPath = path.join(defaultsDir, 'unknown-section.json');
+  fs.writeFileSync(unknownPath, JSON.stringify({ value: 1 }));
+  settings.register('unknown-section', unknownPath);
+  result = await settings.saveAndApplyConfig('unknown-section', { value: 2 });
+  assert.deepStrictEqual(result.appliedPaths, []);
+  assert.deepStrictEqual(result.restartRequiredPaths, ['value']);
+
+  require('../app/services/optionstrat/manifest');
+  const optionstratConfig = settings.readConfig('optionstrat').config;
+  optionstratConfig.valuationRefreshMs += 1000;
+  result = await settings.saveAndApplyConfig('optionstrat', optionstratConfig);
+  assert.deepStrictEqual(result.appliedPaths, ['valuationRefreshMs']);
+  assert.deepStrictEqual(result.restartRequiredPaths, []);
+
   assert.deepStrictEqual(settings.changedPaths({ a: [1] }, { a: [2] }), ['a']);
 
   loadConfig.USER_ROOT = originalUserRoot;

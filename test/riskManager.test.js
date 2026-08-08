@@ -300,6 +300,11 @@ async function run() {
   ));
   assert.strictEqual(descriptor.options.providers.__allowUnknown, true);
   assert.strictEqual(descriptor.options.providers.__replace, true);
+  const defaultRiskManagerConfig = JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', 'app', 'services', 'riskManager', 'config', 'risk-manager.json'),
+    'utf8'
+  ));
+  assert.strictEqual(defaultRiskManagerConfig.providers.optionstrat, undefined);
 
   const loadConfig = require('../app/config/load');
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'risk-manager-config-'));
@@ -325,12 +330,15 @@ async function run() {
     fs.writeFileSync(path.join(overrideRoot, 'risk-manager.json'), JSON.stringify({
       providers: {
         dwx: { enabled: true, maxStopRiskUsd: 22, symbols: { 'ADAUSDT.cfd': { maxOpenLossUsd: 7 } } },
+        optionstrat: { enabled: true, maxStopRiskUsd: 50, symbols: { SPY: { maxOpenLossUsd: 25 } } },
         custom: { enabled: true, maxStopRiskUsd: 3, symbols: { TEST: { maxOpenLossUsd: 1 } } }
       }
     }));
     const loaded = loadConfig(defaultsPath);
     assert.strictEqual(loaded.providers.dwx.maxStopRiskUsd, 22);
     assert.strictEqual(loaded.providers.dwx.symbols['ADAUSDT.cfd'].maxOpenLossUsd, 7);
+    assert.strictEqual(loaded.providers.optionstrat.maxStopRiskUsd, 50);
+    assert.strictEqual(loaded.providers.optionstrat.symbols.SPY.maxOpenLossUsd, 25);
     assert.strictEqual(loaded.providers.custom.maxStopRiskUsd, 3);
   } finally {
     loadConfig.CONFIG_ROOTS.length = 0;

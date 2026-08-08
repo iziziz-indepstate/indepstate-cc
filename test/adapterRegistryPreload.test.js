@@ -2,7 +2,9 @@ const assert = require('assert');
 const {
   initExecutionConfig,
   getAdapter,
+  getExecutionConfig,
   registerAdapterFactory,
+  registerExecutionProviderDefaults,
   hasAdapterFactory,
   listAdapterFactories
 } = require('../app/services/brokerage/adapterRegistry');
@@ -22,6 +24,55 @@ async function run() {
   assert.strictEqual(getAdapter('swap').id, 'new');
   assert.strictEqual(unregisterNew(), true);
   assert.strictEqual(hasAdapterFactory('swaptest'), false);
+
+  const unregisterExtension = registerAdapterFactory('extensiontest', cfg => ({ cfg }));
+  initExecutionConfig({
+    default: 'simulated',
+    byInstrumentType: { EQ: 'simulated' },
+    providers: {
+      simulated: { adapter: 'simulated' }
+    }
+  });
+  assert.strictEqual(getExecutionConfig().byInstrumentType.OPT, undefined);
+  registerExecutionProviderDefaults({
+    routingDefaults: { byInstrumentType: { OPT: 'extension-provider' } },
+    providers: {
+      'extension-provider': {
+        adapter: 'extensiontest',
+        baseURL: 'https://default.example',
+        timeoutMs: 10000
+      }
+    }
+  });
+  assert.strictEqual(getExecutionConfig().byInstrumentType.OPT, 'extension-provider');
+  assert.strictEqual(getExecutionConfig().providers['extension-provider'].baseURL, 'https://default.example');
+  assert.strictEqual(getAdapter('extension-provider').cfg.timeoutMs, 10000);
+
+  initExecutionConfig({
+    default: 'simulated',
+    byInstrumentType: { OPT: 'custom-options' },
+    providers: {
+      'extension-provider': {
+        adapter: 'extensiontest',
+        baseURL: 'https://override.example'
+      },
+      'custom-options': { adapter: 'extensiontest' }
+    }
+  });
+  registerExecutionProviderDefaults({
+    routingDefaults: { byInstrumentType: { OPT: 'extension-provider' } },
+    providers: {
+      'extension-provider': {
+        adapter: 'extensiontest',
+        baseURL: 'https://default.example',
+        timeoutMs: 10000
+      }
+    }
+  });
+  assert.strictEqual(getExecutionConfig().byInstrumentType.OPT, 'custom-options');
+  assert.strictEqual(getExecutionConfig().providers['extension-provider'].baseURL, 'https://override.example');
+  assert.strictEqual(getExecutionConfig().providers['extension-provider'].timeoutMs, 10000);
+  unregisterExtension();
 
   let preloadCalls = 0;
   let release;

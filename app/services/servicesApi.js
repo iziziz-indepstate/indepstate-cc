@@ -8,6 +8,7 @@ const { orderPayloadPolicyRegistry } = require('../application/execution/orderPa
  * @property {(context: any) => { provider: string, source: string, matchedKey?: string }} resolveProvider
  * @property {(context: any) => { provider: string, adapter: any, source: string, matchedKey?: string }} resolveAdapter
  * @property {(adapterName: string, factory: Function) => Function} registerAdapterFactory
+ * @property {(extension: object) => object} [registerExecutionProviderDefaults]
  * @property {(adapterName: string) => boolean} hasAdapterFactory
  * @property {() => string[]} [listAdapterFactories]
  */
