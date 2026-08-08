@@ -18,7 +18,7 @@ This directory contains high-level notes about the codebase.
   - `app/services/tvProxy/config/tv-proxy.json` – configuration for the tv-proxy service (`enabled`, `log`, `proxyPort`)
   - `app/services/tvListener/config/tv-listener.json` – configuration for the tv-listener service (`enabled`, `webhook` `{enabled, port, url}`)
 - `OBSIDIAN_INDEPSTATE_VAULT`, `OBSIDIAN_INDEPSTATE_DEALS_JOURNAL` and `OBSIDIAN_INDEPSTATE_DEALS_SEARCH` – environment variables consumed by the Obsidian deal tracker
-- `app/services/brokerage/brokerageAdapters.js` – registry that adapter services extend
+- `servicesApi.brokerage.registerAdapterFactory()` - public extension API for broker/provider adapter factories; `app/services/brokerage/brokerageAdapters.js` remains the internal registry store
 - `app/services/brokerage-adapter-*/comps/*` – execution adapters such as the DWX connector and the CCXT adapter; each can provide `listOpenOrders()` and `listClosedPositions()`
 - `app/services/servicesApi.js` – global object that service manifests extend to expose their APIs (e.g. `servicesApi.brokerage` with adapter helpers)
 - `app/services/commandLine.js` – parses text commands sent from the renderer. See [command-line.md](command-line.md) for available commands.

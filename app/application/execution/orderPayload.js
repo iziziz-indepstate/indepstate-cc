@@ -2,6 +2,56 @@ const crypto = require('crypto');
 const { normalizeOrderQty, isValidOrderQty } = require('../../services/executionQuantity');
 
 const CID_IN_COMMENT_RE = /cid[:=]\s*([a-z0-9]+)/i;
+const orderPayloadPolicies = [];
+
+function registerOrderPayloadPolicy(policy) {
+  if (!policy || typeof policy !== 'object') {
+    throw new Error('order payload policy object is required');
+  }
+  if (!policy.id) {
+    throw new Error('order payload policy id is required');
+  }
+  const existingIndex = orderPayloadPolicies.findIndex(item => item?.id === policy.id);
+  if (existingIndex >= 0) orderPayloadPolicies.splice(existingIndex, 1, policy);
+  else orderPayloadPolicies.push(policy);
+  return () => {
+    const index = orderPayloadPolicies.indexOf(policy);
+    if (index >= 0) orderPayloadPolicies.splice(index, 1);
+  };
+}
+
+function orderPayloadPolicyRegistry() {
+  return {
+    policies: orderPayloadPolicies,
+    register: registerOrderPayloadPolicy
+  };
+}
+
+function getPolicyList(context = {}) {
+  const source = context.orderPayloadPolicies
+    || context.policies
+    || context.servicesApi?.orderPayloadPolicies
+    || context.servicesApi?.executionPayloadPolicies;
+  if (Array.isArray(source)) return source;
+  if (Array.isArray(source?.policies)) return source.policies;
+  return orderPayloadPolicies;
+}
+
+function findOrderPayloadPolicy(value, matchName, context = {}) {
+  for (const policy of getPolicyList(context)) {
+    const matcher = policy?.[matchName];
+    if (typeof matcher !== 'function') continue;
+    if (matcher.call(policy, value, context)) return policy;
+  }
+  return null;
+}
+
+function executionOptionsForOrder(order, context = {}) {
+  const policy = findOrderPayloadPolicy(order, 'matchesOrder', context)
+    || findOrderPayloadPolicy(order, 'matchesPayload', context);
+  if (!policy || typeof policy.executionOptions !== 'function') return {};
+  return policy.executionOptions(order, context) || {};
+}
 
 function normalizeCid(candidate) {
   if (candidate == null) return '';
@@ -48,31 +98,11 @@ function ensureOrderCid(order) {
   return cid;
 }
 
-function normalizeOrderPayload(payload) {
-  if (payload?.instrumentType === 'OPT') {
-    const symbol = String(payload.symbol || payload.ticker || '');
-    return {
-      instrumentType: 'OPT',
-      symbol,
-      ticker: symbol,
-      root: payload.root,
-      provider: payload.provider,
-      event: payload.event,
-      time: payload.time,
-      cardType: payload.cardType,
-      name: payload.name,
-      description: payload.description,
-      expirationDte: payload.expirationDte || payload.expiration,
-      isCustomName: payload.isCustomName === true,
-      isCashSecured: payload.isCashSecured === true,
-      legs: Array.isArray(payload.legs) ? payload.legs : [],
-      side: payload.side || payload.action || 'OPEN',
-      type: payload.type || 'strategy',
-      qty: 1,
-      price: 1,
-      sl: 1,
-      meta: payload.meta || {}
-    };
+function normalizeOrderPayload(payload, context = {}) {
+  const policy = findOrderPayloadPolicy(payload, 'matchesPayload', context);
+  if (policy && typeof policy.normalizePayload === 'function') {
+    const normalized = policy.normalizePayload(payload, context);
+    if (normalized != null) return normalized;
   }
   const legacy = payload && payload.ticker && payload.meta;
   if (legacy) {
@@ -115,13 +145,11 @@ function normalizeOrderPayload(payload) {
   };
 }
 
-function validateOrder(order) {
-  if (order.instrumentType === 'OPT') {
-    const hasSymbol = !!String(order.symbol || order.ticker || '').trim();
-    const hasLegs = Array.isArray(order.legs) && order.legs.length > 0;
-    return hasSymbol && hasLegs
-      ? { ok: true }
-      : { ok: false, reason: 'OPT: ticker and legs required' };
+function validateOrder(order, context = {}) {
+  const policy = findOrderPayloadPolicy(order, 'matchesOrder', context);
+  if (policy && typeof policy.validateOrder === 'function') {
+    const validation = policy.validateOrder(order, context);
+    if (validation != null) return validation;
   }
   if (order.instrumentType === 'CX') {
     const riskUsd = Number(order.meta?.riskUsd);
@@ -194,12 +222,16 @@ function normalizeEquityOrderForExecution(order) {
 
 module.exports = {
   CID_IN_COMMENT_RE,
+  registerOrderPayloadPolicy,
+  orderPayloadPolicyRegistry,
   normalizeCid,
   generateCid,
   ensureCommentHasCid,
   ensureOrderCid,
   normalizeOrderPayload,
   validateOrder,
+  executionOptionsForOrder,
   normalizeQuoteForValidation,
-  normalizeEquityOrderForExecution
+  normalizeEquityOrderForExecution,
+  _resetOrderPayloadPoliciesForTest: () => { orderPayloadPolicies.splice(0); }
 };

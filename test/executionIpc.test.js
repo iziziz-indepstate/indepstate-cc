@@ -1,5 +1,6 @@
 const assert = require('assert');
 const { registerExecutionIpcHandlers } = require('../app/infrastructure/execution');
+const { createOptionStratCloseController } = require('../app/services/optionstrat/closeController');
 
 async function run() {
   const handlers = new Map();
@@ -11,8 +12,21 @@ async function run() {
   const adapters = new Map([
     ['simulated', {
       cancelOrder: async (ticket, symbol) => ({ status: 'ok', ticket, symbol })
+    }],
+    ['optionstrat', {
+      cancelOrder: async (ticket, symbol) => ({ status: 'ok', provider: 'optionstrat', ticket, symbol, valuation: { currentValue: 0 }, raw: { strategy: {} } })
+    }],
+    ['rejector', {
+      cancelOrder: async (ticket, symbol) => ({ status: 'rejected', provider: 'rejector', ticket, symbol, reason: 'no-op' })
     }]
   ]);
+  const closeControllerCalls = [];
+  const emitted = [];
+  const events = {
+    emit(name, payload) {
+      emitted.push([name, payload]);
+    }
+  };
 
   registerExecutionIpcHandlers({
     ipcMain,
@@ -20,7 +34,11 @@ async function run() {
     wireAdapter: () => {},
     appendJsonl: () => {},
     execLog: 'memory',
-    events: { emit: () => {} },
+    events,
+    closeControllers: [{
+      id: 'testCloseController',
+      onCancelOrderResult: context => closeControllerCalls.push(context)
+    }, createOptionStratCloseController({ events })],
     instrumentInfo: {
       get: async ({ provider, symbol }) => ({ provider, symbol }),
       forget: async ({ provider, symbol }) => ({ provider, symbol, forgotten: true })
@@ -41,6 +59,40 @@ async function run() {
   const cancel = await handlers.get('execution:cancel-order')(null, { provider: 'simulated', ticket: 't1', symbol: 'ADAUSDT' });
   assert.strictEqual(cancel.status, 'ok');
   assert.strictEqual(cancel.ticket, 't1');
+  assert.strictEqual(closeControllerCalls.length, 1);
+  assert.strictEqual(closeControllerCalls[0].providerName, 'simulated');
+  assert.strictEqual(closeControllerCalls[0].ticket, 't1');
+  assert.strictEqual(closeControllerCalls[0].events, events);
+  assert.deepStrictEqual(emitted, []);
+
+  const optionClose = await handlers.get('execution:cancel-order')(null, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: 'LCS' });
+  assert.strictEqual(optionClose.status, 'ok');
+  assert.strictEqual(closeControllerCalls.length, 2);
+  assert.strictEqual(closeControllerCalls[1].providerName, 'optionstrat');
+  assert.strictEqual(closeControllerCalls[1].ticket, 'deal-1');
+  assert.strictEqual(closeControllerCalls[1].name, 'LCS');
+  assert.strictEqual(closeControllerCalls[1].events, events);
+  assert.strictEqual(emitted.length, 1);
+  assert.deepStrictEqual(emitted.map(call => call[0]), ['order:closed']);
+  assert.deepStrictEqual(emitted[0][1], {
+    provider: 'optionstrat',
+    ticket: 'deal-1',
+    symbol: 'SPY',
+    order: { name: 'LCS' },
+    result: {
+      status: 'ok',
+      provider: 'optionstrat',
+      ticket: 'deal-1',
+      symbol: 'SPY',
+      valuation: { currentValue: 0 },
+      raw: { strategy: {} }
+    }
+  });
+
+  const rejectedCancel = await handlers.get('execution:cancel-order')(null, { provider: 'rejector', ticket: 'r1', symbol: 'SPY' });
+  assert.strictEqual(rejectedCancel.status, 'rejected');
+  assert.strictEqual(closeControllerCalls.length, 2);
+  assert.strictEqual(emitted.length, 1);
 
   const instrument = await handlers.get('instrument:get')(null, { symbol: 'ADAUSDT' });
   assert.strictEqual(instrument.provider, 'simulated');

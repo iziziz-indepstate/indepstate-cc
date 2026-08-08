@@ -5,6 +5,7 @@ const {
   ensureOrderCid,
   normalizeOrderPayload,
   validateOrder,
+  executionOptionsForOrder,
   normalizeQuoteForValidation,
   normalizeEquityOrderForExecution
 } = require('./orderPayload');
@@ -28,7 +29,8 @@ class ExecutionApplicationService {
     resolveOrderProviderName,
     resolveProviderName,
     providerCanResolveRiskQty,
-    cardControllers
+    cardControllers,
+    orderPayloadPolicies
   } = {}) {
     this.getAdapter = getAdapter;
     this.wireAdapter = wireAdapter;
@@ -48,6 +50,7 @@ class ExecutionApplicationService {
     this.resolveProviderName = resolveProviderName;
     this.providerCanResolveRiskQty = providerCanResolveRiskQty;
     this.cardControllers = Array.isArray(cardControllers) ? cardControllers.filter(Boolean) : [];
+    this.orderPayloadPolicies = orderPayloadPolicies;
   }
 
   pickProviderName(instrumentType) {
@@ -55,9 +58,10 @@ class ExecutionApplicationService {
   }
 
   async queuePlaceOrder(payload) {
-    const order = normalizeOrderPayload(payload);
+    const policyContext = { orderPayloadPolicies: this.orderPayloadPolicies };
+    const order = normalizeOrderPayload(payload, policyContext);
 
-    const v = validateOrder(order);
+    const v = validateOrder(order, policyContext);
     if (!v.ok) {
       const rej = { status: 'rejected', reason: v.reason };
       this.#append({ t: this.nowTs(), kind: 'place', valid: false, order, result: rej });
@@ -88,6 +92,12 @@ class ExecutionApplicationService {
       });
 
       execOrder = normalizeEquityOrderForExecution(order);
+      const executionOptions = executionOptionsForOrder(execOrder, {
+        ...policyContext,
+        providerName,
+        order,
+        execOrder
+      });
       execOrder.comment = ensureCommentHasCid(execOrder.comment, cid);
       if (!execOrder.meta) execOrder.meta = {};
       execOrder.meta.cid = cid;
@@ -114,8 +124,10 @@ class ExecutionApplicationService {
       const adapter = this.getAdapter(providerName);
       this.wireAdapter(adapter, providerName);
 
-      const isOptionBlock = execOrder.instrumentType === 'OPT';
-      const isHedgeMarket = !isOptionBlock
+      const requiresQuote = executionOptions.requiresQuote !== false;
+      const usesRiskSizing = executionOptions.usesRiskSizing !== false;
+      const usesTradeRules = executionOptions.usesTradeRules !== false;
+      const isHedgeMarket = requiresQuote
         && execOrder.meta?.hedge === true
         && String(execOrder.type || '').toLowerCase() === 'market';
       const instrumentSnapshot = await this.instrumentInfo.get({
@@ -123,9 +135,9 @@ class ExecutionApplicationService {
         symbol: execOrder.symbol,
         instrumentType: execOrder.instrumentType,
         payload: execOrder
-      }, { forceQuote: true });
+      }, { forceQuote: requiresQuote });
       const quote = normalizeQuoteForValidation(instrumentSnapshot?.quote);
-      if (!isOptionBlock && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
+      if (requiresQuote && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
         const rej = { status: 'rejected', provider: providerName, reason: 'No quote' };
         this.#append({ t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
         return rej;
@@ -147,7 +159,7 @@ class ExecutionApplicationService {
         execOrder.meta = { ...(execOrder.meta || {}), quantityStep: execOrder.meta?.quantityStep || metadataQuantityStep };
       }
 
-      if (!isOptionBlock && Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
+      if (usesRiskSizing && Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
         execOrder.tickSize = effectiveTickSize;
         if (isRiskBased) {
           execOrder.qty = this.orderCalc.qty({
@@ -159,7 +171,7 @@ class ExecutionApplicationService {
             quantityStep: execOrder.meta?.quantityStep
           });
         }
-      } else if (!isOptionBlock && isRiskBased) {
+      } else if (usesRiskSizing && isRiskBased) {
         if (!this.providerCanResolveRiskQty(providerName, adapter)) {
           const rej = { status: 'rejected', provider: providerName, reason: `No tickSize for ${execOrder.symbol}; cannot calculate risk-based qty for provider ${providerName}` };
           this.#append({ t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
@@ -172,7 +184,7 @@ class ExecutionApplicationService {
 
       console.log('[EXEC][SIZE]', { symbol: execOrder.symbol, price: execOrder.price, riskUsd, stopPts, tickSize: execOrder.tickSize, lot: execOrder.lot, qty: execOrder.qty, tickSource: tickResolution.source });
 
-      if (!isOptionBlock) {
+      if (usesTradeRules) {
         const quoteForRules = isHedgeMarket && (!quote || !Number.isFinite(quote.price)) ? { price: 1 } : quote;
         const ruleOrder = execOrder.meta?.hedge === true
           ? { ...execOrder, sl: Number.isFinite(Number(execOrder.sl)) && Number(execOrder.sl) > 0 ? execOrder.sl : Number.POSITIVE_INFINITY }

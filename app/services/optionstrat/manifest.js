@@ -5,6 +5,10 @@ const { createOptionStratCommands } = require('./command');
 const { optionLegs, optionLegPair } = require('./actionFunctions');
 const { createOptionStratApplicationService } = require('./application');
 const { createOptionStratLegacyGuard } = require('./legacyGuard');
+const { createOptionStratCloseController } = require('./closeController');
+const { createOptionStratRenderer } = require('./renderer');
+const { createOptionStratExecutionPolicy } = require('./executionPolicy');
+const { OptionStratAdapter } = require('./infrastructure/adapter');
 
 settings.register(
   'optionstrat',
@@ -24,7 +28,19 @@ function registerActionFunctions(servicesApi = {}) {
 }
 
 function initService(servicesApi = {}) {
+  servicesApi.brokerage.registerAdapterFactory(
+    'optionstrat',
+    (cfg = {}, providerName) => new OptionStratAdapter(cfg, providerName)
+  );
+  servicesApi.executionPayloadPolicies?.register?.(createOptionStratExecutionPolicy());
+  if (!Array.isArray(servicesApi.executionCloseControllers)) servicesApi.executionCloseControllers = [];
   servicesApi.positions?.registerLegacyGuard?.(createOptionStratLegacyGuard());
+  if (!servicesApi.executionCloseControllers.some(controller => controller?.id === 'optionstrat')) {
+    servicesApi.executionCloseControllers.push(createOptionStratCloseController({
+      positions: servicesApi.positions,
+      events: servicesApi.events
+    }));
+  }
   registerActionFunctions(servicesApi);
   let cfg = {};
   try {
@@ -52,16 +68,14 @@ function registerMainApplicationServices({
   getAdapter,
   wireAdapter,
   executionService,
-  resolveProviderName,
-  normalizeOrderPayload
+  resolveProviderName
 } = {}) {
   optionStratService = createOptionStratApplicationService({
     servicesApi,
     getAdapter,
     wireAdapter,
     executionService,
-    resolveProviderName,
-    normalizeOrderPayload
+    resolveProviderName
   });
   servicesApi.optionstrat = {
     ...(servicesApi.optionstrat || {}),
@@ -87,10 +101,192 @@ function registerMainIpcHandlers({
   ipcMain.handle('optionstrat:valuation', async (_evt, payload = {}) => service.valuation(payload));
 }
 
+const rendererHandlers = [{
+  cardType: 'option',
+  register(context = {}) {
+    const {
+      ipcRenderer,
+      el,
+      state,
+      rowKey,
+      render,
+      toast,
+      shakeCard,
+      placedOrderByKey,
+      cardStates,
+      pendingByReqId,
+      pendingIdByReqId,
+      retryCounts,
+      setCardState,
+      ticketToKey,
+      settingsRuntime,
+      positionKey,
+      btn,
+      dispatchPositionAction,
+      requestRemovePosition
+    } = context;
+
+    if (!ipcRenderer || !el || !state || !rowKey) return;
+    let optionStratValuationRefreshMs = 5000;
+    const optionStratRenderer = createOptionStratRenderer({
+      ipcRenderer,
+      el,
+      state,
+      rowKey,
+      render,
+      toast,
+      shakeCard,
+      placedOrderByKey,
+      cardStates,
+      pendingByReqId,
+      pendingIdByReqId,
+      retryCounts,
+      setCardState,
+      ticketToKey,
+      getValuationRefreshMs: () => optionStratValuationRefreshMs
+    });
+
+    const optionOrderCardHandler = {
+      ...optionStratRenderer.createOrderCardHandler(),
+      title({ row } = {}) {
+        return row?.name || row?.ticker;
+      },
+      matchesExistingRow({ incomingRow, existingRow, rowKey: keyForRow } = {}) {
+        return typeof keyForRow === 'function'
+          && keyForRow(incomingRow || {}) === keyForRow(existingRow || {});
+      },
+      shouldScheduleInstantExecution({ row } = {}) {
+        return row?.instantExecution === true;
+      },
+      onExecutionResultOk({ row, openedAt } = {}) {
+        if (row && openedAt) row.openedAt = row.openedAt || openedAt;
+      },
+      placedStatusTitle: 'Close OptionStrat position',
+      placedButton: {
+        label: 'CLOSE',
+        title: 'Close OptionStrat position',
+        removeClasses: ['bl'],
+        addClasses: ['sl']
+      },
+      onCreateCard({ row } = {}) {
+        optionStratRenderer.ensureOptionPayoff(row);
+      },
+      async closePlacedOrder({
+        key,
+        row,
+        orderInfo,
+        placedOrderByKey: placedMap,
+        ticketToKey: ticketMap,
+        setCardState: setState,
+        render: rerender,
+        ipcRenderer: ipc,
+        toast: showToast,
+        shakeCard: shake
+      } = {}) {
+        const hedgeRow = row || (orderInfo ? {
+          ...orderInfo,
+          ticker: orderInfo.symbol,
+          instrumentType: 'OPT'
+        } : null);
+        if (hedgeRow) optionStratRenderer.emitButtonEvent('close', hedgeRow);
+        let result = null;
+        if (orderInfo && orderInfo.ticket && orderInfo.provider) {
+          try {
+            result = await ipc.invoke('execution:cancel-order', {
+              provider: orderInfo.provider,
+              ticket: orderInfo.ticket,
+              symbol: orderInfo.symbol,
+              name: orderInfo.name || row?.name
+            });
+          } catch (err) {
+            result = { status: 'error', reason: err?.message || String(err) };
+          }
+        }
+        if (result && result.status !== 'ok') {
+          showToast?.(`x ${orderInfo?.symbol || ''}: ${result.reason || 'Close failed'}`);
+          shake?.(key);
+          return true;
+        }
+        const finalValuation = result?.valuation || result?.raw?.valuation;
+        if (finalValuation) {
+          if (row) row.valuation = finalValuation;
+          if (orderInfo) orderInfo.valuation = finalValuation;
+        }
+        optionStratRenderer.markRowClosed(key);
+        placedMap?.delete(key);
+        optionStratRenderer.pendingOptionValuations.delete(key);
+        for (const [ticket, mappedKey] of ticketMap?.entries?.() || []) {
+          if (mappedKey === key) ticketMap.delete(ticket);
+        }
+        setState?.(key, 'profit');
+        rerender?.();
+        return true;
+      },
+      shouldKeepFullCardOnState({ state } = {}) {
+        return state === 'placed' || state === 'profit';
+      },
+      shouldEnableButtonOnState({ state } = {}) {
+        return state === 'placed';
+      },
+      shouldHideButtonsOnState({ state } = {}) {
+        return state === 'profit';
+      },
+      resetButtons(button) {
+        button.textContent = 'OPEN';
+        button.classList.remove('sl');
+        button.classList.add('bl');
+        button.title = '';
+      },
+      onPositionOpened({ key } = {}) {
+        optionStratRenderer.markRowOpened(key);
+      },
+      onPositionClosed({ key } = {}) {
+        optionStratRenderer.markRowClosed(key);
+      }
+    };
+
+    context.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
+    ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
+      const cfg = res?.config || res || {};
+      const ms = Number(cfg.valuationRefreshMs);
+      if (Number.isFinite(ms) && ms > 0) {
+        optionStratValuationRefreshMs = optionStratRenderer.setValuationRefreshMs(ms);
+      }
+      optionStratRenderer.setDisplayFields(cfg.displayFields);
+    }).catch(() => {});
+    settingsRuntime?.onApply?.('optionstrat', ({ config }) => {
+      const ms = Number(config?.valuationRefreshMs);
+      if (Number.isFinite(ms) && ms > 0) {
+        optionStratValuationRefreshMs = optionStratRenderer.setValuationRefreshMs(ms);
+      }
+      optionStratRenderer.setDisplayFields(config?.displayFields);
+      render?.();
+    });
+    optionStratRenderer.startValuationRefresh();
+
+    const register = cardType => context.registerPositionCardRenderer?.(cardType, (position) => {
+      return optionStratRenderer.createOptionPositionCard({
+        position,
+        key: positionKey(position),
+        createActionButton: ({ label, kind, className, onClick }) => {
+          const button = btn(label, className, onClick);
+          button.dataset.kind = kind;
+          return button;
+        },
+        createActionsFromSnapshot: (snapshot, action, validated) => dispatchPositionAction(snapshot, action, validated),
+        requestRemove: (snapshot) => requestRemovePosition(snapshot)
+      });
+    });
+    register('option');
+    register('optionstrat');
+  }
+}];
+
 module.exports = {
   initService,
   registerActionFunctions,
   registerMainApplicationServices,
   registerMainIpcHandlers,
+  rendererHandlers,
   rendererLegacyGuards: [createOptionStratLegacyGuard()]
 };

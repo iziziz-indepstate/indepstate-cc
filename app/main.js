@@ -20,8 +20,7 @@ const { legacyRowToCreateCommand } = require('./application/positions');
 const {
   createAdapterLifecycleBridge,
   createExecutionApplicationService,
-  createProviderResolution,
-  normalizeOrderPayload
+  createProviderResolution
 } = require('./application/execution');
 const { registerExecutionIpcHandlers } = require('./infrastructure/execution');
 const {
@@ -367,7 +366,8 @@ function setupIpc(orderSvc) {
     resolveOrderProviderName: providerResolution.resolveOrderProviderName,
     resolveProviderName: providerResolution.resolveProviderName,
     providerCanResolveRiskQty: providerResolution.providerCanResolveRiskQty,
-    cardControllers: servicesApi.executionCardControllers
+    cardControllers: servicesApi.executionCardControllers,
+    orderPayloadPolicies: servicesApi.executionPayloadPolicies
   });
 
   servicesApi.execution = {
@@ -386,7 +386,6 @@ function setupIpc(orderSvc) {
     nowTs,
     sendToRenderer,
     resolveProviderName: providerResolution.resolveProviderName,
-    normalizeOrderPayload,
     executionService,
     pendingIndex,
     trackerPending,
@@ -423,6 +422,7 @@ function setupIpc(orderSvc) {
     execLog: EXEC_LOG,
     nowTs,
     events,
+    closeControllers: servicesApi.executionCloseControllers,
     instrumentInfo,
     detectInstrumentType,
     resolveProviderName: providerResolution.resolveProviderName

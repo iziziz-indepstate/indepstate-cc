@@ -17,10 +17,24 @@ function optionRow() {
     provider: 'optionstrat',
     requestId: 'req-opt-1',
     name: 'LCS 755/756',
+    strategyCommand: 'lcs',
+    expirationDte: '0DTE',
     legs: [
       { option: 'CALL', side: 'buy', strike: 755, quantity: 1 },
       { option: 'CALL', side: 'sell', strike: 756, quantity: 1 }
-    ]
+    ],
+    payoff: {
+      maxProfit: 100,
+      maxLoss: 200,
+      isMaxProfitInfinite: false,
+      isMaxLossInfinite: false
+    },
+    valuation: {
+      initialValue: 200,
+      currentValue: 240,
+      change: 40,
+      changePct: 20
+    }
   };
 }
 
@@ -51,7 +65,15 @@ function optionPosition(row = optionRow(), state = 'placed') {
         instrumentType: 'OPT',
         state,
         event: row.event,
-        legs: row.legs
+        name: row.name,
+        strategyCommand: row.strategyCommand,
+        expirationDte: row.expirationDte,
+        legs: row.legs,
+        payoff: row.payoff,
+        valuation: row.valuation,
+        openedAt: 1000,
+        ticket: 'deal-1',
+        providerOrderId: 'deal-1'
       }
     }
   };
@@ -79,6 +101,8 @@ async function run() {
         position: { id: payload.positionId, state: 'archived' },
         events: [{ type: 'position.archived', positionId: payload.positionId }]
       };
+      if (ch === 'execution:cancel-order') return { status: 'ok' };
+      if (ch === 'optionstrat:button-event') return { ok: true };
       if (ch === 'optionstrat:estimate') {
         return {
           status: 'ok',
@@ -176,7 +200,16 @@ async function run() {
 
   assert.strictEqual(t.state.rows.length, 0);
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
-  assert(document.querySelector('.position-card[data-position-id="pos-opt-1"]'));
+  assert.strictEqual(document.querySelectorAll('.position-card').length, 1);
+  const placedCard = document.querySelector('.position-card[data-position-id="pos-opt-1"]');
+  assert(placedCard);
+  assert.strictEqual(placedCard.dataset.cardType, 'option');
+  assert.strictEqual(placedCard.querySelector('.card__status').textContent, '');
+  assert(placedCard.textContent.includes('SPY 0DTE +1C755/-1C756'));
+  assert(placedCard.textContent.includes('Max Loss'));
+  assert(placedCard.textContent.includes('Max Profit'));
+  assert(placedCard.textContent.includes('RR'));
+  assert.strictEqual(placedCard.querySelector('.position-card__data'), null);
   assert.strictEqual(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`), null);
   assert.strictEqual(t.pendingByReqId.has('req-opt-1'), false);
   assert.strictEqual(t.pendingIdByReqId.has('req-opt-1'), false);
@@ -185,6 +218,66 @@ async function run() {
   assert.strictEqual(t.cardStates.has(legacyKey), false);
   assert.strictEqual(t.ticketToKey.has('deal-1'), false);
   assert.strictEqual(t.placedOrderByKey.has(legacyKey), false);
+
+  const duplicateRow = {
+    ...row,
+    requestId: 'req-opt-2',
+    time: 2
+  };
+  handlers['orders:new'](null, duplicateRow);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const duplicateKey = t.rowKey(duplicateRow);
+  const duplicateCard = document.querySelector(`.card[data-rowkey="${duplicateKey}"]:not(.position-card)`);
+  assert(duplicateCard);
+  assert.strictEqual(duplicateCard.dataset.instrumentType, 'OPT');
+  assert(duplicateCard.textContent.includes('SPY 0DTE +1C755/-1C756'));
+  assert.strictEqual(document.querySelectorAll('.position-card').length, 1);
+
+  duplicateCard.querySelector('.card__close').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.strictEqual(document.querySelector(`.card[data-rowkey="${duplicateKey}"]:not(.position-card)`), null);
+
+  const noIdentityRow = {
+    ...row,
+    requestId: 'req-opt-3',
+    time: 3
+  };
+  handlers['orders:new'](null, noIdentityRow);
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const noIdentityKey = t.rowKey(noIdentityRow);
+  assert(document.querySelector(`.card[data-rowkey="${noIdentityKey}"]:not(.position-card)`));
+
+  const noIdentityPosition = optionPosition(noIdentityRow);
+  noIdentityPosition.id = 'pos-opt-2';
+  noIdentityPosition.tickets = ['deal-2'];
+  noIdentityPosition.primaryTicket = 'deal-2';
+  noIdentityPosition.source = {
+    ticker: noIdentityRow.ticker,
+    symbol: noIdentityRow.symbol,
+    provider: noIdentityRow.provider,
+    instrumentType: 'OPT',
+    cardType: 'option',
+    name: noIdentityRow.name,
+    expirationDte: noIdentityRow.expirationDte,
+    legs: noIdentityRow.legs
+  };
+  delete noIdentityPosition.card.data.ticket;
+  delete noIdentityPosition.card.data.providerOrderId;
+  handlers['positions:changed'](null, {
+    event: { type: 'position.placed' },
+    position: noIdentityPosition
+  });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.strictEqual(document.querySelector(`.card[data-rowkey="${noIdentityKey}"]:not(.position-card)`), null);
+  assert(document.querySelector('.position-card[data-position-id="pos-opt-2"]'));
+
+  placedCard.querySelector('button.btn[data-kind="close"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(calls.some(call => call.ch === 'execution:cancel-order'
+    && call.payload.provider === 'optionstrat'
+    && call.payload.ticket === 'deal-1'
+    && call.payload.symbol === 'SPY'
+    && call.payload.name === 'LCS 755/756'));
 
   Module._load = originalLoad;
   console.log('optionstratLegacyDedupeRenderer tests passed');

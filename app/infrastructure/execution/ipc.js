@@ -6,10 +6,25 @@ function registerExecutionIpcHandlers({
   execLog,
   nowTs = () => Date.now(),
   events,
+  closeControllers,
   instrumentInfo,
   detectInstrumentType,
   resolveProviderName
 } = {}) {
+  const lifecycleControllers = Array.isArray(closeControllers) ? closeControllers.filter(Boolean) : [];
+
+  function notifyCloseControllers(context) {
+    for (const controller of lifecycleControllers) {
+      const fn = controller?.onCancelOrderResult;
+      if (typeof fn !== 'function') continue;
+      try {
+        fn.call(controller, context);
+      } catch (err) {
+        console.warn(`[execution] ${controller.id || 'close controller'} onCancelOrderResult failed:`, err?.message || String(err));
+      }
+    }
+  }
+
   ipcMain.handle('execution:cancel-order', async (_evt, payload = {}) => {
     const providerNameRaw = payload.provider;
     const ticketRaw = payload.ticket;
@@ -35,14 +50,15 @@ function registerExecutionIpcHandlers({
       const result = await adapter.cancelOrder(ticket, symbol);
       appendJsonl(execLog, { t: nowTs(), kind: 'cancel', provider: providerName, ticket, symbol, result });
       const res = result || { status: 'ok', provider: providerName };
-      const isOptionStratClose = String(providerName || '').toLowerCase() === 'optionstrat' || !!res?.raw?.strategy;
-      if (res.status === 'ok' && isOptionStratClose) {
-        events.emit('order:closed', {
-          provider: providerName,
+      if (res.status === 'ok') {
+        notifyCloseControllers({
+          payload,
+          providerName,
           ticket,
           symbol,
-          order: name ? { name } : undefined,
-          result: { ...res, provider: res.provider || providerName }
+          name,
+          result: res,
+          events
         });
       }
       return res;

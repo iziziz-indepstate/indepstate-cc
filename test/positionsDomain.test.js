@@ -21,6 +21,7 @@ const {
   registerLegacyPositionGuard
 } = require('../app/application/positions');
 const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+const { createOptionStratLegacyGuard } = require('../app/services/optionstrat/legacyGuard');
 
 registerLegacyPositionGuard(createLevelOrderLegacyGuard());
 
@@ -146,6 +147,45 @@ function runApplicationAndLegacyTests() {
 
   const rowCreate = legacyRowToCreateCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
   assert.strictEqual(rowCreate.openingPolicy.kind, 'levelOrder');
+
+  const optionRowWithoutGuard = legacyRowToCreateCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
+  assert.strictEqual(optionRowWithoutGuard.cardType, 'regular');
+  assert.strictEqual(optionRowWithoutGuard.card.type, 'regular');
+
+  const optionPayloadWithoutGuard = legacyOrderPayloadToCreateCommand({
+    ticker: 'SPY',
+    provider: 'optionstrat',
+    instrumentType: 'OPT',
+    meta: { requestId: 'option-without-guard' }
+  }, 'optionstrat');
+  assert.strictEqual(optionPayloadWithoutGuard.cardType, undefined);
+  assert.strictEqual(optionPayloadWithoutGuard.card.type, undefined);
+
+  const unregisterOptionGuard = registerLegacyPositionGuard(createOptionStratLegacyGuard());
+  try {
+    const optionRowWithGuard = legacyRowToCreateCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
+    assert.strictEqual(optionRowWithGuard.cardType, 'option');
+    assert.strictEqual(optionRowWithGuard.card.type, 'option');
+
+    const optionPayloadWithGuard = legacyOrderPayloadToCreateCommand({
+      ticker: 'SPY',
+      provider: 'optionstrat',
+      instrumentType: 'OPT',
+      meta: { requestId: 'option-with-guard' }
+    }, 'optionstrat');
+    assert.strictEqual(optionPayloadWithGuard.cardType, 'option');
+    assert.strictEqual(optionPayloadWithGuard.card.type, 'option');
+
+    const explicitCardType = legacyRowToCreateCommand({
+      ticker: 'SPY',
+      provider: 'optionstrat',
+      instrumentType: 'OPT',
+      cardType: 'customOption'
+    });
+    assert.strictEqual(explicitCardType.cardType, 'customOption');
+  } finally {
+    unregisterOptionGuard();
+  }
 }
 
 function runCardMetadataTests() {

@@ -1,5 +1,4 @@
 const assert = require('assert');
-const brokerageAdapters = require('../app/services/brokerage/brokerageAdapters');
 const {
   initService,
   findConfiguredMetadataPreloadProviders,
@@ -51,13 +50,21 @@ function run() {
   assert.deepStrictEqual(findConfiguredMetadataPreloadProviders(nonBinance), []);
 
   let registration;
+  let adapterRegistration;
   initService({
-    brokerage,
+    brokerage: {
+      ...brokerage,
+      registerAdapterFactory(name, factory) {
+        adapterRegistration = { name, factory };
+        return () => true;
+      }
+    },
     instrumentInfo: {
       registerMetadataPrewarmer(name, callback) { registration = { name, callback }; }
     }
   });
-  assert.strictEqual(typeof brokerageAdapters.ccxt, 'function');
+  assert.strictEqual(adapterRegistration.name, 'ccxt');
+  assert.strictEqual(typeof adapterRegistration.factory, 'function');
   assert.strictEqual(registration.name, 'ccxt-binance-futures');
   calls.length = 0;
   registration.callback();

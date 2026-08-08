@@ -20,6 +20,14 @@ function positionIdSeedForLegacy(value = {}) {
   return null;
 }
 
+function cardTypeForLegacy(value = {}, fallback) {
+  for (const guard of legacyPositionGuards) {
+    const cardType = guard.cardTypeForLegacy?.(value);
+    if (cardType) return cardType;
+  }
+  return fallback;
+}
+
 function registerLegacyPositionGuard(guard = {}) {
   if (!guard || typeof guard !== 'object') return false;
   legacyPositionGuards.push(guard);
@@ -32,7 +40,7 @@ function registerLegacyPositionGuard(guard = {}) {
 function legacyRowToCreateCommand(row = {}) {
   const ticker = String(row.ticker || row.symbol || '').trim();
   const idSeed = positionIdSeedForLegacy(row) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
-  const cardType = row.cardType || (row.instrumentType === 'OPT' ? 'option' : 'regular');
+  const cardType = row.cardType || cardTypeForLegacy(row, 'regular');
   return {
     type: PositionCommand.CREATE,
     positionId: idSeed ? hashId('pos', idSeed) : hashId('pos', row),
@@ -58,7 +66,7 @@ function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
   const ticker = String(payload.ticker || payload.symbol || '').trim();
   const requestId = meta.requestId || payload.requestId || payload.cid || meta.cid;
   const idSeed = positionIdSeedForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider });
-  const cardType = payload.cardType || (payload.instrumentType === 'OPT' ? 'option' : undefined);
+  const cardType = payload.cardType || cardTypeForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider }, undefined);
   return {
     type: PositionCommand.CREATE,
     positionId: idSeed ? hashId('pos', idSeed) : requestId ? hashId('pos', requestId) : hashId('pos', payload),
@@ -135,6 +143,7 @@ function providerCancelledToCommand(event = {}, positionId) {
 
 module.exports = {
   registerLegacyPositionGuard,
+  cardTypeForLegacy,
   legacyRowToCreateCommand,
   legacyOrderPayloadToCreateCommand,
   legacyOrderPayloadToOpenCommand,

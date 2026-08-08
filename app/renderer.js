@@ -10,7 +10,6 @@ const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumen
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/renderer');
 const { createPositionsRenderer } = require('./services/positions/renderer');
-const { createOptionStratRenderer } = require('./services/optionstrat/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createOrderCardsRenderer } = require('./services/orderCards/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
@@ -24,7 +23,6 @@ const envInstrRefresh = Number(process.env.INSTRUMENT_REFRESH_MS);
 let INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh)
   ? envInstrRefresh
   : Number(orderCardsCfg?.instrumentRefreshMs) || 1000;
-let optionStratValuationRefreshMs = 5000;
 
 let CLOSED_CARD_EVENT_STRATEGY = orderCardsCfg?.closedCardEventStrategy || 'ignore';
 let BUTTON_ROWS = Number(orderCardsCfg?.buttonRows) || 1;
@@ -84,14 +82,6 @@ ipcRenderer.invoke('settings:get', 'ui').then((res) => {
 }).catch(() => {
 });
 
-ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
-  const cfg = res?.config || res || {};
-  const ms = Number(cfg.valuationRefreshMs);
-  if (Number.isFinite(ms) && ms > 0) optionStratValuationRefreshMs = optionStratRenderer.setValuationRefreshMs(ms);
-  optionStratRenderer.setDisplayFields(cfg.displayFields);
-}).catch(() => {
-});
-
 // Per-card UI state (persist across renders)
 // Crypto:    { qty, price, sl, tp, tpTouched }
 // Equities:  { qty, price, sl, tp, risk, tpTouched }
@@ -102,6 +92,8 @@ const cardStates = new Map();
 // Order for sorting cards by execution state
 const cardStateOrder = {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7};
 const terminalCardStates = new Set(['closed', 'profit', 'loss']);
+const orderCardInstrumentHandlers = {};
+const orderCardTypeHandlers = {};
 
 // Short labels for pending execution orders
 const pendingExecLabels = new Map(); // key -> label
@@ -171,12 +163,6 @@ settingsRuntime.onApply('ui', ({ config }) => {
 });
 settingsRuntime.onApply('order-cards', ({ config }) => applyOrderCardsConfig(config));
 settingsRuntime.onApply('order-calculator', () => render());
-settingsRuntime.onApply('optionstrat', ({ config }) => {
-  const ms = Number(config?.valuationRefreshMs);
-  if (Number.isFinite(ms) && ms > 0) optionStratValuationRefreshMs = optionStratRenderer.setValuationRefreshMs(ms);
-  optionStratRenderer.setDisplayFields(config?.displayFields);
-  render();
-});
 
 function loadRendererServiceManifests() {
   if (rendererServiceManifests) return rendererServiceManifests;
@@ -207,17 +193,17 @@ function loadRendererHooks() {
   }
 }
 
-function loadRendererPositionHandlers(context = {}) {
+function loadRendererHandlers(context = {}) {
   for (const { dir, manifest } of loadRendererServiceManifests()) {
     try {
-      const handlers = Array.isArray(manifest?.rendererPositionHandlers)
-        ? manifest.rendererPositionHandlers
-        : [];
+      const handlers = []
+        .concat(Array.isArray(manifest?.rendererHandlers) ? manifest.rendererHandlers : [])
+        .concat(Array.isArray(manifest?.rendererPositionHandlers) ? manifest.rendererPositionHandlers : []);
       for (const handler of handlers) {
         if (typeof handler?.register === 'function') handler.register(context);
       }
     } catch (err) {
-      console.error('[rendererServiceLoader] Failed to load position handlers', dir, err.message);
+      console.error('[rendererServiceLoader] Failed to load renderer handlers', dir, err.message);
     }
   }
 }
@@ -382,6 +368,56 @@ function runCommand(str) {
   return ipcRenderer.invoke('cmdline:run', str);
 }
 
+function registerOrderCardInstrumentHandler(instrumentType, handler) {
+  const key = String(instrumentType || '').trim();
+  if (!key || !handler || typeof handler !== 'object') return false;
+  orderCardInstrumentHandlers[key] = handler;
+  return () => {
+    if (orderCardInstrumentHandlers[key] === handler) delete orderCardInstrumentHandlers[key];
+  };
+}
+
+function registerOrderCardTypeHandler(cardType, handler) {
+  const key = String(cardType || '').trim();
+  if (!key || !handler || typeof handler !== 'object') return false;
+  orderCardTypeHandlers[key] = handler;
+  return () => {
+    if (orderCardTypeHandlers[key] === handler) delete orderCardTypeHandlers[key];
+  };
+}
+
+function orderCardHandlerForRow(row = {}, instrumentType) {
+  const type = instrumentType || row.instrumentType;
+  return orderCardInstrumentHandlers[type] || orderCardTypeHandlers[row.cardType] || orderCardTypeHandlers[row.type] || null;
+}
+
+function orderCardHandlerForCard(card, key) {
+  const row = state.rows.find(r => rowKey(r) === key) || {};
+  return orderCardHandlerForRow(row, card?.dataset?.instrumentType);
+}
+
+function orderCardHandlerForKey(key) {
+  const row = state.rows.find(r => rowKey(r) === key) || {};
+  return orderCardHandlerForRow(row, row.instrumentType);
+}
+
+function orderCardTitle(row = {}, instrumentType) {
+  const handler = orderCardHandlerForRow(row, instrumentType);
+  const custom = typeof handler?.title === 'function'
+    ? handler.title({ row, instrumentType })
+    : null;
+  return custom || row.ticker;
+}
+
+function matchesExistingOrderRow(incomingRow = {}, existingRow = {}) {
+  const instrumentType = incomingRow.instrumentType || detectInstrumentType(incomingRow.ticker);
+  const handler = orderCardHandlerForRow(incomingRow, instrumentType);
+  if (typeof handler?.matchesExistingRow === 'function') {
+    return !!handler.matchesExistingRow({ incomingRow, existingRow, rowKey });
+  }
+  return existingRow.ticker === incomingRow.ticker;
+}
+
 function setCardState(key, state) {
   if (state) {
     cardStates.set(key, state);
@@ -391,7 +427,7 @@ function setCardState(key, state) {
 
   const card = cardByKey(key);
   if (!card) return;
-  const isOptionCard = card.dataset.instrumentType === 'OPT';
+  const cardHandler = orderCardHandlerForCard(card, key);
   const status = card.querySelector('.card__status');
   const close = card.querySelector('.card__close');
   const retryBtn = card.querySelector('.retry-btn');
@@ -426,13 +462,20 @@ function setCardState(key, state) {
     const closePlacedOrder = async () => {
       const orderInfo = placedOrderByKey.get(key);
       const currentRow = (appState.rows || []).find(r => rowKey(r) === key);
-      const hedgeRow = currentRow || (isOptionCard && orderInfo ? {
-        ...orderInfo,
-        ticker: orderInfo.symbol,
-        instrumentType: 'OPT'
-      } : null);
-      if (isOptionCard && hedgeRow) {
-        emitOptionStratButtonEvent('close', hedgeRow);
+      if (typeof cardHandler?.closePlacedOrder === 'function') {
+        const handled = await cardHandler.closePlacedOrder({
+          key,
+          row: currentRow,
+          orderInfo,
+          placedOrderByKey,
+          ticketToKey,
+          setCardState,
+          render,
+          ipcRenderer,
+          toast,
+          shakeCard
+        });
+        if (handled) return;
       }
       let result = null;
       if (orderInfo && orderInfo.ticket && orderInfo.provider) {
@@ -448,31 +491,7 @@ function setCardState(key, state) {
         }
       }
 
-      if (isOptionCard) {
-        if (result && result.status !== 'ok') {
-          toast(`âœ– ${orderInfo?.symbol || ''}: ${result.reason || 'Close failed'}`);
-          shakeCard(key);
-          return;
-        }
-        const finalValuation = result?.valuation || result?.raw?.valuation;
-        if (finalValuation) {
-          const current = currentRow;
-          if (current) current.valuation = finalValuation;
-          if (orderInfo) orderInfo.valuation = finalValuation;
-        }
-        markRowClosed(key);
-        placedOrderByKey.delete(key);
-        pendingOptionValuations.delete(key);
-        for (const [ticket, k] of ticketToKey.entries()) {
-          if (k === key) ticketToKey.delete(ticket);
-        }
-        setCardState(key, 'profit');
-        render();
-        return;
-      }
-
       placedOrderByKey.delete(key);
-      pendingOptionValuations.delete(key);
       for (const [ticket, k] of ticketToKey.entries()) {
         if (k === key) ticketToKey.delete(ticket);
       }
@@ -482,17 +501,17 @@ function setCardState(key, state) {
 
     if (state === 'placed') {
       status.style.cursor = 'pointer';
-      status.title = isOptionCard ? 'Close OptionStrat position' : 'Return to ready to send';
+      status.title = cardHandler?.placedStatusTitle || 'Return to ready to send';
       status.onclick = closePlacedOrder;
-      if (isOptionCard && btnsWrap) {
+      if (cardHandler?.placedButton && btnsWrap) {
         const closeBtn = btnsWrap.querySelector('button.btn');
         if (closeBtn) {
           const replacement = closeBtn.cloneNode(true);
-          replacement.textContent = 'CLOSE';
-          replacement.classList.remove('bl');
-          replacement.classList.add('sl');
+          replacement.textContent = cardHandler.placedButton.label || closeBtn.textContent;
+          for (const cls of cardHandler.placedButton.removeClasses || []) replacement.classList.remove(cls);
+          for (const cls of cardHandler.placedButton.addClasses || []) replacement.classList.add(cls);
           replacement.disabled = false;
-          replacement.title = 'Close OptionStrat position';
+          replacement.title = cardHandler.placedButton.title || status.title;
           replacement.addEventListener('click', closePlacedOrder);
           closeBtn.replaceWith(replacement);
         }
@@ -531,7 +550,10 @@ function setCardState(key, state) {
       card.onclick = null;
     }
 
-    if (state === 'pending' || state === 'pending-exec' || ((state === 'placed' || state === 'profit') && isOptionCard)) {
+    const keepFullCard = state === 'pending'
+      || state === 'pending-exec'
+      || !!cardHandler?.shouldKeepFullCardOnState?.({ state, key, card });
+    if (keepFullCard) {
       // restore full card for pending states
       card.classList.remove('card--mini');
       if (card._removedParts) {
@@ -546,9 +568,9 @@ function setCardState(key, state) {
       }
       card.querySelectorAll('input').forEach(inp => inp.disabled = true);
       card.querySelectorAll('button.btn').forEach(btn => {
-        btn.disabled = !(state === 'placed' && isOptionCard);
+        btn.disabled = !cardHandler?.shouldEnableButtonOnState?.({ state, key, card });
       });
-      if (btnsWrap) btnsWrap.style.display = state === 'profit' && isOptionCard ? 'none' : '';
+      if (btnsWrap && cardHandler?.shouldHideButtonsOnState?.({ state, key, card })) btnsWrap.style.display = 'none';
       if (retryBtn) {
         if (state === 'pending') {
           retryBtn.style.display = 'inline-block';
@@ -597,14 +619,9 @@ function setCardState(key, state) {
       btn.disabled = false;
     });
     if (btnsWrap) btnsWrap.style.display = '';
-    if (isOptionCard && btnsWrap) {
+    if (cardHandler?.resetButtons && btnsWrap) {
       const openBtn = btnsWrap.querySelector('button.btn');
-      if (openBtn) {
-        openBtn.textContent = 'OPEN';
-        openBtn.classList.remove('sl');
-        openBtn.classList.add('bl');
-        openBtn.title = '';
-      }
+      if (openBtn) cardHandler.resetButtons(openBtn);
     }
 
     if (retryBtn) retryBtn.style.display = 'none';
@@ -733,10 +750,11 @@ function render() {
 function createCard(row, index) {
   const key = rowKey(row);
   const instrumentType = row.instrumentType || detectInstrumentType(row.ticker); // fallback to EQ if not set
+  const cardHandler = orderCardHandlerForRow(row, instrumentType);
 
   // ensure we have a quote for this symbol ASAP
   ensureInstrument(row.ticker, row.provider);
-  if (instrumentType === 'OPT') ensureOptionPayoff(row);
+  cardHandler?.onCreateCard?.({ row, key, instrumentType });
 
   const card = el('div', 'card');
   card.setAttribute('data-rowkey', key);
@@ -748,7 +766,7 @@ function createCard(row, index) {
 
   // Левая часть: тикер (+ bid/ask при наявності)
   const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
-  left.appendChild(el('div', null, instrumentType === 'OPT' ? (row.name || row.ticker) : row.ticker, {style: 'font-weight:600;font-size:13px'}));
+  left.appendChild(el('div', null, orderCardTitle(row, instrumentType), {style: 'font-weight:600;font-size:13px'}));
   if (SHOW_BID_ASK) {
     const $bidask = el('span', 'card__bidask');
     $bidask.title = 'Bid / Ask';
@@ -817,24 +835,7 @@ function createCard(row, index) {
   const meta = el('div', 'meta');
 
   // body
-  let body;
-  switch (instrumentType) {
-    case 'EQ':
-      body = createEquitiesBody(row, key);
-      break;
-    case 'FX':
-      body = createFxBody(row, key);
-      break;
-    case 'CX':
-      body = createCryptoBody(row, key);
-      break;
-    case 'OPT':
-      body = createOptionBody(row, key);
-      break;
-    default:
-      body = createEquitiesBody(row, key); // fallback
-      break;
-  }
+  const body = createOrderCardBody(row, key, instrumentType);
 
 
   // buttons
@@ -848,9 +849,7 @@ function createCard(row, index) {
     b.setAttribute('data-kind', kind);
     return b;
   };
-  const cardButtons = instrumentType === 'OPT'
-    ? [{ label: 'OPEN', action: 'OPEN', style: 'bl' }]
-    : CARD_BUTTONS;
+  const cardButtons = orderCardButtons(row, instrumentType) || CARD_BUTTONS;
   const cols = Math.ceil(cardButtons.length / BUTTON_ROWS);
   btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
   for (const {label, action, style} of cardButtons) {
@@ -959,29 +958,10 @@ const updateSpreadForTicker = (...args) => instrumentInfoRenderer.updateSpreadFo
 const revalidateCardsForTicker = (...args) => instrumentInfoRenderer.revalidateCardsForTicker(...args);
 instrumentInfoRenderer.startPeriodicRefresh();
 
-const optionStratRenderer = createOptionStratRenderer({
-  ipcRenderer,
-  el,
-  state,
-  rowKey,
-  render,
-  toast,
-  shakeCard,
-  placedOrderByKey,
-  cardStates,
-  setCardState,
-  ticketToKey,
-  getValuationRefreshMs: () => optionStratValuationRefreshMs
-});
-const pendingOptionValuations = optionStratRenderer.pendingOptionValuations;
-const pendingOptionPayoffs = optionStratRenderer.pendingOptionPayoffs;
-const createOptionBody = (...args) => optionStratRenderer.createOptionBody(...args);
-const ensureOptionPayoff = (...args) => optionStratRenderer.ensureOptionPayoff(...args);
-const refreshOptionValuation = (...args) => optionStratRenderer.refreshOptionValuation(...args);
-const markRowOpened = (...args) => optionStratRenderer.markRowOpened(...args);
-const markRowClosed = (...args) => optionStratRenderer.markRowClosed(...args);
-const emitOptionStratButtonEvent = (...args) => optionStratRenderer.emitButtonEvent(...args);
-optionStratRenderer.startValuationRefresh();
+const positionActionHandlers = {};
+const positionCardRenderers = {};
+const positionRemovalHandlers = {};
+const rendererLegacyGuards = [];
 
 const orderCardsRenderer = createOrderCardsRenderer({
   el,
@@ -1003,28 +983,21 @@ const orderCardsRenderer = createOrderCardsRenderer({
   pendingIdByReqId,
   retryCounts,
   pendingExecLabels,
-  placedOrderByKey,
-  ticketToKey,
-  cardStates,
   cardByKey,
   setCardState,
   pendingActionInfo: (kind) => pendingOrdersRenderer.actionInfo(kind),
-  emitOptionStratButtonEvent,
+  instrumentTypeHandlers: orderCardInstrumentHandlers,
+  cardTypeHandlers: orderCardTypeHandlers,
   toast,
   shakeCard,
   render
 });
-const createCryptoBody = (...args) => orderCardsRenderer.createCryptoBody(...args);
-const createFxBody = (...args) => orderCardsRenderer.createFxBody(...args);
-const createEquitiesBody = (...args) => orderCardsRenderer.createEquitiesBody(...args);
+const createOrderCardBody = (...args) => orderCardsRenderer.createBody(...args);
+const orderCardButtons = (...args) => orderCardsRenderer.buttons(...args);
+const scheduleOrderCardInstantExecution = (...args) => orderCardsRenderer.scheduleInstantExecution(...args);
 const place = (...args) => orderCardsRenderer.place(...args);
 
 const pendingOrdersRenderer = createPendingOrdersRenderer();
-
-const positionActionHandlers = {};
-const positionCardRenderers = {};
-const positionRemovalHandlers = {};
-const rendererLegacyGuards = [];
 
 function registerRendererLegacyGuard(guard = {}) {
   if (!guard || typeof guard !== 'object') return false;
@@ -1085,10 +1058,12 @@ function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
   return state.rows.some(row => shouldRemoveLegacyRowForPosition(position, row));
 }
 
-loadRendererPositionHandlers({
+loadRendererHandlers({
   loadConfig,
   settingsRuntime,
   el,
+  state,
+  rowKey,
   inputNumber,
   normNum: _normNum,
   instrumentInfoFor,
@@ -1103,19 +1078,25 @@ loadRendererPositionHandlers({
   ipcRenderer,
   trackInstrument: row => instrumentInfoRenderer.trackInstrument(row),
   untrackInstrument: row => instrumentInfoRenderer.untrackInstrument(row),
+  placedOrderByKey,
+  cardStates,
+  pendingByReqId,
+  pendingIdByReqId,
+  retryCounts,
+  setCardState,
+  ticketToKey,
   positionKey,
   positionCardTitle,
-  pendingByReqId,
-  retryCounts,
   pendingExecLabels,
   cardByKey,
-  setCardState,
   toast,
   shakeCard,
   render,
   btn,
   dispatchPositionAction,
   requestRemovePosition,
+  registerOrderCardInstrumentHandler,
+  registerOrderCardTypeHandler,
   registerPositionCardRenderer(cardType, renderer) {
     if (cardType && typeof renderer === 'function') positionCardRenderers[cardType] = renderer;
   },
@@ -1334,11 +1315,15 @@ function removeRowByKey(key) {
 }
 
 function scheduleInstantExecution(row) {
-  if (!row || row.instrumentType !== 'OPT' || row.instantExecution !== true) return;
+  if (!row) return;
+  const handler = orderCardHandlerForRow(row, row.instrumentType);
+  if (!handler || typeof handler.scheduleInstantExecution !== 'function') return;
+  if (typeof handler.shouldScheduleInstantExecution === 'function'
+    && !handler.shouldScheduleInstantExecution({ row })) return;
   const key = rowKey(row);
   if (instantExecutedKeys.has(key)) return;
   instantExecutedKeys.add(key);
-  optionStratRenderer.scheduleInstantExecution(row, place);
+  scheduleOrderCardInstantExecution(row, place, row.instrumentType);
 }
 
 // ======= IPC wiring =======
@@ -1472,12 +1457,7 @@ ipcRenderer.on('orders:new', (_evt, row) => {
   if (shouldFilterLegacyRow(row)) return;
   if (shouldIgnoreLegacyRowForExistingPosition(row)) return;
   // ищем существующую карточку по ТИКЕРУ
-  let idx;
-  if (row.instrumentType === 'OPT') {
-    idx = state.rows.findIndex(r => rowKey(r) === rowKey(row));
-  } else {
-    idx = state.rows.findIndex(r => r.ticker === row.ticker);
-  }
+  let idx = state.rows.findIndex(r => matchesExistingOrderRow(row, r));
 
   if (idx === -1) {
     // карточки нет — добавляем новую
@@ -1577,7 +1557,7 @@ ipcRenderer.on('execution:result', (_evt, rec) => {
       });
       if (row && (rec.payoff || rec.raw?.payoff)) row.payoff = rec.payoff || rec.raw.payoff;
       if (row && (rec.valuation || rec.raw?.valuation)) row.valuation = rec.valuation || rec.raw.valuation;
-      if (row && row.instrumentType === 'OPT') row.openedAt = row.openedAt || openedAt;
+      if (row) orderCardHandlerForRow(row, row.instrumentType)?.onExecutionResultOk?.({ row, rec, openedAt, key });
     }
     toast(`✔ ${rec.order.symbol} ${rec.order.side} ${rec.order.qty} — placed`);
     render();
@@ -1608,7 +1588,7 @@ ipcRenderer.on('position:opened', (_evt, rec) => {
   }
   if (!key) return;
   placedOrderByKey.delete(key);
-  markRowOpened(key);
+  orderCardHandlerForKey(key)?.onPositionOpened?.({ key, rec });
   setCardState(key, 'executing');
   render();
 });
@@ -1618,7 +1598,7 @@ ipcRenderer.on('position:closed', (_evt, rec) => {
   const ticket = String(rec.ticket);
   const key = ticketToKey.get(ticket);
   if (!key) return;
-  markRowClosed(key);
+  orderCardHandlerForKey(key)?.onPositionClosed?.({ key, rec });
   if (typeof rec.profit === 'number') {
     setCardState(key, rec.profit >= 0 ? 'profit' : 'loss');
   } else {
@@ -1692,9 +1672,8 @@ if (typeof module !== 'undefined') {
     instrumentInfo,
     settingsForms,
     migrateKey,
-    setOptionStratDisplayFields(fields) {
-      optionStratRenderer.setDisplayFields(fields);
-    },
+    orderCardInstrumentHandlers,
+    orderCardTypeHandlers,
     render
   };
 }

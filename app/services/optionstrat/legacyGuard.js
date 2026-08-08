@@ -108,6 +108,10 @@ function positionIdSeedForLegacy(value = {}) {
   return null;
 }
 
+function cardTypeForLegacy(value = {}) {
+  return isOptionStratLike(value) ? 'option' : null;
+}
+
 function legSignature(value = {}) {
   const legs = array(value.legs);
   if (!legs.length) return '';
@@ -138,7 +142,7 @@ function signaturesMatch(positionValue = {}, row = {}) {
   return false;
 }
 
-function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
+function identityMatches(position = {}, row = {}) {
   if (!isOptionStratLegacyRow(row) || !isOptionStratPosition(position)) return false;
 
   const rowIds = new Set(idsFrom(row));
@@ -157,7 +161,24 @@ function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
     if (rowKey && rowKeyParts(source) === rowKey) return true;
   }
 
+  return false;
+}
+
+function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
+  if (identityMatches(position, row)) return true;
   return positionSources(position).some(source => signaturesMatch(source, row));
+}
+
+function signatureMatches(position = {}, row = {}) {
+  if (!isOptionStratLegacyRow(row) || !isOptionStratPosition(position)) return false;
+  return positionSources(position).some(source => signaturesMatch(source, row));
+}
+
+function signatureMatchesUniquely(position = {}, row = {}, context = {}) {
+  if (!signatureMatches(position, row)) return false;
+  const rows = Array.isArray(context.rows) ? context.rows : [];
+  const matches = rows.filter(candidate => signatureMatches(position, candidate));
+  return matches.length === 1 && matches[0] === row;
 }
 
 function eventMatchesPosition(rec = {}, position = {}) {
@@ -203,7 +224,7 @@ function hasSnapshotOwnedMatchingPosition(row = {}, context = {}) {
   return positions.some(position => (
     isOptionStratPosition(position)
       && shouldSnapshotOwnLegacyRow(position)
-      && shouldRemoveLegacyRowForPosition(position, row)
+      && identityMatches(position, row)
   ));
 }
 
@@ -211,12 +232,13 @@ function createOptionStratLegacyGuard() {
   return {
     id: 'optionstrat',
     positionIdSeedForLegacy,
-    shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
+    cardTypeForLegacy,
+    shouldRemoveLegacyRowForPosition(position = {}, row = {}, context = {}) {
       if (!shouldSnapshotOwnLegacyRow(position)) return false;
-      return shouldRemoveLegacyRowForPosition(position, row);
+      return identityMatches(position, row) || signatureMatchesUniquely(position, row, context);
     },
     shouldResetLegacyRowForPosition(position = {}, row = {}) {
-      return isErrorLikePosition(position) && shouldRemoveLegacyRowForPosition(position, row);
+      return isErrorLikePosition(position) && identityMatches(position, row);
     },
     shouldRemovePositionSnapshotForLegacyRowRemoval(row = {}, position = {}) {
       return isOptionStratLegacyRow(row)
@@ -246,6 +268,7 @@ module.exports = {
   hasLegs,
   isOptionStratLegacyRow,
   isOptionStratPosition,
+  cardTypeForLegacy,
   positionIdSeedForLegacy,
   shouldRemoveLegacyRowForPosition
 };

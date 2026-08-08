@@ -1,17 +1,37 @@
 const assert = require('assert');
-const brokerageAdapters = require('../app/services/brokerage/brokerageAdapters');
-const { initExecutionConfig, getAdapter } = require('../app/services/brokerage/adapterRegistry');
+const {
+  initExecutionConfig,
+  getAdapter,
+  registerAdapterFactory,
+  hasAdapterFactory,
+  listAdapterFactories
+} = require('../app/services/brokerage/adapterRegistry');
 
 async function run() {
+  const oldFactory = () => ({ id: 'old' });
+  const newFactory = () => ({ id: 'new' });
+  const unregisterOld = registerAdapterFactory('SwapTest', oldFactory);
+  assert.strictEqual(hasAdapterFactory('swaptest'), true);
+  assert(listAdapterFactories().includes('swaptest'));
+  initExecutionConfig({ providers: { swap: { adapter: 'swaptest' } } });
+  assert.strictEqual(getAdapter('swap').id, 'old');
+
+  const unregisterNew = registerAdapterFactory('swaptest', newFactory);
+  assert.strictEqual(getAdapter('swap').id, 'new', 'duplicate registration must replace cached instances');
+  assert.strictEqual(unregisterOld(), false, 'old unregister must not remove a replacement factory');
+  assert.strictEqual(getAdapter('swap').id, 'new');
+  assert.strictEqual(unregisterNew(), true);
+  assert.strictEqual(hasAdapterFactory('swaptest'), false);
+
   let preloadCalls = 0;
   let release;
   const pending = new Promise(resolve => { release = resolve; });
-  brokerageAdapters.preloadtest = () => ({
+  const unregisterPreload = registerAdapterFactory('preloadtest', () => ({
     preloadInstrumentMetadata() {
       preloadCalls += 1;
       return pending;
     }
-  });
+  }));
   initExecutionConfig({ providers: { warm: { adapter: 'preloadtest' } } });
 
   const adapter = getAdapter('warm');
@@ -24,7 +44,7 @@ async function run() {
   assert.strictEqual(preloadCalls, 1);
   release();
 
-  delete brokerageAdapters.preloadtest;
+  unregisterPreload();
   console.log('adapter registry preload tests passed');
 }
 

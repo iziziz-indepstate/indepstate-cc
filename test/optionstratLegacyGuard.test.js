@@ -1,6 +1,7 @@
 const assert = require('assert');
 const {
   createOptionStratLegacyGuard,
+  cardTypeForLegacy,
   isOptionStratLegacyRow,
   isOptionStratPosition,
   positionIdSeedForLegacy,
@@ -12,7 +13,11 @@ const {
   registerLegacyPositionGuard,
   createPositionApplicationService
 } = require('../app/application/positions');
-const { normalizeOrderPayload } = require('../app/application/execution');
+const {
+  normalizeOrderPayload,
+  registerOrderPayloadPolicy
+} = require('../app/application/execution');
+const { createOptionStratExecutionPolicy } = require('../app/services/optionstrat/executionPolicy');
 
 const optionRow = {
   instrumentType: 'OPT',
@@ -52,6 +57,12 @@ const optionPosition = {
 assert.strictEqual(isOptionStratLegacyRow(optionRow), true);
 assert.strictEqual(isOptionStratLegacyRow({ ticker: 'AAPL', instrumentType: 'EQ', provider: 'j2t' }), false);
 assert.strictEqual(isOptionStratLegacyRow({ ticker: 'BTCUSDT', instrumentType: 'CX', provider: 'ccxt' }), false);
+assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', instrumentType: 'OPT' }), 'option');
+assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', provider: 'optionstrat' }), 'option');
+assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', event: 'optionstrat' }), 'option');
+assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', cardType: 'optionstrat' }), 'option');
+assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', instrumentType: 'EQ', provider: 'j2t' }), null);
+assert.strictEqual(cardTypeForLegacy({ ticker: 'BTCUSDT', instrumentType: 'CX', provider: 'ccxt' }), null);
 assert.strictEqual(isOptionStratPosition(optionPosition), true);
 assert.strictEqual(shouldRemoveLegacyRowForPosition(optionPosition, optionRow), true);
 assert.strictEqual(shouldRemoveLegacyRowForPosition({
@@ -130,8 +141,10 @@ assert.strictEqual(guard.shouldIgnoreLegacyPositionEvent({
 }, { positions: [optionPosition] }), true);
 
 assert.strictEqual(positionIdSeedForLegacy(optionRow), 'SPY:optionstrat:1');
+assert.strictEqual(legacyRowToCreateCommand(optionRow).cardType, 'regular');
 registerLegacyPositionGuard(guard);
 const rowCreate = legacyRowToCreateCommand(optionRow);
+assert.strictEqual(rowCreate.cardType, 'option');
 const orderCreate = legacyOrderPayloadToCreateCommand({
   ...optionRow,
   cardType: 'option',
@@ -140,6 +153,13 @@ const orderCreate = legacyOrderPayloadToCreateCommand({
 assert.strictEqual(orderCreate.positionId, rowCreate.positionId);
 assert.strictEqual(orderCreate.cardType, 'option');
 
+const inferredOrderCreate = legacyOrderPayloadToCreateCommand({
+  ...optionRow,
+  meta: { requestId: 'execution-req-inferred' }
+}, 'optionstrat');
+assert.strictEqual(inferredOrderCreate.cardType, 'option');
+
+registerOrderPayloadPolicy(createOptionStratExecutionPolicy());
 const normalizedOrderCreate = legacyOrderPayloadToCreateCommand(normalizeOrderPayload({
   ...optionRow,
   cardType: 'option',

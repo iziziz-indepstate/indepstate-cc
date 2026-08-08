@@ -119,6 +119,91 @@ async function run() {
   assert.strictEqual(positionCalls.some(([name]) => name === 'createAndOpen'), false);
   assert.strictEqual(positionCalls.some(([name]) => name === 'recordPlaced'), false);
 
+  const policyPlacedOrders = [];
+  let policyOrderCalcCalls = 0;
+  let policyTradeRuleCalls = 0;
+  let policyInstrumentForceQuote;
+  const policyService = createExecutionApplicationService({
+    getAdapter: () => ({
+      placeOrder: async (order) => {
+        policyPlacedOrders.push(order);
+        return { status: 'ok', provider: 'simulated', providerOrderId: 'policy-ticket-1' };
+      }
+    }),
+    wireAdapter: () => {},
+    instrumentInfo: {
+      get: async (_context, options) => {
+        policyInstrumentForceQuote = options?.forceQuote;
+        return { quote: null, metadata: { quantityStep: 1 } };
+      },
+      getTickSizeResolution: () => ({ tickSize: 1, source: 'test' })
+    },
+    orderCalc: {
+      qty: () => {
+        policyOrderCalcCalls += 1;
+        return 999;
+      }
+    },
+    tradeRules: {
+      validate: () => {
+        policyTradeRuleCalls += 1;
+        return { ok: false, reason: 'should not run' };
+      }
+    },
+    events: { emit: () => {} },
+    positions: {
+      createAndOpen: () => {},
+      recordPlaced: () => {},
+      recordRejected: () => {},
+      recordFailed: () => {}
+    },
+    appendJsonl: () => {},
+    execLog: 'memory',
+    nowTs: () => 2000,
+    sendToRenderer: () => {},
+    trackerPending: new Map(),
+    trackerIndex: new Map(),
+    pendingIndex: new Map(),
+    resolveOrderProviderName: () => 'simulated',
+    resolveProviderName: () => 'simulated',
+    providerCanResolveRiskQty: () => false,
+    orderPayloadPolicies: [{
+      id: 'policy-test',
+      matchesPayload: payload => payload?.event === 'policy-test',
+      matchesOrder: order => order?.meta?.policyTest === true,
+      normalizePayload: payload => ({
+        instrumentType: 'EQ',
+        symbol: payload.ticker,
+        provider: 'simulated',
+        side: 'buy',
+        type: 'market',
+        qty: 1,
+        price: 0,
+        sl: 0,
+        meta: {
+          policyTest: true,
+          requestId: 'policy-req-1',
+          cid: 'policy-cid-1',
+          riskUsd: 10,
+          stopPts: 5
+        }
+      }),
+      validateOrder: () => ({ ok: true }),
+      executionOptions: () => ({
+        requiresQuote: false,
+        usesRiskSizing: false,
+        usesTradeRules: false
+      })
+    }]
+  });
+  const policyResult = await policyService.queuePlaceOrder({ event: 'policy-test', ticker: 'PLUGIN' });
+  assert.strictEqual(policyResult.status, 'ok');
+  assert.strictEqual(policyInstrumentForceQuote, false);
+  assert.strictEqual(policyOrderCalcCalls, 0);
+  assert.strictEqual(policyTradeRuleCalls, 0);
+  assert.strictEqual(policyPlacedOrders.length, 1);
+  assert.strictEqual(policyPlacedOrders[0].qty, 1);
+
   console.log('executionApplicationService tests passed');
 }
 

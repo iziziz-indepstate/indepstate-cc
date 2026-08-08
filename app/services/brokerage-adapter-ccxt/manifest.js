@@ -1,4 +1,3 @@
-const brokerageAdapters = require('../brokerage/brokerageAdapters');
 const { detectInstrumentType } = require('../instruments');
 
 function normalizeProvider(value) {
@@ -49,10 +48,10 @@ function prewarmConfiguredInstrumentMetadata(brokerage) {
 }
 
 function initService(servicesApi = {}) {
-  brokerageAdapters.ccxt = (config = {}) => {
+  servicesApi.brokerage.registerAdapterFactory('ccxt', (config = {}) => {
     const { CCXTExecutionAdapter } = require('./comps/ccxt');
     return new CCXTExecutionAdapter(config);
-  };
+  });
   servicesApi.instrumentInfo?.registerMetadataPrewarmer?.(
     'ccxt-binance-futures',
     () => prewarmConfiguredInstrumentMetadata(servicesApi.brokerage)

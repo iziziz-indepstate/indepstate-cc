@@ -25,6 +25,38 @@ function initExecutionConfig(cfg){
   instances.clear();
 }
 
+function normalizeAdapterName(name) {
+  const key = String(name || '').trim().toLowerCase();
+  if (!key) throw new Error('[adapterRegistry] adapter name is required');
+  return key;
+}
+
+function registerAdapterFactory(adapterName, factory) {
+  const key = normalizeAdapterName(adapterName);
+  if (typeof factory !== 'function') {
+    throw new Error(`[adapterRegistry] adapter factory for "${adapterName}" must be a function`);
+  }
+  brokerageAdapters[key] = factory;
+  instances.clear();
+  return () => {
+    if (brokerageAdapters[key] !== factory) return false;
+    delete brokerageAdapters[key];
+    instances.clear();
+    return true;
+  };
+}
+
+function hasAdapterFactory(adapterName) {
+  const key = normalizeAdapterName(adapterName);
+  return typeof brokerageAdapters[key] === 'function';
+}
+
+function listAdapterFactories() {
+  return Object.keys(brokerageAdapters)
+    .filter(key => typeof brokerageAdapters[key] === 'function')
+    .sort();
+}
+
 function updateExecutionRouting(cfg = {}, paths = []) {
   const current = getExecutionConfig();
   const providers = current.providers || {};
@@ -119,4 +151,13 @@ function getProviderConfig(name){
   return (cfg.providers && cfg.providers[name]) || {};
 }
 
-module.exports = { getAdapter, initExecutionConfig, updateExecutionRouting, getExecutionConfig, getProviderConfig };
+module.exports = {
+  getAdapter,
+  initExecutionConfig,
+  updateExecutionRouting,
+  getExecutionConfig,
+  getProviderConfig,
+  registerAdapterFactory,
+  hasAdapterFactory,
+  listAdapterFactories
+};

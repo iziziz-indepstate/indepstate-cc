@@ -28,6 +28,9 @@ function createOptionStratRenderer({
   shakeCard,
   placedOrderByKey,
   cardStates,
+  pendingByReqId,
+  pendingIdByReqId,
+  retryCounts,
   pendingOptionValuations = new Set(),
   setCardState,
   ticketToKey,
@@ -261,6 +264,236 @@ function createOptionStratRenderer({
     };
   }
 
+  function firstText(...values) {
+    for (const value of values) {
+      if (value == null) continue;
+      const text = String(value).trim();
+      if (text) return text;
+    }
+    return '';
+  }
+
+  function firstValue(...values) {
+    for (const value of values) {
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return undefined;
+  }
+
+  function optionSnapshotRow(position = {}) {
+    const source = position.source || {};
+    const intent = position.executionIntent || {};
+    const card = position.card || {};
+    const data = card.data || {};
+    const base = {
+      ...source,
+      ...intent,
+      ...data,
+      ...position
+    };
+    const ticker = firstText(data.ticker, source.ticker, intent.ticker, position.ticker, data.symbol, source.symbol, intent.symbol, position.symbol);
+    const symbol = firstText(data.symbol, source.symbol, intent.symbol, position.symbol, ticker);
+    const provider = firstText(data.provider, source.provider, intent.provider, position.provider, 'optionstrat');
+    return {
+      ...base,
+      ticker,
+      symbol,
+      provider,
+      instrumentType: 'OPT',
+      event: firstText(data.event, source.event, intent.event, position.event, 'optionstrat'),
+      name: firstText(data.name, source.name, intent.name, position.name, ticker),
+      strategyCommand: firstText(data.strategyCommand, source.strategyCommand, intent.strategyCommand, position.strategyCommand),
+      legs: firstValue(data.legs, source.legs, intent.legs, position.legs, []),
+      payoff: firstValue(data.payoff, position.payoff, source.payoff, intent.payoff, data.estimatedPayoff, source.estimatedPayoff),
+      valuation: firstValue(data.valuation, position.valuation, source.valuation, intent.valuation, data.optionValuation, source.optionValuation),
+      openedAt: firstValue(data.openedAt, source.openedAt, intent.openedAt, position.openedAt, position.timestamps?.openedAt, position.timestamps?.placedAt),
+      closedAt: firstValue(data.closedAt, source.closedAt, intent.closedAt, position.closedAt, position.timestamps?.closedAt),
+      ticket: firstText(data.ticket, source.ticket, intent.ticket, position.ticket, position.primaryTicket, data.providerOrderId, source.providerOrderId, optionSnapshotTickets(position)[0])
+    };
+  }
+
+  function optionSnapshotTickets(position = {}) {
+    const data = position.card?.data || {};
+    const source = position.source || {};
+    const intent = position.executionIntent || {};
+    const tickets = [
+      position.ticket,
+      position.primaryTicket,
+      data.ticket,
+      source.ticket,
+      intent.ticket,
+      position.providerOrderId,
+      data.providerOrderId,
+      source.providerOrderId,
+      intent.providerOrderId,
+      ...(Array.isArray(position.tickets) ? position.tickets : []),
+      ...(Array.isArray(data.tickets) ? data.tickets : []),
+      ...(Array.isArray(source.tickets) ? source.tickets : []),
+      ...(Array.isArray(intent.tickets) ? intent.tickets : [])
+    ];
+    const childTickets = []
+      .concat(Array.isArray(position.children) ? position.children : [])
+      .concat(Array.isArray(data.children) ? data.children : [])
+      .concat(Array.isArray(source.children) ? source.children : []);
+    for (const child of childTickets) {
+      tickets.push(child?.ticket, child?.providerOrderId, child?.result?.ticket, child?.result?.providerOrderId);
+    }
+    const seen = new Set();
+    return tickets.map(value => firstText(value)).filter(ticket => {
+      if (!ticket || seen.has(ticket)) return false;
+      seen.add(ticket);
+      return true;
+    });
+  }
+
+  function ticketForOptionSnapshot(position = {}, action = {}) {
+    const data = position.card?.data || {};
+    const source = position.source || {};
+    const intent = position.executionIntent || {};
+    const actionPayload = action.payload || {};
+    return firstText(
+      actionPayload.ticket,
+      action.ticket,
+      actionPayload.providerOrderId,
+      data.ticket,
+      source.ticket,
+      intent.ticket,
+      position.ticket,
+      position.primaryTicket,
+      data.providerOrderId,
+      source.providerOrderId,
+      intent.providerOrderId,
+      optionSnapshotTickets(position)[0]
+    );
+  }
+
+  function canRenderOptionSnapshotAction(position = {}, action = {}) {
+    if (action.command !== 'position.close') return true;
+    return !!ticketForOptionSnapshot(position, action);
+  }
+
+  function closeOptionSnapshot(position = {}, action = {}) {
+    const row = optionSnapshotRow(position);
+    const ticket = ticketForOptionSnapshot(position, action);
+    const provider = firstText(action.payload?.provider, row.provider, position.provider, 'optionstrat');
+    if (!ticket || !provider) {
+      return Promise.resolve({ status: 'unsupported', reason: 'ticket required' });
+    }
+    emitButtonEvent('close', row);
+    return ipcRenderer.invoke('execution:cancel-order', {
+      ...(action.payload || {}),
+      provider,
+      ticket,
+      symbol: firstText(action.payload?.symbol, row.symbol, row.ticker),
+      name: firstText(action.payload?.name, row.name, row.ticker)
+    });
+  }
+
+  function createOptionPositionCard({
+    position = {},
+    key,
+    createActionButton,
+    createActionsFromSnapshot,
+    requestRemove
+  } = {}) {
+    const row = optionSnapshotRow(position);
+    const cardKey = key || `position|${position.id || row.ticket || row.ticker}`;
+    const cardType = position.card?.type || 'option';
+    const card = el('div', 'card position-card');
+    card.setAttribute('data-rowkey', cardKey);
+    card.setAttribute('data-position-id', position.id || '');
+    card.setAttribute('data-card-type', cardType);
+    card.setAttribute('data-ticker', row.ticker || row.symbol || '');
+    card.setAttribute('data-instrument-type', 'OPT');
+
+    const head = el('div', 'row');
+    const left = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
+    left.appendChild(el('div', null, row.name || row.ticker || row.symbol || position.id || 'Position', { style: 'font-weight:600;font-size:13px' }));
+    head.appendChild(left);
+
+    const right = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
+    const stateName = position.state || row.state || 'draft';
+    const status = el('span', `card__status card__status--${stateName}`);
+    status.style.display = 'inline-block';
+    status.title = stateName;
+    right.appendChild(status);
+
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.textContent = String.fromCharCode(215);
+    close.className = 'card__close';
+    Object.assign(close.style, {
+      border: 'none',
+      background: 'transparent',
+      width: '22px',
+      height: '22px',
+      lineHeight: '22px',
+      textAlign: 'center',
+      fontSize: '16px',
+      cursor: 'pointer',
+      borderRadius: '4px',
+      color: '#c62828',
+      marginLeft: '8px'
+    });
+    close.title = 'Remove card';
+    close.addEventListener('click', async (event) => {
+      event.stopPropagation();
+      if (typeof requestRemove !== 'function') return;
+      close.disabled = true;
+      await requestRemove(position).catch(() => {
+        close.disabled = false;
+      });
+    });
+    right.appendChild(close);
+    head.appendChild(right);
+
+    const body = createOptionBody(row);
+    const btns = el('div', 'btns position-card__actions');
+    const actions = (Array.isArray(position.card?.actions) ? position.card.actions : [])
+      .filter(action => canRenderOptionSnapshotAction(position, action));
+    btns.style.gridTemplateColumns = `repeat(${Math.max(1, actions.length)},1fr)`;
+    for (const action of actions) {
+      const label = action.label || action.id;
+      const kind = action.id || label;
+      const onClick = async () => {
+        const validated = body.validate();
+        if (!validated.valid) return { status: 'rejected', reason: 'Invalid option snapshot' };
+        if (action.command === 'position.close') {
+          const result = await closeOptionSnapshot(position, action);
+          if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+            toast?.(`x ${row.name || row.ticker || row.symbol}: ${result?.reason || 'Close failed'}`);
+            shakeCard?.(cardKey);
+          }
+          return result;
+        }
+        if (action.command === 'position.remove' && typeof requestRemove === 'function') {
+          const result = await requestRemove(position);
+          return result?.ok === false ? { status: 'error', reason: result.reason } : { status: 'ok' };
+        }
+        if (typeof createActionsFromSnapshot === 'function') {
+          return createActionsFromSnapshot(position, action, validated);
+        }
+        return { status: 'unsupported', reason: `Unsupported position action ${action.command || kind}` };
+      };
+      const button = typeof createActionButton === 'function'
+        ? createActionButton({ label, kind, className: (action.style || kind || 'action').toLowerCase(), onClick })
+        : null;
+      if (button) btns.appendChild(button);
+    }
+
+    card.appendChild(head);
+    card.appendChild(el('div', 'meta'));
+    card.appendChild(body.line);
+    card.appendChild(btns);
+    const note = el('div', 'card__note');
+    card.appendChild(note);
+    body.setButtons(btns);
+    if (body.setNote) body.setNote(note);
+    body.validate();
+    card._validate = () => body.validate();
+    return card;
+  }
+
   function ensureOptionPayoff(row) {
     if (!row || row.instrumentType !== 'OPT') return;
     if (optionPayoffForRow(row)) return;
@@ -343,6 +576,74 @@ function createOptionStratRenderer({
     return true;
   }
 
+  function preparePlace({ row, requestId, baseMeta } = {}) {
+    const meta = {
+      ...(baseMeta || {}),
+      requestId,
+      qty: 1,
+      stopPts: 1,
+      takePts: null
+    };
+    emitButtonEvent('open', row);
+    return {
+      channel: 'queue-place-order',
+      payload: {
+        ticker: row.ticker,
+        symbol: row.symbol || row.ticker,
+        root: row.root,
+        provider: row.provider,
+        instrumentType: 'OPT',
+        event: row.event,
+        time: row.time,
+        cardType: row.cardType || 'option',
+        name: row.name,
+        description: row.description,
+        expirationDte: row.expirationDte,
+        isCustomName: row.isCustomName,
+        isCashSecured: row.isCashSecured,
+        legs: row.legs,
+        side: 'OPEN',
+        meta
+      }
+    };
+  }
+
+  function afterPlaceOk({ row, result, requestId, key } = {}) {
+    if (!result?.providerOrderId) {
+      setCardState(key, 'pending');
+      return;
+    }
+    const openedAt = now();
+    pendingByReqId?.delete(requestId);
+    pendingIdByReqId?.delete(requestId);
+    retryCounts?.delete(requestId);
+    placedOrderByKey.set(key, {
+      provider: result.provider || row.provider || 'optionstrat',
+      ticket: String(result.providerOrderId),
+      symbol: row.symbol || row.ticker || '',
+      strategyCommand: row.strategyCommand,
+      name: row.name,
+      payoff: result.payoff || result.raw?.payoff,
+      valuation: result.valuation || result.raw?.valuation,
+      openedAt
+    });
+    if (result.payoff || result.raw?.payoff) row.payoff = result.payoff || result.raw.payoff;
+    if (result.valuation || result.raw?.valuation) row.valuation = result.valuation || result.raw.valuation;
+    row.openedAt = row.openedAt || openedAt;
+    ticketToKey.set(String(result.providerOrderId), key);
+    setCardState(key, 'placed');
+  }
+
+  function createOrderCardHandler() {
+    return {
+      createBody: createOptionBody,
+      buttons: () => [{ label: 'OPEN', action: 'OPEN', style: 'bl' }],
+      preparePlace,
+      afterPlaceOk,
+      scheduleInstantExecution: ({ row, place } = {}) => scheduleInstantExecution(row, place)
+    };
+  }
+
   return {
     DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS,
     pendingOptionPayoffs,
@@ -351,10 +652,16 @@ function createOptionStratRenderer({
     setDisplayFields,
     setValuationRefreshMs,
     createOptionBody,
+    optionSnapshotRow,
+    createOptionPositionCard,
+    closeOptionSnapshot,
     ensureOptionPayoff,
     refreshOptionValuation,
     startValuationRefresh,
     scheduleInstantExecution,
+    preparePlace,
+    afterPlaceOk,
+    createOrderCardHandler,
     markRowOpened,
     markRowClosed,
     emitButtonEvent,

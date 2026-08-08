@@ -1,9 +1,8 @@
-const brokerageAdapters = require('../brokerage/brokerageAdapters');
 const { DWXAdapter } = require('./comps/dwx');
 const events = require('../events');
 
-function initService() {
-  brokerageAdapters.dwx = (cfg = {}, providerName) => {
+function initService(servicesApi = {}) {
+  servicesApi.brokerage.registerAdapterFactory('dwx', (cfg = {}, providerName) => {
     const userHandler = cfg.event_handler || {};
     cfg.event_handler = {
       ...userHandler,
@@ -15,7 +14,7 @@ function initService() {
       }
     };
     return new DWXAdapter(cfg);
-  };
+  });
 }
 
 module.exports = { initService };

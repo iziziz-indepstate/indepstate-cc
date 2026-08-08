@@ -1,4 +1,5 @@
 const { buildOptionStratHedgePayload } = require('../hedge');
+const { normalizeOrderPayload } = require('../../../application/execution');
 
 class OptionStratApplicationService {
   constructor({
@@ -6,15 +7,13 @@ class OptionStratApplicationService {
     getAdapter,
     wireAdapter = adapter => adapter,
     executionService,
-    resolveProviderName,
-    normalizeOrderPayload = payload => payload
+    resolveProviderName
   } = {}) {
     this.servicesApi = servicesApi;
     this.getAdapter = getAdapter;
     this.wireAdapter = wireAdapter;
     this.executionService = executionService;
     this.resolveProviderName = resolveProviderName;
-    this.normalizeOrderPayload = normalizeOrderPayload;
   }
 
   handleButtonEvent(payload = {}) {
@@ -30,10 +29,12 @@ class OptionStratApplicationService {
   }
 
   async estimate(payload = {}) {
-    const order = this.normalizeOrderPayload({
+    const order = normalizeOrderPayload({
       ...payload,
       instrumentType: 'OPT',
       provider: payload.provider || payload.meta?.provider || 'optionstrat'
+    }, {
+      servicesApi: this.servicesApi
     });
     const providerName = this.executionService?.resolveOrderProviderName
       ? this.executionService.resolveOrderProviderName(order)

@@ -9,7 +9,7 @@ const {
   calculatePayoffSummary,
   calculateStrategyValuation,
   buildOpenStrategyPayload
-} = require('../app/services/brokerage-adapter-optionstrat/comps/optionstrat');
+} = require('../app/services/optionstrat/infrastructure/adapter');
 const { buildOptionStratRow } = require('../app/services/optionstrat/command');
 const { buildOptionStratHedgePayload } = require('../app/services/optionstrat/hedge');
 

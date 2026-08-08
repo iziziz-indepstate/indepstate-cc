@@ -1,3 +1,5 @@
+const { orderPayloadPolicyRegistry } = require('../application/execution/orderPayload');
+
 /**
  * @typedef {Object} BrokerageApi
  * @property {(name: string) => any} getAdapter
@@ -5,6 +7,9 @@
  * @property {(name: string) => any} getProviderConfig
  * @property {(context: any) => { provider: string, source: string, matchedKey?: string }} resolveProvider
  * @property {(context: any) => { provider: string, adapter: any, source: string, matchedKey?: string }} resolveAdapter
+ * @property {(adapterName: string, factory: Function) => Function} registerAdapterFactory
+ * @property {(adapterName: string) => boolean} hasAdapterFactory
+ * @property {() => string[]} [listAdapterFactories]
  */
 
 /**
@@ -61,12 +66,16 @@
  * @property {AutoUpdaterApi} [autoUpdater]
  * @property {import('./tradeRules')} [tradeRules]
  * @property {{configure:Function,getConfig:Function,isEnabled:Function,shouldRetry:Function}} [executionRetry]
+ * @property {{policies:Array<any>,register:Function}} [executionPayloadPolicies]
  * @property {{configure:Function,save:Function,refreshAll:Function,closePosition:Function,trackPosition:Function,untrackPosition:Function,snapshot:Function}} [riskManager]
  * @property {{listConfigs:Function,readConfig:Function,writeConfig:Function,saveAndApplyConfig:Function,getRestartStatus:Function,onApply:Function}} [settings]
  * @property {Array<any>} [executionCardControllers]
+ * @property {Array<any>} [executionCloseControllers]
  */
 
 module.exports = {
   commands: [],
-  executionCardControllers: []
+  executionPayloadPolicies: orderPayloadPolicyRegistry(),
+  executionCardControllers: [],
+  executionCloseControllers: []
 };

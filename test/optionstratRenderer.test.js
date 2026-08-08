@@ -132,6 +132,18 @@ async function run() {
   assert.strictEqual(queuedOrders[0].side, 'OPEN');
   assert.strictEqual(queuedOrders[0].event, 'optionstrat');
   assert.strictEqual(queuedOrders[0].time, 1);
+  assert.strictEqual(queuedOrders[0].instrumentType, 'OPT');
+  assert.deepStrictEqual(queuedOrders[0].legs, row.legs);
+  assert.strictEqual(queuedOrders[0].expirationDte, '0DTE');
+  assert.strictEqual(queuedOrders[0].meta.qty, 1);
+  assert.strictEqual(queuedOrders[0].meta.stopPts, 1);
+  assert.strictEqual(queuedOrders[0].meta.takePts, null);
+  assert.strictEqual(t.ticketToKey.get('deal-open'), key);
+  assert.strictEqual(t.placedOrderByKey.get(key).ticket, 'deal-open');
+  assert.strictEqual(t.placedOrderByKey.get(key).payoff, payoff);
+  assert.strictEqual(row.payoff, payoff);
+  assert(Number.isFinite(row.openedAt));
+  assert.strictEqual(t.cardStates.get(key), 'placed');
 
   t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: row.name, strategyCommand: 'lcs', payoff });
   row.valuation = { initialValue: 900, currentValue: 950, change: 50, changePct: 5.56 };
@@ -171,14 +183,17 @@ async function run() {
   card = t.cardByKey(key);
   assert.strictEqual(card.querySelector('.btns').style.display, 'none');
   assert(card.textContent.includes('Max Loss $900'));
-  t.setOptionStratDisplayFields({
+  const settingsRuntime = require('../app/services/settings');
+  await settingsRuntime.applyConfig('optionstrat', {
+    displayFields: {
     pl: false,
     value: false,
     maxLoss: false,
     maxProfit: false,
     change: false,
     rr: false
-  });
+    }
+  }, ['displayFields']);
   t.render();
   card = t.cardByKey(key);
   assert(!card.textContent.includes('P/L $70'));

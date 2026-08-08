@@ -18,19 +18,54 @@ function createOrderCardsRenderer({
   pendingIdByReqId,
   retryCounts,
   pendingExecLabels,
-  placedOrderByKey,
-  ticketToKey,
-  cardStates,
   cardByKey,
   setCardState,
   pendingActionInfo,
-  emitOptionStratButtonEvent,
+  instrumentTypeHandlers = {},
+  cardTypeHandlers = {},
   toast,
   shakeCard,
   render,
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
+function handlerFor(row = {}, instrumentType) {
+  const type = instrumentType || row.instrumentType;
+  return instrumentTypeHandlers[type] || cardTypeHandlers[row.cardType] || cardTypeHandlers[row.type] || null;
+}
+
+function createBody(row, key, instrumentType) {
+  const handler = handlerFor(row, instrumentType);
+  if (handler && typeof handler.createBody === 'function') return handler.createBody(row, key);
+  switch (instrumentType) {
+    case 'EQ':
+      return createEquitiesBody(row, key);
+    case 'FX':
+      return createFxBody(row, key);
+    case 'CX':
+      return createCryptoBody(row, key);
+    default:
+      return createEquitiesBody(row, key);
+  }
+}
+
+function buttons(row, instrumentType) {
+  const handler = handlerFor(row, instrumentType);
+  if (handler && typeof handler.buttons === 'function') {
+    const configured = handler.buttons(row);
+    if (Array.isArray(configured) && configured.length) return configured;
+  }
+  return null;
+}
+
+function scheduleInstantExecution(row, placeFn = place, instrumentType) {
+  const handler = handlerFor(row, instrumentType);
+  if (!handler || typeof handler.scheduleInstantExecution !== 'function') return false;
+  if (typeof handler.shouldScheduleInstantExecution === 'function'
+    && !handler.shouldScheduleInstantExecution({ row, instrumentType })) return false;
+  return handler.scheduleInstantExecution({ row, place: placeFn, instrumentType });
+}
+
 // ======= Crypto body (Qty, Price, SL, TP; TP auto = SL*3) =======
 function createCryptoBody(row, key) {
   const defaultRisk = orderCalc.defaultRiskUsd({ symbol: row.ticker, instrumentType: 'CX' });
@@ -635,13 +670,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
   }
 
   let qtyVal, priceVal, slVal, takeVal, tick, extra = {};
-  if (v.type === 'option') {
-    qtyVal = 1;
-    priceVal = 1;
-    slVal = 1;
-    takeVal = null;
-    tick = 0.01;
-  } else if (v.type === 'crypto') {
+  if (v.type === 'crypto') {
     qtyVal = v.qty;
     priceVal = v.pr;
     slVal = v.sl;
@@ -674,6 +703,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
 
   let res;
   try {
+    const handler = handlerFor(row, instrumentType);
     if (isPendingExec) {
       const pendPayload = {
         ticker: row.ticker,
@@ -688,38 +718,22 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       };
       res = await ipcRenderer.invoke('queue-place-pending', pendPayload);
     } else {
-      if (v.type === 'option') {
+      const prepared = handler && typeof handler.preparePlace === 'function'
+        ? await handler.preparePlace({ row, validated: v, requestId, baseMeta, kind, instrumentType, btnLabel })
+        : null;
+      if (prepared) {
+        res = await ipcRenderer.invoke(prepared.channel || 'queue-place-order', prepared.payload || prepared);
+      } else {
         const payload = {
           ticker: row.ticker,
-          symbol: row.symbol || row.ticker,
-          root: row.root,
-          provider: row.provider,
-          instrumentType: 'OPT',
           event: row.event,
-          time: row.time,
-          cardType: row.cardType || 'option',
-          name: row.name,
-          description: row.description,
-          expirationDte: row.expirationDte,
-          isCustomName: row.isCustomName,
-          isCashSecured: row.isCashSecured,
-          legs: row.legs,
-          side: 'OPEN',
+          price: Number(priceVal),
+          kind,
+          instrumentType: instrumentType,
+          tickSize: tick,
           meta: baseMeta,
         };
-        emitOptionStratButtonEvent('open', row);
         res = await ipcRenderer.invoke('queue-place-order', payload);
-      } else {
-      const payload = {
-        ticker: row.ticker,
-        event: row.event,
-        price: Number(priceVal),
-        kind,
-        instrumentType: instrumentType,
-        tickSize: tick,
-        meta: baseMeta,
-      };
-      res = await ipcRenderer.invoke('queue-place-order', payload);
       }
     }
     if (res && typeof res.providerOrderId === 'string' && res.providerOrderId.startsWith('pending:')) {
@@ -734,26 +748,8 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       shakeCard(key);
       render();
     } else {
-      if (v.type === 'option' && res.providerOrderId) {
-        const openedAt = now();
-        pendingByReqId.delete(requestId);
-        pendingIdByReqId.delete(requestId);
-        retryCounts.delete(requestId);
-        placedOrderByKey.set(key, {
-          provider: res.provider || row.provider || 'optionstrat',
-          ticket: String(res.providerOrderId),
-          symbol: row.symbol || row.ticker || '',
-          strategyCommand: row.strategyCommand,
-          name: row.name,
-          payoff: res.payoff || res.raw?.payoff,
-          valuation: res.valuation || res.raw?.valuation,
-          openedAt
-        });
-        if (res.payoff || res.raw?.payoff) row.payoff = res.payoff || res.raw.payoff;
-        if (res.valuation || res.raw?.valuation) row.valuation = res.valuation || res.raw.valuation;
-        row.openedAt = row.openedAt || openedAt;
-        ticketToKey.set(String(res.providerOrderId), key);
-        setCardState(key, 'placed');
+      if (handler && typeof handler.afterPlaceOk === 'function') {
+        await handler.afterPlaceOk({ row, validated: v, result: res, requestId, key, baseMeta, kind, instrumentType, btnLabel });
       } else {
         setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
       }
@@ -771,6 +767,10 @@ async function place(kind, row, v, instrumentType, btnLabel) {
     createCryptoBody,
     createFxBody,
     createEquitiesBody,
+    createBody,
+    buttons,
+    handlerFor,
+    scheduleInstantExecution,
     place
   };
 }
