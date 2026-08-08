@@ -57,6 +57,12 @@ const { orderPayloadPolicyRegistry } = require('../application/execution/orderPa
  */
 
 /**
+ * @typedef {Object} OutboundWebhooksApi
+ * @property {(command:string,entry?:any,payload?:any) => Promise<any>} runAction
+ * @property {(enricher:Function) => Function} [registerLifecycleEnricher]
+ */
+
+/**
  * @typedef {Object} ServicesApi
  * @property {BrokerageApi} [brokerage]
  * @property {InstrumentInfoApi} [instrumentInfo]
@@ -67,6 +73,7 @@ const { orderPayloadPolicyRegistry } = require('../application/execution/orderPa
  * @property {AutoUpdaterApi} [autoUpdater]
  * @property {import('./tradeRules')} [tradeRules]
  * @property {{configure:Function,getConfig:Function,isEnabled:Function,shouldRetry:Function}} [executionRetry]
+ * @property {OutboundWebhooksApi} [outboundWebhooks]
  * @property {{policies:Array<any>,register:Function}} [executionPayloadPolicies]
  * @property {{configure:Function,save:Function,refreshAll:Function,closePosition:Function,trackPosition:Function,untrackPosition:Function,snapshot:Function}} [riskManager]
  * @property {{listConfigs:Function,readConfig:Function,writeConfig:Function,saveAndApplyConfig:Function,getRestartStatus:Function,onApply:Function}} [settings]

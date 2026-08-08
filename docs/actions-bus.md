@@ -140,7 +140,8 @@ target body with `targetParam:eventPayloadPath`. For example:
 ```
 
 If `optionCloseLegsText` is missing, the target still resolves `{legs}` from the
-original event payload.
+original event payload. The generic extension contract is documented in
+[outbound-webhooks.md](outbound-webhooks.md).
 
 ## Command runners
 

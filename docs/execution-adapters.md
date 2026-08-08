@@ -9,6 +9,53 @@ Use `getAdapter(name)` to obtain a ready-to-use instance and `getProviderConfig(
 Provider routing is resolved centrally in priority order: explicit `provider`, `bySymbol`, `byInstrumentType`, then `default`.
 Use `bySymbol` for exact symbol-to-provider overrides, for example `"bySymbol": { "AAPL": "j2t" }`.
 
+## Extension registration
+
+Broker/provider modules register adapter factories from their service manifest with
+`servicesApi.brokerage.registerAdapterFactory(adapterName, factory)`. The `adapterName` is normalized
+to lowercase. The factory receives `(adapterConfig, providerName, adapterName)` and must return an
+adapter instance. Registration clears cached adapter instances so a replaced factory is used on the
+next `getAdapter()` call.
+
+Provider modules that own default routing or provider config should also call
+`servicesApi.brokerage.registerExecutionProviderDefaults(extension)` instead of adding provider
+entries to the base `execution.json`.
+
+```js
+servicesApi.brokerage.registerExecutionProviderDefaults({
+  routingDefaults: {
+    byInstrumentType: {
+      MYTYPE: 'my-provider'
+    }
+  },
+  providers: {
+    'my-provider': {
+      adapter: 'my-adapter',
+      timeoutMs: 10000
+    }
+  },
+  settingsDescriptor: {
+    options: {
+      byInstrumentType: {
+        MYTYPE: { type: 'string', description: 'Provider for MYTYPE instruments' }
+      },
+      providers: {
+        'my-provider': {
+          description: 'My provider settings',
+          adapter: { type: 'string', description: 'Adapter name' },
+          timeoutMs: { type: 'number', description: 'Request timeout ms' }
+        }
+      }
+    }
+  }
+});
+```
+
+Extension defaults fill only missing values. User overrides and existing runtime config values keep
+priority, so a local `config/execution.json` can still route the instrument type to another provider
+or override provider fields. Descriptor fragments are merged into the `execution` settings section so
+module-owned providers appear in Settings without coupling brokerage defaults to that module.
+
 ## Optional data methods
 
 Adapters may expose read-only data methods in addition to execution methods. MCP data tools call these through the adapter layer instead of reaching into provider-specific clients directly.

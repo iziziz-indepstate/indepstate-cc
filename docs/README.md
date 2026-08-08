@@ -5,6 +5,9 @@ This directory contains high-level notes about the codebase.
 ## Overview
 - [architecture-layers.md](architecture-layers.md) - domain/application/infrastructure/interfaces boundaries and extension-service layering rules.
 - [target-architecture.md](target-architecture.md) - target Position, command/event, provider, and composite card architecture.
+- [settings.md](settings.md) - settings registration, live/restart apply policies, and config/descriptor fragments.
+- [execution-adapters.md](execution-adapters.md) - adapter/provider registration and execution routing extension defaults.
+- [outbound-webhooks.md](outbound-webhooks.md) - outbound webhook sending and lifecycle payload enrichers.
 - `app/main.js` – Electron main process wiring adapters and relaying events to the renderer
 - `app/renderer.js` – UI layer showing order cards and status indicators
 - `app/services/events.js` – lightweight event bus for `order:placed`, `position:opened`, `position:closed` and `order:cancelled`
@@ -18,7 +21,7 @@ This directory contains high-level notes about the codebase.
   - `app/services/tvProxy/config/tv-proxy.json` – configuration for the tv-proxy service (`enabled`, `log`, `proxyPort`)
   - `app/services/tvListener/config/tv-listener.json` – configuration for the tv-listener service (`enabled`, `webhook` `{enabled, port, url}`)
 - `OBSIDIAN_INDEPSTATE_VAULT`, `OBSIDIAN_INDEPSTATE_DEALS_JOURNAL` and `OBSIDIAN_INDEPSTATE_DEALS_SEARCH` – environment variables consumed by the Obsidian deal tracker
-- `servicesApi.brokerage.registerAdapterFactory()` - public extension API for broker/provider adapter factories; `app/services/brokerage/brokerageAdapters.js` remains the internal registry store
+- `servicesApi.brokerage.registerAdapterFactory()` and `registerExecutionProviderDefaults()` - public extension APIs for broker/provider modules; `app/services/brokerage/brokerageAdapters.js` remains the internal registry store
 - `app/services/brokerage-adapter-*/comps/*` – execution adapters such as the DWX connector and the CCXT adapter; each can provide `listOpenOrders()` and `listClosedPositions()`
 - `app/services/servicesApi.js` – global object that service manifests extend to expose their APIs (e.g. `servicesApi.brokerage` with adapter helpers)
 - `app/services/commandLine.js` – parses text commands sent from the renderer. See [command-line.md](command-line.md) for available commands.
