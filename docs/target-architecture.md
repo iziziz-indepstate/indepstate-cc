@@ -144,13 +144,21 @@ The generic execution application service owns shared order normalization, valid
 
 Extension services can contribute execution controllers with narrow hooks such as:
 
+- how to normalize and validate module-specific execution payloads;
 - whether an execution payload should create a standalone `Position`;
 - how child execution records relate to a parent position/card;
+- how a provider-specific close flow maps back into generic `order:closed` and position state;
 - whether a provider event should be interpreted by an extension read model before generic lifecycle handling.
 
 These controllers should live under the owning service, for example `app/services/levelOrder/application`, be registered by the service manifest, and be passed into the generic execution service as an accumulated registry.
 
 Controller registration should also be manifest-owned. A service manifest should add its controllers to a shared registry, for example `servicesApi.executionCardControllers`, during `initService`. The composition root consumes that registry; it should not import each extension controller directly.
+
+Implemented extension registries include:
+
+- `servicesApi.executionPayloadPolicies` for module-specific payload normalization and validation.
+- `servicesApi.executionCloseControllers` for provider/card-specific close post-processing.
+- renderer registries populated from service manifests for card creation, action controls, snapshot rendering, and legacy compatibility filters.
 
 ## Target Provider Boundary
 
@@ -161,12 +169,54 @@ Providers are infrastructure adapters.
 - Provider events are mapped back into application commands or external-event DTOs.
 - Provider payloads should not leak into domain aggregates.
 
+Provider modules register infrastructure through `servicesApi.brokerage.registerAdapterFactory()`.
+Provider-owned execution defaults, routing, and Settings descriptor fields are registered with
+`servicesApi.brokerage.registerExecutionProviderDefaults()`. Shared brokerage config should not
+hard-code defaults for optional provider modules.
+
+## Target Settings And Automation Extension Points
+
+Settings sections are registered by service manifests. Module-specific live/restart apply behavior
+belongs in the fourth `settings.register()` argument, not in the central settings service.
+
+Shared settings sections may accept module-owned default and descriptor fragments. These fragments
+fill only missing values so user overrides keep priority.
+
+Automation payload enrichment is also extension-owned. Shared outbound webhook code builds generic
+lifecycle payload fields, while modules add provider/card-specific placeholders through
+`servicesApi.outboundWebhooks.registerLifecycleEnricher()`.
+
 ## Current Migration Direction
 
-The current codebase is moving toward this target in slices:
+The current codebase is moving toward this target in slices. The status below records what is already
+true in the code and what remains.
 
-- `Position` domain and snapshots are being introduced first.
-- Generic execution orchestration is being extracted from `main.js`.
-- IPC registration is moving to `infrastructure/`.
-- `LevelOrder` application logic is moving under `app/services/levelOrder/application`.
-- Renderer compatibility events stay in place until the composite renderer and read models are ready.
+### Completed
+
+- `LevelOrder` is isolated as an extension-owned service with application logic, renderer handling,
+  command registration, and manifest-owned wiring.
+- `OptionStrat` is isolated as an extension-owned service. Its adapter, renderer behavior, IPC
+  handlers, execution payload policy, close controller, legacy guards, settings policy, lifecycle
+  enrichment, action helpers, and execution defaults live under `app/services/optionstrat`.
+- Brokerage no longer hard-codes OptionStrat provider defaults. Optional provider modules register
+  adapter factories and execution config defaults from their manifests.
+- Settings no longer hard-codes OptionStrat apply policy. Module settings can declare live/restart
+  behavior at registration time.
+- Outbound webhooks no longer know OptionStrat payload shape. Module-specific lifecycle placeholders
+  are contributed through lifecycle enrichers.
+- `riskManager` base defaults no longer include OptionStrat, while unknown provider overrides remain
+  supported by descriptor policy.
+- Generic execution orchestration, IPC wiring, renderer registries, and compatibility hooks now have
+  extension points that can be reused by later modules.
+
+### Remaining
+
+- Replace remaining legacy renderer state maps with position/read-model state so compatibility guards
+  can be removed instead of kept as permanent APIs.
+- Continue moving order-card and position workflows from `app/main.js` and `app/renderer.js` into
+  application/infrastructure/interface modules.
+- Promote mature registries into clearer typed contracts once more modules use them.
+- Apply the same isolation pass to the next module: move provider-specific config, rendering,
+  payload mapping, lifecycle handling, settings policy, and automation enrichment into the owning
+  service manifest.
+- Keep documentation current as each extension point becomes stable enough for reuse.
