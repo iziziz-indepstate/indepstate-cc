@@ -12,9 +12,11 @@ const Module = require('module');
 async function run() {
   const indexHtml = fs.readFileSync(path.join(__dirname, '../app/index.html'), 'utf8');
   const placedColor = indexHtml.match(/\.card__status--placed\s*\{\s*background:([^;]+);/)?.[1];
+  const activeColor = indexHtml.match(/\.card__status--active\s*\{\s*background:([^;]+);/)?.[1];
   const executingColor = indexHtml.match(/\.card__status--executing\s*\{\s*background:([^;]+);/)?.[1];
-  assert.strictEqual(placedColor, '#3b82f6');
-  assert.strictEqual(executingColor, '#f59e0b');
+  assert.strictEqual(placedColor, '#f59e0b');
+  assert.strictEqual(activeColor, '#3b82f6');
+  assert.strictEqual(executingColor, '#3b82f6');
   assert.notStrictEqual(placedColor, executingColor);
 
   const handlers = {};

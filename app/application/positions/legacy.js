@@ -65,11 +65,12 @@ function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
   const meta = payload.meta || {};
   const ticker = String(payload.ticker || payload.symbol || '').trim();
   const requestId = meta.requestId || payload.requestId || payload.cid || meta.cid;
+  const explicitPositionId = payload.positionId || payload.sourcePositionId || meta.positionId;
   const idSeed = positionIdSeedForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider });
   const cardType = payload.cardType || cardTypeForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider }, undefined);
   return {
     type: PositionCommand.CREATE,
-    positionId: idSeed ? hashId('pos', idSeed) : requestId ? hashId('pos', requestId) : hashId('pos', payload),
+    positionId: explicitPositionId || (idSeed ? hashId('pos', idSeed) : requestId ? hashId('pos', requestId) : hashId('pos', payload)),
     ticker,
     symbol: String(payload.symbol || ticker).trim(),
     instrumentType: payload.instrumentType || '',

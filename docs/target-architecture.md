@@ -134,6 +134,8 @@ The renderer should become a composite renderer:
 - Controls do not mutate lifecycle state locally. They send commands.
 - Renderer state can cache view details, but aggregate snapshots are the source of lifecycle truth.
 
+Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
+
 Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` should gradually move into application read models or infrastructure bridges.
 
 Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.

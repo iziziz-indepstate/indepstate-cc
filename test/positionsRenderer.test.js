@@ -49,6 +49,51 @@ function levelOrderSnapshot(id, actions) {
   };
 }
 
+function regularSnapshot(id, state = 'draft', actions) {
+  return {
+    id,
+    state,
+    ticker: 'MSFT',
+    symbol: 'MSFT',
+    instrumentType: 'EQ',
+    provider: 'simulated',
+    version: state === 'draft' ? 1 : 2,
+    source: {
+      cardType: 'regular',
+      ticker: 'MSFT',
+      event: 'up',
+      time: 42,
+      price: 100,
+      qty: 2,
+      sl: 6,
+      tp: 3,
+      riskUsd: 10,
+      provider: 'simulated',
+      instrumentType: 'EQ'
+    },
+    card: {
+      type: 'regular',
+      actions: actions || [
+        { id: 'BL', label: 'BL', command: 'position.open', style: 'bl' },
+        { id: 'SC', label: 'SC', command: 'position.openPending', style: 'sc' }
+      ],
+      data: {
+        ticker: 'MSFT',
+        symbol: 'MSFT',
+        provider: 'simulated',
+        event: 'up',
+        state: 'draft',
+        instrumentType: 'EQ',
+        price: 100,
+        qty: 2,
+        sl: 6,
+        tp: 3,
+        riskUsd: 10
+      }
+    }
+  };
+}
+
 async function run() {
   const handlers = {};
   const calls = [];
@@ -67,8 +112,13 @@ async function run() {
       if (ch === 'settings:restart-status') return [];
       if (ch === 'actions-bus:list') return [];
       if (ch === 'actions-bus:set-enabled') return [];
-      if (ch === 'instrument:get') return { quote: { bid: 0.163, ask: 0.165 }, metadata: { tickSize: 0.001 }, provider: payload.provider, symbol: payload.symbol };
+      if (ch === 'instrument:get') {
+        if (payload.symbol === 'MSFT') return { quote: { bid: 99.9, ask: 100.1 }, metadata: { tickSize: 1 }, provider: payload.provider, symbol: payload.symbol };
+        return { quote: { bid: 0.163, ask: 0.165 }, metadata: { tickSize: 0.001 }, provider: payload.provider, symbol: payload.symbol };
+      }
       if (ch === 'level-order:place') return { status: 'ok', providerOrderId: 'level:test' };
+      if (ch === 'execution:cancel-order') return { status: 'ok', ticket: payload.ticket, symbol: payload.symbol };
+      if (ch === 'execution:close-position') return { status: 'ok', ticket: payload.ticket, symbol: payload.symbol };
       if (ch === 'positions:remove') return {
         ok: true,
         position: { id: payload.positionId, state: 'archived' },
@@ -134,6 +184,82 @@ async function run() {
   assert.strictEqual(levelOrderCall.payload.stopOffsetPts, 4);
   assert.strictEqual(levelOrderCall.payload.maxLot, 200);
   assert.strictEqual(levelOrderCall.payload.takeProfitPts, 12);
+
+  const regularPosition = regularSnapshot('pos-reg-1');
+  handlers['positions:changed'](null, { event: { type: 'position.created' }, position: regularPosition });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  let regularCard = document.querySelector('.position-card[data-position-id="pos-reg-1"]');
+  assert(regularCard);
+  assert.strictEqual(regularCard.dataset.cardType, 'regular');
+  assert.strictEqual(regularCard.querySelector('.card__status').style.display, 'none');
+  assert.strictEqual(regularCard.querySelector('input.pr').value, '100');
+  assert.deepStrictEqual(Array.from(regularCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL', 'SC']);
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert(calls.some(call => call.ch === 'instrument:get' && call.payload.symbol === 'MSFT'));
+  regularCard = document.querySelector('.position-card[data-position-id="pos-reg-1"]');
+  calls.length = 0;
+  const regularBlButton = regularCard.querySelector('button.btn[data-kind="BL"]');
+  assert.strictEqual(regularBlButton.disabled, false, regularBlButton.title);
+  regularBlButton.click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const regularOpenCall = calls.find(call => call.ch === 'queue-place-order' && call.payload.meta?.positionId === 'pos-reg-1');
+  assert(regularOpenCall);
+  assert.strictEqual(regularOpenCall.payload.ticker, 'MSFT');
+
+  handlers['orders:new'](null, {
+    cardType: 'regular',
+    ticker: 'MSFT',
+    event: 'up',
+    time: 42,
+    price: 100,
+    qty: 2,
+    sl: 6,
+    tp: 3,
+    riskUsd: 10,
+    provider: 'simulated',
+    instrumentType: 'EQ'
+  });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.strictEqual(document.querySelectorAll('.position-card[data-position-id="pos-reg-1"]').length, 1);
+  assert.strictEqual(document.querySelector('.card[data-ticker="MSFT"]:not(.position-card)'), null);
+
+  const activeRegular = regularSnapshot('pos-reg-1', 'active', [
+    { id: 'close', label: 'Close', command: 'position.close', style: 'close' }
+  ]);
+  activeRegular.primaryTicket = 'ticket-reg-1';
+  activeRegular.tickets = ['ticket-reg-1'];
+  activeRegular.card.data.state = 'draft';
+  handlers['positions:changed'](null, { event: { type: 'position.opened' }, position: activeRegular });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  regularCard = document.querySelector('.position-card[data-position-id="pos-reg-1"]');
+  // Compact regular cards are intentionally read-only snapshots: identity/status only.
+  assert.strictEqual(regularCard.classList.contains('card--mini'), true);
+  assert.strictEqual(regularCard.querySelector('.card__status').textContent, '');
+  assert.strictEqual(regularCard.querySelector('.card__status').classList.contains('card__status--active'), true);
+  assert.strictEqual(regularCard.querySelector('.position-card__data'), null);
+  assert.strictEqual(regularCard.querySelector('.position-card__actions'), null);
+
+  const placedRegular = regularSnapshot('pos-reg-placed', 'placed', [
+    { id: 'close', label: 'Close', command: 'position.close', style: 'close' }
+  ]);
+  placedRegular.primaryTicket = 'ticket-reg-placed';
+  placedRegular.tickets = ['ticket-reg-placed'];
+  handlers['positions:changed'](null, { event: { type: 'position.placed' }, position: placedRegular });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const placedRegularCard = document.querySelector('.position-card[data-position-id="pos-reg-placed"]');
+  // Compact placed regular snapshots keep actions in metadata, not inline DOM controls.
+  assert.strictEqual(placedRegularCard.querySelector('.position-card__actions'), null);
+
+  const closedRegular = regularSnapshot('pos-reg-closed', 'closed', [
+    { id: 'archive', label: 'Archive', command: 'position.remove', style: 'archive' }
+  ]);
+  closedRegular.primaryTicket = 'ticket-reg-closed';
+  closedRegular.tickets = ['ticket-reg-closed'];
+  handlers['positions:changed'](null, { event: { type: 'position.closed' }, position: closedRegular });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const closedRegularCard = document.querySelector('.position-card[data-position-id="pos-reg-closed"]');
+  // Compact closed regular snapshots keep actions in metadata, not inline DOM controls.
+  assert.strictEqual(closedRegularCard.querySelector('.position-card__actions'), null);
 
   handlers['positions:changed'](null, {
     event: { type: 'position.created' },

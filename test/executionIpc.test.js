@@ -11,13 +11,17 @@ async function run() {
   };
   const adapters = new Map([
     ['simulated', {
-      cancelOrder: async (ticket, symbol) => ({ status: 'ok', ticket, symbol })
+      cancelOrder: async (ticket, symbol) => ({ status: 'ok', ticket, symbol }),
+      closePosition: async (position, reason) => ({ status: 'ok', provider: 'simulated', ticket: position.ticket, symbol: position.symbol, reason })
     }],
     ['optionstrat', {
       cancelOrder: async (ticket, symbol) => ({ status: 'ok', provider: 'optionstrat', ticket, symbol, valuation: { currentValue: 0 }, raw: { strategy: {} } })
     }],
     ['rejector', {
       cancelOrder: async (ticket, symbol) => ({ status: 'rejected', provider: 'rejector', ticket, symbol, reason: 'no-op' })
+    }],
+    ['unsupported', {
+      cancelOrder: async (ticket, symbol) => ({ status: 'ok', ticket, symbol })
     }]
   ]);
   const closeControllerCalls = [];
@@ -51,6 +55,7 @@ async function run() {
   assert.strictEqual(handlers.has('execution:stop-retry'), false);
   assert.strictEqual(handlers.has('execution:close-level-order-positions'), false);
   assert.strictEqual(handlers.has('execution:cancel-order'), true);
+  assert.strictEqual(handlers.has('execution:close-position'), true);
   assert.strictEqual(handlers.has('optionstrat:button-event'), false);
   assert.strictEqual(handlers.has('optionstrat:estimate'), false);
   assert.strictEqual(handlers.has('optionstrat:valuation'), false);
@@ -93,6 +98,17 @@ async function run() {
   assert.strictEqual(rejectedCancel.status, 'rejected');
   assert.strictEqual(closeControllerCalls.length, 2);
   assert.strictEqual(emitted.length, 1);
+
+  const closedPosition = await handlers.get('execution:close-position')(null, { provider: 'simulated', ticket: 'p1', symbol: 'ADAUSDT', snapshot: { id: 'pos-1' } });
+  assert.strictEqual(closedPosition.status, 'ok');
+  assert.strictEqual(closedPosition.ticket, 'p1');
+  assert.strictEqual(closedPosition.symbol, 'ADAUSDT');
+
+  const missingClosePayload = await handlers.get('execution:close-position')(null, { provider: 'simulated' });
+  assert.strictEqual(missingClosePayload.status, 'error');
+
+  const unsupportedClose = await handlers.get('execution:close-position')(null, { provider: 'unsupported', ticket: 'u1', symbol: 'SPY' });
+  assert.strictEqual(unsupportedClose.status, 'unsupported');
 
   const instrument = await handlers.get('instrument:get')(null, { symbol: 'ADAUSDT' });
   assert.strictEqual(instrument.provider, 'simulated');

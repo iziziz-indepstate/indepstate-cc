@@ -161,6 +161,14 @@ function runApplicationAndLegacyTests() {
   assert.strictEqual(optionPayloadWithoutGuard.cardType, undefined);
   assert.strictEqual(optionPayloadWithoutGuard.card.type, undefined);
 
+  const regularPayloadWithPositionId = legacyOrderPayloadToCreateCommand({
+    ticker: 'MSFT',
+    provider: 'simulated',
+    instrumentType: 'EQ',
+    meta: { requestId: 'regular-open-existing', positionId: 'pos-reg-existing' }
+  }, 'simulated');
+  assert.strictEqual(regularPayloadWithPositionId.positionId, 'pos-reg-existing');
+
   const unregisterOptionGuard = registerLegacyPositionGuard(createOptionStratLegacyGuard());
   try {
     const optionRowWithGuard = legacyRowToCreateCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });

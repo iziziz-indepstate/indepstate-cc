@@ -8,6 +8,7 @@ function createOrderCardsRenderer({
   isPos,
   isSL,
   tickSize,
+  ensureInstrument = () => {},
   instrumentInfoFor,
   tradeRules,
   markTouched,
@@ -26,6 +27,9 @@ function createOrderCardsRenderer({
   toast,
   shakeCard,
   render,
+  btn,
+  getCardButtons = () => [],
+  getButtonRows = () => 1,
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
@@ -649,10 +653,14 @@ function createEquitiesBody(row, key) {
 
 
 
+function keyForRow(row = {}) {
+  return row.__positionKey || rowKey(row);
+}
+
 async function place(kind, row, v, instrumentType, btnLabel) {
   if (!v.valid) return;
 
-  const key = rowKey(row);
+  const key = keyForRow(row);
   const requestId = `${now()}_${random().toString(36).slice(2, 8)}`;
   pendingByReqId.set(requestId, key);
   retryCounts.set(requestId, 0);
@@ -700,6 +708,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
     takePts: takeVal == null ? null : Number(takeVal),
     ...extra
   };
+  if (row.positionId || row.meta?.positionId) baseMeta.positionId = row.positionId || row.meta.positionId;
 
   let res;
   try {
@@ -763,6 +772,239 @@ async function place(kind, row, v, instrumentType, btnLabel) {
   }
 }
 
+function regularRowFromPosition(position = {}, key) {
+  const data = position.card?.data || {};
+  const source = position.source || {};
+  const symbol = data.ticker || data.symbol || position.ticker || position.symbol || source.ticker || source.symbol;
+  return {
+    ...source,
+    ...data,
+    __positionKey: key,
+    positionId: position.id,
+    ticker: symbol,
+    symbol: data.symbol || position.symbol || symbol,
+    provider: data.provider || position.provider || source.provider,
+    event: data.event || source.event || position.side || '',
+    instrumentType: data.instrumentType || position.instrumentType || source.instrumentType,
+    price: data.price ?? source.price,
+    qty: data.qty ?? position.qty ?? source.qty,
+    sl: data.sl ?? source.sl,
+    tp: data.tp ?? source.tp,
+    risk: data.risk ?? data.riskUsd ?? source.risk ?? source.riskUsd,
+    riskUsd: data.riskUsd ?? data.risk ?? source.riskUsd ?? source.risk,
+    cardType: 'regular'
+  };
+}
+
+function appendDataField(parent, key, label, value) {
+  const item = el('div', 'position-card__field');
+  item.dataset.field = key;
+  item.appendChild(el('span', 'position-card__field-label', label));
+  item.appendChild(el('span', 'position-card__field-value', formatPositionValue(value)));
+  parent.appendChild(item);
+}
+
+function formatPositionValue(value) {
+  if (value == null || value === '') return '-';
+  if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
+  if (typeof value === 'object') {
+    if (value.status && value.value != null) return `${value.status}: ${value.value}`;
+    if (value.status) return value.status;
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function createSnapshotDataGrid(position = {}) {
+  const data = position.card?.data || {};
+  const grid = el('div', 'position-card__data');
+  Object.assign(grid.style, {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(2,minmax(0,1fr))',
+    gap: '6px',
+    fontSize: '11px'
+  });
+  [
+    { key: 'price', label: 'Price', value: data.price },
+    { key: 'qty', label: 'Qty', value: data.qty ?? position.qty },
+    { key: 'sl', label: 'SL', value: data.sl },
+    { key: 'tp', label: 'TP', value: data.tp },
+    { key: 'riskUsd', label: 'Risk $', value: data.riskUsd ?? data.risk },
+    { key: 'provider', label: 'Provider', value: data.provider || position.provider },
+    { key: 'primaryTicket', label: 'Ticket', value: position.primaryTicket || data.primaryTicket },
+    { key: 'tickets', label: 'Tickets', value: position.tickets || data.tickets },
+    { key: 'pnl', label: 'PnL', value: position.pnlSnapshot || data.pnl },
+    { key: 'state', label: 'State', value: position.state || data.state }
+  ].forEach(field => appendDataField(grid, field.key, field.label, field.value));
+  return grid;
+}
+
+function normalizeRegularAction(action = {}) {
+  if (typeof action === 'string') return { label: action, action, style: action };
+  const id = action.id || action.action || action.label;
+  if (!id) return null;
+  return {
+    label: action.label || id,
+    action: action.action || action.id || id,
+    style: action.style || action.action || action.id || id,
+    command: action.command,
+    payload: action.payload
+  };
+}
+
+function defaultRegularActions(position = {}) {
+  const actions = Array.isArray(position.card?.actions) ? position.card.actions : [];
+  if (isEditableRegularPosition(position)) {
+    const openActions = actions
+      .map(normalizeRegularAction)
+      .filter(action => !action.command || ['position.open', 'position.openPending'].includes(action.command));
+    if (openActions.length) return openActions;
+    return (getCardButtons() || []).map(normalizeRegularAction).filter(Boolean);
+  }
+  if (actions.length) return actions.map(normalizeRegularAction).filter(Boolean);
+  return (getCardButtons() || []).map(normalizeRegularAction).filter(Boolean);
+}
+
+function isEditableRegularPosition(position = {}) {
+  const state = String(position.state || position.card?.data?.state || 'draft').toLowerCase();
+  return ['', 'draft', 'rejected', 'cancelled', 'failed'].includes(state);
+}
+
+function regularPositionStatus(position = {}) {
+  const hasOpenedAt = !!(position.timestamps?.openedAt || position.openedAt || position.card?.data?.timestamps?.openedAt);
+  const state = hasOpenedAt && String(position.state || '').toLowerCase() === 'placed'
+    ? 'active'
+    : position.state || position.card?.data?.state || '';
+  if (['draft', 'cancelled'].includes(String(state).toLowerCase())) return '';
+  if (state) return String(state);
+  if (position.primaryTicket) return 'placed';
+  return '';
+}
+
+function isCompactRegularPosition(position = {}) {
+  const status = regularPositionStatus(position).toLowerCase();
+  return !!status && !['rejected', 'cancelled', 'failed'].includes(status);
+}
+
+function createRegularPositionCard({
+  position = {},
+  key,
+  title,
+  instrumentType,
+  createActionButton,
+  dispatchPositionAction,
+  requestRemove
+} = {}) {
+  const row = regularRowFromPosition(position, key);
+  const resolvedInstrumentType = instrumentType || row.instrumentType || detectInstrumentType(row.ticker);
+  const card = el('div', 'card position-card');
+  const compact = isCompactRegularPosition(position);
+  if (compact) card.classList.add('card--mini');
+  card.setAttribute('data-rowkey', key);
+  card.setAttribute('data-position-id', position.id);
+  card.setAttribute('data-card-type', 'regular');
+  card.setAttribute('data-ticker', row.ticker || '');
+  card.setAttribute('data-instrument-type', resolvedInstrumentType || '');
+
+  const head = el('div', 'row');
+  const left = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
+  left.appendChild(el('div', null, title || row.ticker || position.id || 'Position', { style: 'font-weight:600;font-size:13px' }));
+  head.appendChild(left);
+
+  const right = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
+  const statusText = regularPositionStatus(position);
+  const status = el('span', `card__status card__status--${statusText || 'draft'}`, statusText);
+  status.style.display = statusText ? 'inline-block' : 'none';
+  if (compact && statusText !== 'pending-exec') status.textContent = '';
+  right.appendChild(status);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.textContent = '×';
+  close.className = 'card__close';
+  Object.assign(close.style, {
+    border: 'none',
+    background: 'transparent',
+    width: '22px',
+    height: '22px',
+    lineHeight: '22px',
+    textAlign: 'center',
+    fontSize: '16px',
+    cursor: 'pointer',
+    borderRadius: '4px',
+    color: '#6b7280',
+    marginLeft: '8px'
+  });
+  close.title = 'Remove card';
+  close.addEventListener('click', (event) => {
+    event.stopPropagation();
+    requestRemove?.(position);
+  });
+  if (!compact) right.appendChild(close);
+  head.appendChild(right);
+  card.appendChild(head);
+  if (!compact) card.appendChild(el('div', 'meta', ''));
+
+  let body = null;
+  if (isEditableRegularPosition(position)) {
+    ensureInstrument(row.ticker, row.provider);
+    body = createBody(row, key, resolvedInstrumentType);
+    card.appendChild(body.line);
+    if (body.extraRow) card.appendChild(body.extraRow);
+  }
+
+  const actions = defaultRegularActions(position);
+  card._positionActions = actions;
+  const btns = el('div', 'btns position-card__actions');
+  const rows = Number(getButtonRows()) || 1;
+  btns.style.gridTemplateColumns = `repeat(${Math.max(1, Math.ceil(actions.length / rows))},1fr)`;
+  for (const action of actions) {
+    const label = action.label || action.action;
+    const kind = action.action || label;
+    const onClick = async () => {
+      if (action.command === 'position.remove') {
+        await requestRemove?.(position);
+        return;
+      }
+      if (action.command && !['position.open', 'position.openPending'].includes(action.command)) {
+        const result = await dispatchPositionAction?.(position, action);
+        if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+          toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
+          shakeCard?.(key);
+        }
+        return;
+      }
+      if (!body) {
+        const result = await dispatchPositionAction?.(position, action);
+        if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+          toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
+          shakeCard?.(key);
+        }
+        return;
+      }
+      const validated = body.validate();
+      if (!validated.valid) return;
+      await place(kind, row, validated, resolvedInstrumentType, label);
+    };
+    const button = typeof createActionButton === 'function'
+      ? createActionButton({ label, kind, className: String(action.style || kind).toLowerCase(), onClick })
+      : (typeof btn === 'function' ? btn(label, String(action.style || kind).toLowerCase(), onClick) : null);
+    if (!button) continue;
+    button.dataset.kind = kind;
+    btns.appendChild(button);
+  }
+  if (!compact && actions.length) card.appendChild(btns);
+  const note = el('div', 'card__note');
+  if (!compact) card.appendChild(note);
+  if (body) {
+    body.setButtons(btns);
+    if (body.setNote) body.setNote(note);
+    body.validate();
+    card._validate = (commit = false) => body.validate(commit);
+  }
+  return card;
+}
+
   return {
     createCryptoBody,
     createFxBody,
@@ -771,7 +1013,9 @@ async function place(kind, row, v, instrumentType, btnLabel) {
     buttons,
     handlerFor,
     scheduleInstantExecution,
-    place
+    place,
+    regularRowFromPosition,
+    createRegularPositionCard
   };
 }
 

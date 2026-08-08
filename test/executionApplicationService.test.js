@@ -30,6 +30,10 @@ async function run() {
     tradeRules: { validate: () => ({ ok: true }) },
     events: { emit: (name, payload) => emitted.push({ name, payload }) },
     positions: {
+      handle: (cmd) => {
+        positionCalls.push(['handle', cmd]);
+        return { ok: true, position: { id: cmd.positionId }, events: [], integrationCommands: [] };
+      },
       createAndOpen: (cmd) => positionCalls.push(['createAndOpen', cmd]),
       recordPlaced: (cmd) => positionCalls.push(['recordPlaced', cmd]),
       recordRejected: (cmd) => positionCalls.push(['recordRejected', cmd]),
@@ -67,6 +71,21 @@ async function run() {
   assert.strictEqual(emitted.some(item => item.name === 'order:placed'), true);
   assert.strictEqual(positionCalls.some(([name]) => name === 'createAndOpen'), true);
   assert.strictEqual(positionCalls.some(([name]) => name === 'recordPlaced'), true);
+
+  positionCalls.length = 0;
+  placedOrders.length = 0;
+  placeResult = { status: 'ok', provider: 'simulated', providerOrderId: 'ticket-existing-position' };
+  const existingPositionOrder = await service.queuePlaceOrder({
+    ticker: 'MSFT',
+    kind: 'BL',
+    price: 100,
+    instrumentType: 'EQ',
+    meta: { requestId: 'req-existing-position', cid: 'cid-existing-position', positionId: 'pos-reg-existing', qty: 1, riskUsd: 10, stopPts: 5 }
+  });
+  assert.strictEqual(existingPositionOrder.status, 'ok');
+  assert.strictEqual(positionCalls.some(([name]) => name === 'createAndOpen'), false);
+  assert(positionCalls.some(([name, cmd]) => name === 'handle' && cmd.type === 'position.open' && cmd.positionId === 'pos-reg-existing'));
+  assert(positionCalls.some(([name, cmd]) => name === 'recordPlaced' && cmd.positionId === 'pos-reg-existing'));
 
   quote = null;
   placedOrders.length = 0;

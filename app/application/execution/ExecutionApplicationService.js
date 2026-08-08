@@ -1,4 +1,5 @@
 const { legacyOrderPayloadToCreateCommand } = require('../positions');
+const { PositionCommand } = require('../../domain/positions');
 const {
   normalizeCid,
   ensureCommentHasCid,
@@ -104,9 +105,19 @@ class ExecutionApplicationService {
       tracksStandalonePosition = this.shouldTrackStandalonePosition(execOrder, { providerName });
       if (tracksStandalonePosition) {
         try {
+          const explicitPositionId = order.meta?.positionId;
           const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
           execOrder.meta.positionId = createCommand.positionId;
-          this.positions?.createAndOpen?.(createCommand);
+          if (explicitPositionId) {
+            this.positions?.handle?.({
+              ...createCommand,
+              type: PositionCommand.OPEN,
+              positionId: explicitPositionId,
+              payload: execOrder
+            });
+          } else {
+            this.positions?.createAndOpen?.(createCommand);
+          }
         } catch (err) {
           console.warn('[positions] failed to record open request:', err?.message || String(err));
         }

@@ -245,6 +245,21 @@ function positionMatchesLegacyRow(position = {}, row = {}) {
   return String(positionCardType || '') === String(row.cardType || '');
 }
 
+function regularCardType(value) {
+  return String(value || 'regular') === 'regular';
+}
+
+function isRegularPositionSnapshot(position = {}) {
+  return regularCardType(position.card?.type || position.source?.cardType || 'regular');
+}
+
+function matchingRegularPositionSnapshot(row = {}) {
+  if (!regularCardType(row.cardType || row.type || 'regular')) return null;
+  return Array.from(positionsById.values()).find(position => (
+    isRegularPositionSnapshot(position) && positionMatchesLegacyRow(position, row)
+  )) || null;
+}
+
 function isPositionRenderedByLegacyRow(position = {}) {
   return state.rows.some(row => positionMatchesLegacyRow(position, row));
 }
@@ -973,6 +988,7 @@ const orderCardsRenderer = createOrderCardsRenderer({
   isPos,
   isSL,
   tickSize,
+  ensureInstrument,
   instrumentInfoFor,
   tradeRules,
   markTouched,
@@ -990,7 +1006,10 @@ const orderCardsRenderer = createOrderCardsRenderer({
   cardTypeHandlers: orderCardTypeHandlers,
   toast,
   shakeCard,
-  render
+  render,
+  btn,
+  getCardButtons: () => CARD_BUTTONS,
+  getButtonRows: () => BUTTON_ROWS
 });
 const createOrderCardBody = (...args) => orderCardsRenderer.createBody(...args);
 const orderCardButtons = (...args) => orderCardsRenderer.buttons(...args);
@@ -1037,6 +1056,7 @@ function shouldResetLegacyRowForPosition(position = {}, row = {}) {
 }
 
 function shouldIgnoreLegacyRowForExistingPosition(row = {}) {
+  if (matchingRegularPositionSnapshot(row)) return true;
   const context = legacyGuardContext();
   return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
 }
@@ -1054,6 +1074,7 @@ function legacyGuardContext() {
 }
 
 function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
+  if (isRegularPositionSnapshot(position)) return true;
   if (shouldFilterLegacyRow({ cardType: position.card?.type || position.source?.cardType })) return true;
   return state.rows.some(row => shouldRemoveLegacyRowForPosition(position, row));
 }
@@ -1093,6 +1114,7 @@ loadRendererHandlers({
   shakeCard,
   render,
   btn,
+  orderCardsRenderer,
   dispatchPositionAction,
   requestRemovePosition,
   registerOrderCardInstrumentHandler,
@@ -1137,7 +1159,6 @@ const positionsRenderer = createPositionsRenderer({
     pendingExecLabels.delete(key);
   }
 });
-positionCardRenderers.regular = (position) => positionsRenderer.renderRegularPositionCard(position);
 const positionsById = positionsRenderer.positionsById;
 const setPositionSnapshot = (...args) => positionsRenderer.setPositionSnapshot(...args);
 const removePositionSnapshot = (...args) => positionsRenderer.removePositionSnapshot(...args);
@@ -1192,7 +1213,52 @@ async function dispatchPositionAction(position = {}, action = {}, inputPayload =
   if (command === 'position.openPending') {
     return ipcRenderer.invoke('queue-place-pending', base);
   }
+  if (command === 'position.close') {
+    return closeRegularPosition(position, base);
+  }
   return { status: 'unsupported', reason: `Unsupported position action ${command || id}` };
+}
+
+function firstPositionTicket(position = {}) {
+  const data = position.card?.data || {};
+  if (position.primaryTicket) return String(position.primaryTicket);
+  if (Array.isArray(position.tickets) && position.tickets[0]) return String(position.tickets[0]);
+  if (data.primaryTicket) return String(data.primaryTicket);
+  if (Array.isArray(data.tickets) && data.tickets[0]) return String(data.tickets[0]);
+  if (data.ticket || data.providerOrderId) return String(data.ticket || data.providerOrderId);
+  return '';
+}
+
+function closePayloadForPosition(position = {}, base = {}) {
+  const data = position.card?.data || {};
+  const ticket = firstPositionTicket(position);
+  const provider = base.provider || data.provider || position.provider;
+  const symbol = base.symbol || base.ticker || data.symbol || data.ticker || position.symbol || position.ticker;
+  return {
+    ...base,
+    provider,
+    ticket,
+    symbol,
+    side: position.side || data.side || base.side,
+    snapshot: position
+  };
+}
+
+async function closeRegularPosition(position = {}, base = {}) {
+  const payload = closePayloadForPosition(position, base);
+  if (!payload.provider || !payload.ticket || !payload.symbol) {
+    return { status: 'unsupported', reason: 'provider, ticket and symbol required to close position' };
+  }
+  const hasOpenedAt = !!(position.timestamps?.openedAt || position.openedAt || position.card?.data?.timestamps?.openedAt);
+  const rawState = String(position.state || position.card?.data?.state || '').toLowerCase();
+  const state = hasOpenedAt && rawState === 'placed' ? 'active' : rawState;
+  if (state === 'placed') {
+    return ipcRenderer.invoke('execution:cancel-order', payload);
+  }
+  if (state === 'active') {
+    return ipcRenderer.invoke('execution:close-position', payload);
+  }
+  return { status: 'unsupported', reason: `Unsupported close state ${state || 'unknown'}` };
 }
 
 function createPositionActions(position = {}) {
@@ -1279,11 +1345,11 @@ function clearLegacyExecutionState(_row, key) {
 
 function removeLegacyRowsForPosition(position = {}) {
   const removedByService = positionRemovalHandlers[position.card?.type]?.(position) === true;
-  const matches = state.rows.filter(row => (
-    shouldFilterLegacyRow(row)
-      ? positionMatchesLegacyRow(position, row)
-      : shouldRemoveLegacyRowForPosition(position, row)
-  ));
+  const matches = state.rows.filter(row => {
+    if (isRegularPositionSnapshot(position)) return positionMatchesLegacyRow(position, row);
+    if (shouldFilterLegacyRow(row)) return positionMatchesLegacyRow(position, row);
+    return shouldRemoveLegacyRowForPosition(position, row);
+  });
   if (matches.length === 0) return removedByService;
   const keys = new Set(matches.map(row => rowKey(row)));
   state.rows = state.rows.filter(row => !keys.has(rowKey(row)));

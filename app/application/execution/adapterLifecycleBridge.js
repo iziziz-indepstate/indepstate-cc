@@ -72,6 +72,7 @@ function createAdapterLifecycleBridge({
       };
       const normalizedTicket = String(ticket || '');
       const childMeta = {
+        positionId: rec.order?.meta?.positionId,
         requestId: rec.reqId,
         parentRequestId: rec.order?.meta?.parentRequestId,
         childIndex: rec.order?.meta?.childIndex,
@@ -173,6 +174,7 @@ function createAdapterLifecycleBridge({
         || (cid ? confirmedOrderByCid?.get(cid) : null)
         || (cid ? pendingIndex.get(cid)?.order : null);
       servicesApi?.positions?.recordOpened?.({
+        positionId: enrichedOrigOrder?.meta?.positionId,
         requestId: enrichedOrigOrder?.meta?.requestId,
         parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
         childIndex: enrichedOrigOrder?.meta?.childIndex,
@@ -208,6 +210,7 @@ function createAdapterLifecycleBridge({
       const normalizedTicket = String(ticket || '');
       const enrichedOrigOrder = confirmedOrderByTicket?.get(normalizedTicket);
       servicesApi?.positions?.recordClosed?.({
+        positionId: enrichedOrigOrder?.meta?.positionId,
         requestId: enrichedOrigOrder?.meta?.requestId,
         parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
         childIndex: enrichedOrigOrder?.meta?.childIndex,
@@ -230,6 +233,7 @@ function createAdapterLifecycleBridge({
       const normalizedTicket = String(ticket || '');
       const enrichedOrigOrder = confirmedOrderByTicket?.get(normalizedTicket);
       servicesApi?.positions?.recordCancelled?.({
+        positionId: enrichedOrigOrder?.meta?.positionId,
         requestId: enrichedOrigOrder?.meta?.requestId,
         parentRequestId: enrichedOrigOrder?.meta?.parentRequestId,
         childIndex: enrichedOrigOrder?.meta?.childIndex,

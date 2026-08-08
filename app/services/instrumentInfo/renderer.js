@@ -78,9 +78,22 @@ function createInstrumentInfoRenderer({
   function flattenInstrumentSnapshot(snapshot) {
     if (!snapshot || typeof snapshot !== 'object') return null;
     if (!snapshot.quote && !snapshot.metadata) return { ...snapshot, snapshot };
+    const bid = Number(snapshot.quote?.bid);
+    const ask = Number(snapshot.quote?.ask);
+    const rawPrice = Number(snapshot.quote?.price);
+    const price = Number.isFinite(rawPrice)
+      ? rawPrice
+      : Number.isFinite(bid) && Number.isFinite(ask)
+        ? (bid + ask) / 2
+        : Number.isFinite(bid)
+          ? bid
+          : Number.isFinite(ask)
+            ? ask
+            : undefined;
     return {
       ...(snapshot.quote || {}),
       ...(snapshot.metadata || {}),
+      ...(price === undefined ? {} : { price }),
       provider: snapshot.provider,
       symbol: snapshot.symbol,
       instrumentType: snapshot.instrumentType,

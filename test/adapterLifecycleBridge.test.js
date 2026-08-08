@@ -39,6 +39,17 @@ function run() {
   const eventBus = { emit: (name, payload) => busEvents.push({ name, payload }) };
   const controllerCalls = [];
   const positions = createPositionApplicationService({ eventBus, clock: () => 100 });
+  const positionLifecycleCalls = [];
+  const originalRecordPlaced = positions.recordPlaced.bind(positions);
+  const originalRecordOpened = positions.recordOpened.bind(positions);
+  positions.recordPlaced = (payload) => {
+    positionLifecycleCalls.push(['recordPlaced', payload]);
+    return originalRecordPlaced(payload);
+  };
+  positions.recordOpened = (payload) => {
+    positionLifecycleCalls.push(['recordOpened', payload]);
+    return originalRecordOpened(payload);
+  };
   const createCommand = legacyOrderPayloadToCreateCommand({
     symbol: 'AAPL',
     instrumentType: 'EQ',
@@ -89,11 +100,13 @@ function run() {
   assert.strictEqual(controllerCalls.length, 1);
   assert.strictEqual(controllerCalls[0].pendingId, 'cidbridge01');
   assert.strictEqual(controllerCalls[0].ticket, 'T-bridge');
+  assert(positionLifecycleCalls.some(([name, payload]) => name === 'recordPlaced' && payload.positionId === createCommand.positionId));
 
   adapter.emit('position:opened', { ticket: 'T-bridge', order: { symbol: 'AAPL', comment: 'cid:cidbridge01' } });
   const snapshot = positions.snapshot().positions[0];
   assert.strictEqual(snapshot.state, 'active');
   assert.strictEqual(snapshot.primaryTicket, 'T-bridge');
+  assert(positionLifecycleCalls.some(([name, payload]) => name === 'recordOpened' && payload.positionId === createCommand.positionId));
   assert(sent.some(item => item.channel === 'position:opened' && item.payload.ticket === 'T-bridge'));
   assert(busEvents.some(item => item.name === 'position.opened'));
 

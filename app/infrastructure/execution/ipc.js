@@ -69,6 +69,45 @@ function registerExecutionIpcHandlers({
     }
   });
 
+  ipcMain.handle('execution:close-position', async (_evt, payload = {}) => {
+    const providerNameRaw = payload.provider;
+    const ticketRaw = payload.ticket;
+    const symbolRaw = payload.symbol;
+    const providerName = typeof providerNameRaw === 'string' ? providerNameRaw : String(providerNameRaw || '');
+    const ticket = typeof ticketRaw === 'string' ? ticketRaw : String(ticketRaw || '');
+    const symbol = typeof symbolRaw === 'string' ? symbolRaw : (symbolRaw == null ? undefined : String(symbolRaw));
+    const reason = payload.reason || 'renderer.close-position';
+
+    if (!providerName || !ticket) {
+      return { status: 'error', reason: 'provider and ticket required' };
+    }
+
+    try {
+      const adapter = getAdapter(providerName);
+      wireAdapter(adapter, providerName);
+      if (typeof adapter?.closePosition !== 'function') {
+        const res = { status: 'unsupported', provider: providerName, reason: 'Adapter closePosition is not supported' };
+        appendJsonl(execLog, { t: nowTs(), kind: 'close-position', provider: providerName, ticket, symbol, result: res });
+        return res;
+      }
+      const position = {
+        ticket,
+        symbol,
+        provider: providerName,
+        side: payload.side,
+        snapshot: payload.snapshot
+      };
+      const result = await adapter.closePosition(position, reason);
+      const res = result || { status: 'ok', provider: providerName };
+      appendJsonl(execLog, { t: nowTs(), kind: 'close-position', provider: providerName, ticket, symbol, reason, result: res });
+      return res;
+    } catch (err) {
+      const reasonText = err?.message || String(err || '');
+      appendJsonl(execLog, { t: nowTs(), kind: 'close-position', provider: providerName, ticket, symbol, error: reasonText });
+      return { status: 'error', provider: providerName, reason: reasonText };
+    }
+  });
+
   ipcMain.handle('instrument:get', async (_evt, arg) => {
     try {
       const symbol = typeof arg === 'object' ? arg.symbol : arg;
