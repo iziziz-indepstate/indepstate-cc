@@ -1,0 +1,550 @@
+function createLegacyOrderListRuntime({
+  ipcRenderer,
+  rowKey,
+  findKeyByTicker,
+  matchesExistingOrderRow,
+  isTerminalCardState,
+  cardByKey,
+  setCardState,
+  orderCardHandlerForRow,
+  orderCardHandlerForKey,
+  scheduleOrderCardInstantExecution,
+  removePositionSnapshotsForLegacyRow,
+  positionRemovalHandlerFor,
+  positionMatchesLegacyRow,
+  isRegularPositionSnapshot,
+  shouldFilterLegacyRow = () => false,
+  shouldIgnoreLegacyRowForExistingPosition = () => false,
+  shouldIgnoreLegacyExecutionEvent = () => false,
+  shouldIgnoreLegacyPositionEvent = () => false,
+  shouldRemoveLegacyRowForPosition = () => false,
+  shouldResetLegacyRowForPosition = () => false,
+  forgetInstrument = () => {},
+  toast = () => {},
+  shakeCard = () => {},
+  render = () => {},
+  now = () => Date.now(),
+  maxRows = 500
+} = {}) {
+  const state = { rows: [], filter: '', autoscroll: true };
+
+  const cardStates = new Map();
+  const pendingExecLabels = new Map();
+  const pendingByReqId = new Map();
+  const pendingIdByReqId = new Map();
+  const ticketToKey = new Map();
+  const placedOrderByKey = new Map();
+  const retryCounts = new Map();
+  const instantExecutedKeys = new Set();
+  const uiState = new Map();
+  const userTouchedByTicker = new Map();
+
+  let closedCardEventStrategy = 'ignore';
+  const closedCardStrategies = {
+    ignore: () => {},
+    revive: ({ row, idx, oldRow, oldKey }) => {
+      userTouchedByTicker.delete(row.ticker);
+      setCardState(oldKey, null);
+      const newRow = { ...oldRow, ...row };
+      const newKey = rowKey(newRow);
+      state.rows[idx] = newRow;
+      migrateKey(oldKey, newKey, {
+        preserveUi: false,
+        nextUiPatch: () => uiPatchFromRow(row)
+      });
+      const updated = state.rows.splice(idx, 1)[0];
+      state.rows.unshift(updated);
+      trimRows();
+      render();
+    }
+  };
+  let handleClosedCard = closedCardStrategies.ignore;
+
+  function setClosedCardEventStrategy(strategy) {
+    closedCardEventStrategy = strategy || 'ignore';
+    handleClosedCard = closedCardStrategies[closedCardEventStrategy] || closedCardStrategies.ignore;
+  }
+
+  function uiPatchFromRow(row = {}) {
+    const patch = {};
+    if (row.qty != null) patch.qty = String(row.qty);
+    if (row.price != null) patch.price = String(row.price);
+    if (row.sl != null) patch.sl = String(row.sl);
+    if (row.tp != null) patch.tp = String(row.tp);
+    return patch;
+  }
+
+  function trimRows() {
+    if (state.rows.length > maxRows) state.rows.length = maxRows;
+  }
+
+  function rows() {
+    return state.rows;
+  }
+
+  function setFilter(filter) {
+    state.filter = filter || '';
+  }
+
+  function setAutoscroll(value) {
+    state.autoscroll = !!value;
+  }
+
+  function markTouched(ticker) {
+    if (ticker) userTouchedByTicker.set(ticker, true);
+  }
+
+  function isTouched(ticker) {
+    return !!userTouchedByTicker.get(ticker);
+  }
+
+  function migrateKey(oldKey, newKey, { preserveUi = false, nextUiPatch = null } = {}) {
+    if (oldKey === newKey) return;
+
+    if (uiState.has(oldKey)) {
+      const prev = uiState.get(oldKey);
+      const next = preserveUi ? prev : { ...(prev || {}) };
+      if (typeof nextUiPatch === 'function') Object.assign(next, nextUiPatch(prev));
+      uiState.set(newKey, next);
+      uiState.delete(oldKey);
+    }
+
+    for (const [rid, key] of pendingByReqId.entries()) {
+      if (key === oldKey) pendingByReqId.set(rid, newKey);
+    }
+
+    if (cardStates.has(oldKey)) {
+      cardStates.set(newKey, cardStates.get(oldKey));
+      cardStates.delete(oldKey);
+    }
+
+    if (pendingExecLabels.has(oldKey)) {
+      pendingExecLabels.set(newKey, pendingExecLabels.get(oldKey));
+      pendingExecLabels.delete(oldKey);
+    }
+
+    if (placedOrderByKey.has(oldKey)) {
+      placedOrderByKey.set(newKey, placedOrderByKey.get(oldKey));
+      placedOrderByKey.delete(oldKey);
+    }
+
+    for (const [ticket, key] of ticketToKey.entries()) {
+      if (key === oldKey) ticketToKey.set(ticket, newKey);
+    }
+  }
+
+  function legacyRowsForRender(cardStateOrder = {}) {
+    const f = (state.filter || '').trim().toLowerCase();
+    const list = f
+      ? state.rows.filter(r => (r.ticker || '').toLowerCase().startsWith(f))
+      : state.rows.slice();
+
+    list.sort((a, b) => {
+      const stateA = cardStates.get(rowKey(a));
+      const stateB = cardStates.get(rowKey(b));
+      const orderA = stateA ? (cardStateOrder[stateA] ?? 6) : 0;
+      const orderB = stateB ? (cardStateOrder[stateB] ?? 6) : 0;
+      if (orderA !== orderB) return orderA - orderB;
+      return 0;
+    });
+    return list;
+  }
+
+  function renderLegacyCards(parentRenderFn, cardStateOrder = {}) {
+    const rows = legacyRowsForRender(cardStateOrder);
+    for (let i = 0; i < rows.length; i += 1) {
+      const row = rows[i];
+      const key = rowKey(row);
+      const card = parentRenderFn(row, i);
+      for (const [rid, k] of pendingByReqId.entries()) {
+        if (k === key) card.dataset.reqId = rid;
+      }
+      const st = cardStates.get(key);
+      if (st) setCardState(key, st);
+    }
+  }
+
+  function clearPendingByKey(key) {
+    for (const [rid, pendingKey] of pendingByReqId.entries()) {
+      if (pendingKey === key) {
+        pendingByReqId.delete(rid);
+        pendingIdByReqId.delete(rid);
+        retryCounts.delete(rid);
+      }
+    }
+  }
+
+  function clearLegacyExecutionState(_row, key) {
+    cardStates.delete(key);
+    pendingExecLabels.delete(key);
+    placedOrderByKey.delete(key);
+    clearPendingByKey(key);
+    for (const [ticket, ticketKey] of ticketToKey.entries()) {
+      if (ticketKey === key) ticketToKey.delete(ticket);
+    }
+  }
+
+  function cleanupRemovedRow(row, key = rowKey(row)) {
+    clearLegacyExecutionState(row, key);
+    uiState.delete(key);
+    userTouchedByTicker.delete(row.ticker);
+  }
+
+  function removeRow(row) {
+    const key = rowKey(row);
+    removePositionSnapshotsForLegacyRow(row);
+    const before = state.rows.length;
+    state.rows = state.rows.filter(r => r !== row);
+    if (state.rows.length === before) {
+      state.rows = state.rows.filter(r => !(r.ticker === row.ticker && r.event === row.event && r.time === row.time && r.price === row.price));
+    }
+    cleanupRemovedRow(row, key);
+    render();
+    forgetInstrument(row.ticker, row.provider);
+  }
+
+  function removeLegacyRowsForPosition(position = {}) {
+    const removedByService = positionRemovalHandlerFor(position.card?.type)?.(position) === true;
+    const matches = state.rows.filter(row => {
+      if (isRegularPositionSnapshot(position)) return positionMatchesLegacyRow(position, row);
+      if (shouldFilterLegacyRow(row)) return positionMatchesLegacyRow(position, row);
+      return shouldRemoveLegacyRowForPosition(position, row);
+    });
+    if (matches.length === 0) return removedByService;
+    const keys = new Set(matches.map(row => rowKey(row)));
+    state.rows = state.rows.filter(row => !keys.has(rowKey(row)));
+    for (const row of matches) {
+      cleanupRemovedRow(row);
+      forgetInstrument(row.ticker, row.provider);
+    }
+    return true;
+  }
+
+  function resetLegacyRowsForPosition(position = {}) {
+    const matches = state.rows.filter(row => shouldResetLegacyRowForPosition(position, row));
+    if (matches.length === 0) return false;
+    for (const row of matches) {
+      clearLegacyExecutionState(row, rowKey(row));
+    }
+    return true;
+  }
+
+  function removeRowByKey(key) {
+    const idx = state.rows.findIndex(r => rowKey(r) === key);
+    if (idx >= 0) {
+      const row = state.rows[idx];
+      state.rows.splice(idx, 1);
+      cleanupRemovedRow(row, key);
+      render();
+      forgetInstrument(row.ticker, row.provider);
+    }
+  }
+
+  function scheduleInstantExecution(row, place) {
+    if (!row) return;
+    const handler = orderCardHandlerForRow(row, row.instrumentType);
+    if (!handler || typeof handler.scheduleInstantExecution !== 'function') return;
+    if (typeof handler.shouldScheduleInstantExecution === 'function'
+      && !handler.shouldScheduleInstantExecution({ row })) return;
+    const key = rowKey(row);
+    if (instantExecutedKeys.has(key)) return;
+    instantExecutedKeys.add(key);
+    scheduleOrderCardInstantExecution(row, place, row.instrumentType);
+  }
+
+  function loadInitialRows(limit = 100) {
+    return ipcRenderer.invoke('orders:list', limit).then(rows => {
+      state.rows = Array.isArray(rows)
+        ? rows.filter(row => !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
+        : [];
+      render();
+    }).catch(() => {});
+  }
+
+  function registerIpcHandlers({ place } = {}) {
+    ipcRenderer.on('execution:pending', (_evt, rec) => {
+      const reqId = rec?.reqId;
+      if (!reqId) return;
+
+      let key = pendingByReqId.get(reqId);
+      if (!key) key = findKeyByTicker(rec?.order?.symbol || rec?.order?.ticker);
+      if (shouldIgnoreLegacyExecutionEvent(rec)) return;
+      if (!key) return;
+
+      pendingByReqId.set(reqId, key);
+      retryCounts.set(reqId, 0);
+      const card = cardByKey(key);
+      if (rec.pendingId) {
+        pendingIdByReqId.set(reqId, rec.pendingId);
+        if (card) card.dataset.pendingId = rec.pendingId;
+      } else {
+        pendingIdByReqId.delete(reqId);
+        if (card) delete card.dataset.pendingId;
+      }
+      if (card) {
+        card.dataset.reqId = reqId;
+        const rb = card.querySelector('.retry-btn');
+        if (rb) rb.textContent = '0';
+      }
+      if (cardStates.get(key) !== 'pending-exec' || rec?.order?.side) {
+        setCardState(key, 'pending');
+      }
+      if (card && rec?.order) {
+        const ui = uiState.get(key) || {};
+        Object.assign(ui, uiPatchFromRow(rec.order));
+        for (const [prop, selector] of [['qty', 'input.qty'], ['price', 'input.pr'], ['sl', 'input.sl'], ['tp', 'input.tp']]) {
+          if (ui[prop] == null) continue;
+          const input = card.querySelector(selector);
+          if (input) input.value = ui[prop];
+        }
+        uiState.set(key, ui);
+      }
+      toast(`... ${rec.order.symbol}: queued`);
+    });
+
+    ipcRenderer.on('execution:retry', (_evt, rec) => {
+      const key = pendingByReqId.get(rec.reqId);
+      if (!key) return;
+      retryCounts.set(rec.reqId, rec.count);
+      const card = cardByKey(key);
+      if (card) {
+        const rb = card.querySelector('.retry-btn');
+        if (rb) rb.textContent = String(rec.count);
+      }
+    });
+
+    ipcRenderer.on('execution:retry-stopped', (_evt, rec) => {
+      const key = pendingByReqId.get(rec.reqId);
+      if (!key) return;
+      pendingByReqId.delete(rec.reqId);
+      retryCounts.delete(rec.reqId);
+      const card = cardByKey(key);
+      if (card) {
+        delete card.dataset.reqId;
+        const rb = card.querySelector('.retry-btn');
+        if (rb) {
+          rb.textContent = '0';
+          rb.style.display = 'none';
+        }
+      }
+      setCardState(key, null);
+      render();
+    });
+
+    ipcRenderer.on('orders:remove', (_evt, filter) => {
+      if (!filter || typeof filter !== 'object') return;
+      const { producingLineId } = filter;
+      if (producingLineId == null) return;
+      const targetId = String(producingLineId);
+      if (!targetId) return;
+      const matches = state.rows.filter(row => String(row.producingLineId || '') === targetId);
+      if (matches.length === 0) return;
+      const keysToRemove = new Set(matches.map(row => rowKey(row)));
+      const nextRows = [];
+      const removed = [];
+      for (const row of state.rows) {
+        const key = rowKey(row);
+        if (keysToRemove.has(key)) {
+          removed.push({ row, key });
+        } else {
+          nextRows.push(row);
+        }
+      }
+      if (removed.length === 0) return;
+      state.rows = nextRows;
+      removed.forEach(({ row, key }) => {
+        uiState.delete(key);
+        cardStates.delete(key);
+        clearPendingByKey(key);
+        userTouchedByTicker.delete(row.ticker);
+        forgetInstrument(row.ticker, row.provider);
+      });
+      render();
+    });
+
+    ipcRenderer.on('orders:new', (_evt, row) => {
+      if (shouldFilterLegacyRow(row)) return;
+      if (shouldIgnoreLegacyRowForExistingPosition(row)) return;
+      let idx = state.rows.findIndex(r => matchesExistingOrderRow(row, r));
+
+      if (idx === -1) {
+        state.rows.unshift(row);
+        trimRows();
+        render();
+        scheduleInstantExecution(row, place);
+        return;
+      }
+
+      const oldRow = state.rows[idx];
+      const oldKey = rowKey(oldRow);
+      const st = cardStates.get(oldKey);
+      if (isTerminalCardState(st)) {
+        handleClosedCard({ row, idx, oldRow, oldKey });
+        return;
+      }
+
+      if (isTouched(row.ticker)) {
+        const existing = state.rows.splice(idx, 1)[0];
+        state.rows.unshift(existing);
+        render();
+        return;
+      }
+
+      const newRow = { ...oldRow, ...row };
+      const newKey = rowKey(newRow);
+      state.rows[idx] = newRow;
+      migrateKey(oldKey, newKey, {
+        preserveUi: false,
+        nextUiPatch: () => uiPatchFromRow(row)
+      });
+      const updated = state.rows.splice(idx, 1)[0];
+      state.rows.unshift(updated);
+      trimRows();
+      render();
+    });
+
+    ipcRenderer.on('execution:result', (_evt, rec) => {
+      const reqId = rec?.order?.meta?.requestId || rec?.reqId;
+      if (!reqId) return;
+      if (shouldIgnoreLegacyExecutionEvent(rec)) return;
+      const key = pendingByReqId.get(reqId);
+      if (!key) return;
+
+      pendingByReqId.delete(reqId);
+      pendingIdByReqId.delete(reqId);
+      retryCounts.delete(reqId);
+      const card = cardByKey(key);
+      if (card) {
+        delete card.dataset.reqId;
+        delete card.dataset.pendingId;
+        const rb = card.querySelector('.retry-btn');
+        if (rb) rb.textContent = '0';
+      }
+
+      const ok = rec.status === 'ok' || rec.status === 'simulated';
+      if (ok) {
+        const st = cardStates.get(key);
+        if (st !== 'executing' && st !== 'profit' && st !== 'loss') {
+          setCardState(key, 'placed');
+        }
+        if (rec.providerOrderId) ticketToKey.set(String(rec.providerOrderId), key);
+        const providerOrderId = String(rec.providerOrderId || '');
+        if (providerOrderId) {
+          const row = state.rows.find(r => rowKey(r) === key);
+          const symbol = rec.order?.symbol || rec.order?.ticker || row?.ticker || row?.symbol || '';
+          const openedAt = now();
+          placedOrderByKey.set(key, {
+            provider: rec.provider || (row && row.provider) || '',
+            ticket: providerOrderId,
+            symbol,
+            strategyCommand: row?.strategyCommand,
+            name: rec.order?.name || row?.name,
+            payoff: rec.payoff || rec.raw?.payoff,
+            valuation: rec.valuation || rec.raw?.valuation,
+            openedAt
+          });
+          if (row && (rec.payoff || rec.raw?.payoff)) row.payoff = rec.payoff || rec.raw.payoff;
+          if (row && (rec.valuation || rec.raw?.valuation)) row.valuation = rec.valuation || rec.raw.valuation;
+          if (row) orderCardHandlerForRow(row, row.instrumentType)?.onExecutionResultOk?.({ row, rec, openedAt, key });
+        }
+        toast(`OK ${rec.order.symbol} ${rec.order.side} ${rec.order.qty} - placed`);
+        render();
+      } else if (rec.status === 'unknown' || rec.partial === true) {
+        setCardState(key, 'pending');
+        if (card) card.title = rec.reason || 'Execution state unknown';
+        toast(`... ${rec.order?.symbol || ''}: execution state unknown`);
+        render();
+      } else {
+        setCardState(key, null);
+        render();
+        shakeCard(key);
+        if (card) card.title = rec.reason || 'Rejected';
+        toast(`x ${rec.order?.symbol || ''}: ${rec.reason || 'Rejected'}`);
+      }
+    });
+
+    ipcRenderer.on('position:opened', (_evt, rec) => {
+      if (shouldIgnoreLegacyPositionEvent(rec)) return;
+      const ticket = String(rec.ticket);
+      let key = ticketToKey.get(ticket);
+      if (!key) {
+        const reqId = rec.origOrder?.meta?.requestId;
+        if (reqId) {
+          key = pendingByReqId.get(reqId);
+          if (key) ticketToKey.set(ticket, key);
+        }
+      }
+      if (!key) return;
+      placedOrderByKey.delete(key);
+      orderCardHandlerForKey(key)?.onPositionOpened?.({ key, rec });
+      setCardState(key, 'executing');
+      render();
+    });
+
+    ipcRenderer.on('position:closed', (_evt, rec) => {
+      if (shouldIgnoreLegacyPositionEvent(rec)) return;
+      const ticket = String(rec.ticket);
+      const key = ticketToKey.get(ticket);
+      if (!key) return;
+      orderCardHandlerForKey(key)?.onPositionClosed?.({ key, rec });
+      if (typeof rec.profit === 'number') {
+        setCardState(key, rec.profit >= 0 ? 'profit' : 'loss');
+      } else {
+        setCardState(key, 'closed');
+      }
+      render();
+    });
+
+    ipcRenderer.on('order:cancelled', (_evt, rec) => {
+      if (shouldIgnoreLegacyPositionEvent(rec)) return;
+      const ticket = String(rec.ticket);
+      const key = ticketToKey.get(ticket);
+      if (key) {
+        ticketToKey.delete(ticket);
+        placedOrderByKey.delete(key);
+        removeRowByKey(key);
+      }
+    });
+  }
+
+  function mount(options = {}) {
+    loadInitialRows(options.initialLimit || 100);
+    registerIpcHandlers(options);
+  }
+
+  return {
+    state,
+    rows,
+    setFilter,
+    setAutoscroll,
+    renderLegacyCards,
+    legacyRowsForRender,
+    setClosedCardEventStrategy,
+    registerIpcHandlers,
+    mount,
+    markTouched,
+    isTouched,
+    migrateKey,
+    removeRow,
+    removeRowByKey,
+    clearPendingByKey,
+    clearLegacyExecutionState,
+    removeLegacyRowsForPosition,
+    resetLegacyRowsForPosition,
+    scheduleInstantExecution,
+    legacyState: {
+      uiState,
+      cardStates,
+      pendingExecLabels,
+      pendingByReqId,
+      pendingIdByReqId,
+      ticketToKey,
+      placedOrderByKey,
+      retryCounts,
+      instantExecutedKeys,
+      userTouchedByTicker
+    }
+  };
+}
+
+module.exports = { createLegacyOrderListRuntime };
