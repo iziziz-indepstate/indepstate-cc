@@ -277,6 +277,14 @@ function createLegacyOrderListRuntime({
       return true;
     },
     getPendingId: reqId => (reqId ? pendingIdByReqId.get(String(reqId)) : undefined),
+    getRetryCount: reqId => (reqId ? retryCounts.get(String(reqId)) : undefined),
+    findPendingRequestIdByKey: key => {
+      if (!key) return undefined;
+      for (const [reqId, pendingKey] of pendingByReqId.entries()) {
+        if (pendingKey === key) return reqId;
+      }
+      return undefined;
+    },
     clearPendingRequest,
     clearPendingByKey,
     markPlacedOrder: (key, orderInfo = {}) => {
@@ -701,22 +709,7 @@ function createLegacyOrderListRuntime({
     applyOrderCardUpdate,
     applyOrderCardRemoval,
     scheduleInstantExecution,
-    legacyOrderStateApi,
-    // Compatibility/debug surface. Production service code should use legacyOrderStateApi.
-    legacyState: {
-      uiState,
-      cardStates,
-      pendingExecLabels,
-      pendingByReqId,
-      pendingIdByReqId,
-      ticketToKey,
-      placedOrderByKey,
-      retryCounts,
-      instantExecutedKeys,
-      userTouchedByTicker,
-      orderCardsEventIds,
-      orderCardsEventIdOrder
-    }
+    legacyOrderStateApi
   };
 }
 

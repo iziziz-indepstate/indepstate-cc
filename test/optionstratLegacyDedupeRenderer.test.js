@@ -164,7 +164,7 @@ async function run() {
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-opt-1"]'), null);
   assert.strictEqual(t.legacyOrderStateApi.resolvePendingKey('req-opt-1'), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getPendingId('req-opt-1'), undefined);
-  assert.strictEqual(t.retryCounts.has('req-opt-1'), false);
+  assert.strictEqual(t.legacyOrderStateApi.getRetryCount('req-opt-1'), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getPendingExecLabel(legacyKey), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getCardState(legacyKey), undefined);
   assert.strictEqual(t.legacyOrderStateApi.resolveTicketKey('deal-1'), undefined);
@@ -210,7 +210,7 @@ async function run() {
   assert.strictEqual(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`), null);
   assert.strictEqual(t.legacyOrderStateApi.resolvePendingKey('req-opt-1'), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getPendingId('req-opt-1'), undefined);
-  assert.strictEqual(t.retryCounts.has('req-opt-1'), false);
+  assert.strictEqual(t.legacyOrderStateApi.getRetryCount('req-opt-1'), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getPendingExecLabel(legacyKey), undefined);
   assert.strictEqual(t.legacyOrderStateApi.getCardState(legacyKey), undefined);
   assert.strictEqual(t.legacyOrderStateApi.resolveTicketKey('deal-1'), undefined);

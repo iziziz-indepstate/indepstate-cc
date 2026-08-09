@@ -151,7 +151,6 @@ const rendererHandlers = [{
       toast,
       shakeCard,
       legacyOrderStateApi,
-      pendingIdByReqId,
       setCardState,
       settingsRuntime,
       positionKey,
@@ -171,7 +170,6 @@ const rendererHandlers = [{
       toast,
       shakeCard,
       legacyOrderStateApi,
-      pendingIdByReqId,
       setCardState,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
     });

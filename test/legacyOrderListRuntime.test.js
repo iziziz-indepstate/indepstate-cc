@@ -166,7 +166,7 @@ async function run() {
     });
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), undefined);
     assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), undefined);
-    assert.strictEqual(runtime.legacyState.retryCounts.has('req-1'), false);
+    assert.strictEqual(runtime.legacyOrderStateApi.getRetryCount('req-1'), undefined);
     assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), key);
     assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(key).ticket, 'ticket-1');
   }
@@ -193,14 +193,19 @@ async function run() {
     const key = 'row|key';
     runtime.legacyOrderStateApi.markPendingRequest('req-1', key, { retryCount: 3, pendingId: 'pending-1' });
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), key);
+    assert.strictEqual(runtime.legacyOrderStateApi.findPendingRequestIdByKey(key), 'req-1');
     assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), 'pending-1');
+    assert.strictEqual(runtime.legacyOrderStateApi.getRetryCount('req-1'), 3);
     runtime.legacyOrderStateApi.setPendingId('req-1', 'pending-2');
     assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), 'pending-2');
     runtime.legacyOrderStateApi.clearPendingRequest('req-1');
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.findPendingRequestIdByKey(key), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.getRetryCount('req-1'), undefined);
     runtime.legacyOrderStateApi.markPendingRequest('req-2', key);
     runtime.legacyOrderStateApi.clearPendingByKey(key);
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-2'), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.findPendingRequestIdByKey(key), undefined);
   }
 
   {

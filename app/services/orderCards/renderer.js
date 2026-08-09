@@ -15,10 +15,7 @@ function createOrderCardsRenderer({
   detectInstrumentType,
   rowKey,
   ipcRenderer,
-  pendingByReqId,
-  pendingIdByReqId,
-  retryCounts,
-  pendingExecLabels,
+  legacyOrderStateApi,
   cardByKey,
   setCardState,
   pendingActionInfo,
@@ -40,6 +37,12 @@ function createOrderCardsRenderer({
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
+  const legacyState = legacyOrderStateApi || {
+    markPendingRequest: () => false,
+    setPendingExecLabel: () => false,
+    setPendingId: () => false
+  };
+
 function registerInstrumentHandler(instrumentType, handler) {
   const key = String(instrumentType || '').trim();
   if (!key || !handler || typeof handler !== 'object') return false;
@@ -828,13 +831,12 @@ async function place(kind, row, v, instrumentType, btnLabel) {
 
   const key = keyForRow(row);
   const requestId = `${now()}_${random().toString(36).slice(2, 8)}`;
-  pendingByReqId.set(requestId, key);
-  retryCounts.set(requestId, 0);
   const pendingInfo = pendingActionInfo(kind);
   const isPendingExec = !!pendingInfo;
   const isLong = pendingInfo ? pendingInfo.side === 'long' : null;
   const alias = isPendingExec ? btnLabel : null;
-  if (alias) pendingExecLabels.set(key, alias);
+  legacyState.markPendingRequest(requestId, key, { retryCount: 0 });
+  if (alias) legacyState.setPendingExecLabel(key, alias);
   setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
   const card = cardByKey(key);
   if (card) {
@@ -913,7 +915,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
     }
     if (res && typeof res.providerOrderId === 'string' && res.providerOrderId.startsWith('pending:')) {
       const pendId = res.providerOrderId.slice('pending:'.length);
-      pendingIdByReqId.set(requestId, pendId);
+      legacyState.setPendingId(requestId, pendId);
       if (card) card.dataset.pendingId = pendId;
       toast(`… ${row.ticker}: sent, waiting confirmation`);
     }

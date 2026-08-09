@@ -26,10 +26,11 @@ function createRenderer(overrides = {}) {
     detectInstrumentType: () => 'EQ',
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`,
     ipcRenderer: { invoke: async () => ({ status: 'ok' }) },
-    pendingByReqId: new Map(),
-    pendingIdByReqId: new Map(),
-    retryCounts: new Map(),
-    pendingExecLabels: new Map(),
+    legacyOrderStateApi: {
+      markPendingRequest: () => true,
+      setPendingExecLabel: () => true,
+      setPendingId: () => true
+    },
     cardByKey: () => null,
     setCardState: () => {},
     pendingActionInfo: () => null,

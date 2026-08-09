@@ -42,13 +42,6 @@ let legacyOrderListRuntime;
 let state;
 let appState;
 let uiState;
-let cardStates;
-let pendingExecLabels;
-let pendingByReqId;
-let pendingIdByReqId;
-let ticketToKey;
-let placedOrderByKey;
-let retryCounts;
 let legacyOrderStateApi;
 let orderCardsApi;
 let createLegacyOrderCard;
@@ -71,13 +64,6 @@ const $settingsRestart = document.getElementById('settings-restart-required');
 state = { rows: [], filter: '', autoscroll: true };
 appState = state;
 uiState = new Map();
-cardStates = new Map();
-pendingExecLabels = new Map();
-pendingByReqId = new Map();
-pendingIdByReqId = new Map();
-ticketToKey = new Map();
-placedOrderByKey = new Map();
-retryCounts = new Map();
 legacyOrderStateApi = {};
 for (const method of [
   'getCardState',
@@ -90,6 +76,8 @@ for (const method of [
   'resolvePendingKey',
   'setPendingId',
   'getPendingId',
+  'getRetryCount',
+  'findPendingRequestIdByKey',
   'clearPendingRequest',
   'clearPendingByKey',
   'markPlacedOrder',
@@ -383,9 +371,9 @@ function orderCardHandlerForCard(card, key) {
 
 function setCardState(key, state) {
   if (state) {
-    cardStates.set(key, state);
+    legacyOrderStateApi.setCardState(key, state);
   } else {
-    cardStates.delete(key);
+    legacyOrderStateApi.clearCardState(key);
   }
 
   const card = cardByKey(key);
@@ -405,10 +393,10 @@ function setCardState(key, state) {
     status.style.display = 'inline-block';
     status.className = `card__status card__status--${state}`;
     if (state === 'pending-exec') {
-      const lbl = pendingExecLabels.get(key);
+      const lbl = legacyOrderStateApi.getPendingExecLabel(key);
       status.textContent = lbl ? `pe (${lbl})` : 'pe';
     } else {
-      pendingExecLabels.delete(key);
+      legacyOrderStateApi.clearPendingExecLabel(key);
       status.textContent = '';
     }
     card.classList.toggle('card--pending', state === 'pending' || state === 'pending-exec');
@@ -480,7 +468,7 @@ function setCardState(key, state) {
       status.title = 'Отменить pe';
       status.onclick = () => {
         const reqId = card.dataset.reqId;
-        const pendingId = card.dataset.pendingId || (reqId ? pendingIdByReqId.get(reqId) : null);
+        const pendingId = card.dataset.pendingId || (reqId ? legacyOrderStateApi.getPendingId(reqId) : null);
         if (pendingId) ipcRenderer.invoke('pending:cancel', pendingId).catch(() => {
         });
         if (reqId) {
@@ -532,7 +520,8 @@ function setCardState(key, state) {
         if (state === 'pending') {
           retryBtn.style.display = 'inline-block';
           const rid = card.dataset.reqId;
-          if (rid && retryCounts.has(rid)) retryBtn.textContent = String(retryCounts.get(rid));
+          const retryCount = rid ? legacyOrderStateApi.getRetryCount(rid) : undefined;
+          if (retryCount != null) retryBtn.textContent = String(retryCount);
         } else {
           retryBtn.style.display = 'none';
         }
@@ -556,7 +545,7 @@ function setCardState(key, state) {
     card.classList.remove('card--mini');
     status.style.display = 'none';
     status.textContent = '';
-    pendingExecLabels.delete(key);
+    legacyOrderStateApi.clearPendingExecLabel(key);
     status.style.cursor = '';
     status.title = '';
     status.onclick = null;
@@ -597,7 +586,7 @@ function setCardState(key, state) {
       card.querySelectorAll('input').forEach(inp => inp.disabled = false);
       card.querySelectorAll('button.btn').forEach(btn => btn.disabled = false);
     }
-    placedOrderByKey.delete(key);
+    legacyOrderStateApi.deletePlacedOrder(key);
   }
 }
 
@@ -626,10 +615,9 @@ function render() {
     const key = positionKey(position);
     const card = createPositionSnapshotCard(position);
     $grid.appendChild(card);
-    for (const [rid, k] of pendingByReqId.entries()) {
-      if (k === key) card.dataset.reqId = rid;
-    }
-    const st = cardStates.get(key);
+    const reqId = legacyOrderStateApi.findPendingRequestIdByKey(key);
+    if (reqId) card.dataset.reqId = reqId;
+    const st = legacyOrderStateApi.getCardState(key);
     if (st) setCardState(key, st);
   }
   if (state.autoscroll) {
@@ -854,10 +842,7 @@ loadRendererHandlers({
     detectInstrumentType,
     rowKey,
     ipcRenderer,
-    pendingByReqId,
-    pendingIdByReqId,
-    retryCounts,
-    pendingExecLabels,
+    legacyOrderStateApi,
     cardByKey,
     setCardState,
     pendingActionInfo: (kind) => pendingOrdersRenderer.actionInfo(kind),
@@ -878,16 +863,7 @@ loadRendererHandlers({
   legacyOrderListDeps: {
     ipcRenderer,
     state,
-    legacyState: {
-      uiState,
-      cardStates,
-      pendingExecLabels,
-      pendingByReqId,
-      pendingIdByReqId,
-      ticketToKey,
-      placedOrderByKey,
-      retryCounts
-    },
+    legacyState: { uiState },
     rowKey,
     findKeyByTicker,
     isTerminalCardState,
@@ -953,8 +929,8 @@ const positionsRenderer = createPositionsRenderer({
     removeLegacyRowsForPosition(position);
     if (!shouldUseSnapshotInsteadOfLegacyRows(position)) return;
     const key = positionKey(position);
-    cardStates.delete(key);
-    pendingExecLabels.delete(key);
+    legacyOrderStateApi.clearCardState(key);
+    legacyOrderStateApi.clearPendingExecLabel(key);
   }
 });
 const positionsById = positionsRenderer.positionsById;
@@ -1095,8 +1071,8 @@ function removePositionSnapshotsForLegacyRow(row = {}) {
     .filter(position => shouldRemovePositionSnapshotForLegacyRowRemoval(row, position));
   for (const position of matches) {
     const key = positionKey(position);
-    cardStates.delete(key);
-    pendingExecLabels.delete(key);
+    legacyOrderStateApi.clearCardState(key);
+    legacyOrderStateApi.clearPendingExecLabel(key);
     removePositionSnapshot(position.id);
     ipcRenderer.invoke('positions:remove', {
       positionId: position.id,
@@ -1166,14 +1142,6 @@ if (typeof module !== 'undefined') {
     cardByKey,
     state,
     legacyOrderStateApi,
-    // Compatibility/debug surface for legacy tests. Production extensions should use legacyOrderStateApi.
-    pendingByReqId,
-    pendingIdByReqId,
-    ticketToKey,
-    retryCounts,
-    cardStates,
-    pendingExecLabels,
-    placedOrderByKey,
     positionsById,
     positionCardRenderers,
     setPositionSnapshot,
