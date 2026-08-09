@@ -49,6 +49,7 @@ let pendingIdByReqId;
 let ticketToKey;
 let placedOrderByKey;
 let retryCounts;
+let legacyOrderStateApi;
 let orderCardsApi;
 let createLegacyOrderCard;
 
@@ -77,6 +78,31 @@ pendingIdByReqId = new Map();
 ticketToKey = new Map();
 placedOrderByKey = new Map();
 retryCounts = new Map();
+legacyOrderStateApi = {};
+for (const method of [
+  'getCardState',
+  'setCardState',
+  'clearCardState',
+  'setPendingExecLabel',
+  'getPendingExecLabel',
+  'clearPendingExecLabel',
+  'markPendingRequest',
+  'resolvePendingKey',
+  'setPendingId',
+  'getPendingId',
+  'clearPendingRequest',
+  'clearPendingByKey',
+  'markPlacedOrder',
+  'getPlacedOrder',
+  'deletePlacedOrder',
+  'resolveTicketKey',
+  'bindTicket',
+  'unbindTicket',
+  'listPlacedOrders',
+  'clearExecutionStateByKey'
+]) {
+  legacyOrderStateApi[method] = (...args) => legacyOrderListRuntime?.legacyOrderStateApi?.[method]?.(...args);
+}
 
 ipcRenderer.invoke('settings:get', 'ui').then((res) => {
   if (res && typeof res.autoscroll === 'boolean') {
@@ -403,15 +429,14 @@ function setCardState(key, state) {
     if (btnsWrap) btnsWrap.style.display = state === 'pending-exec' ? 'none' : '';
 
     const closePlacedOrder = async () => {
-      const orderInfo = placedOrderByKey.get(key);
+      const orderInfo = legacyOrderStateApi.getPlacedOrder(key);
       const currentRow = (appState.rows || []).find(r => rowKey(r) === key);
       if (typeof cardHandler?.closePlacedOrder === 'function') {
         const handled = await cardHandler.closePlacedOrder({
           key,
           row: currentRow,
           orderInfo,
-          placedOrderByKey,
-          ticketToKey,
+          legacyOrderStateApi,
           setCardState,
           render,
           ipcRenderer,
@@ -434,10 +459,7 @@ function setCardState(key, state) {
         }
       }
 
-      placedOrderByKey.delete(key);
-      for (const [ticket, k] of ticketToKey.entries()) {
-        if (k === key) ticketToKey.delete(ticket);
-      }
+      legacyOrderStateApi.clearExecutionStateByKey(key);
       setCardState(key, null);
       render();
     };
@@ -468,9 +490,7 @@ function setCardState(key, state) {
         if (pendingId) ipcRenderer.invoke('pending:cancel', pendingId).catch(() => {
         });
         if (reqId) {
-          pendingByReqId.delete(reqId);
-          pendingIdByReqId.delete(reqId);
-          retryCounts.delete(reqId);
+          legacyOrderStateApi.clearPendingRequest(reqId);
           delete card.dataset.reqId;
         }
         delete card.dataset.pendingId;
@@ -815,16 +835,10 @@ loadRendererHandlers({
   ipcRenderer,
   trackInstrument: row => instrumentInfoRenderer.trackInstrument(row),
   untrackInstrument: row => instrumentInfoRenderer.untrackInstrument(row),
-  placedOrderByKey,
-  cardStates,
-  pendingByReqId,
-  pendingIdByReqId,
-  retryCounts,
+  legacyOrderStateApi,
   setCardState,
-  ticketToKey,
   positionKey,
   positionCardTitle,
-  pendingExecLabels,
   cardByKey,
   toast,
   shakeCard,
@@ -1158,6 +1172,8 @@ if (typeof module !== 'undefined') {
     findKeyByTicker,
     cardByKey,
     state,
+    legacyOrderStateApi,
+    // Compatibility/debug surface for legacy tests. Production extensions should use legacyOrderStateApi.
     pendingByReqId,
     pendingIdByReqId,
     ticketToKey,

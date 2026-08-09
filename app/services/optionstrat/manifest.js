@@ -150,13 +150,9 @@ const rendererHandlers = [{
       render,
       toast,
       shakeCard,
-      placedOrderByKey,
-      cardStates,
-      pendingByReqId,
+      legacyOrderStateApi,
       pendingIdByReqId,
-      retryCounts,
       setCardState,
-      ticketToKey,
       settingsRuntime,
       positionKey,
       btn,
@@ -174,13 +170,9 @@ const rendererHandlers = [{
       render,
       toast,
       shakeCard,
-      placedOrderByKey,
-      cardStates,
-      pendingByReqId,
+      legacyOrderStateApi,
       pendingIdByReqId,
-      retryCounts,
       setCardState,
-      ticketToKey,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
     });
 
@@ -213,8 +205,7 @@ const rendererHandlers = [{
         key,
         row,
         orderInfo,
-        placedOrderByKey: placedMap,
-        ticketToKey: ticketMap,
+        legacyOrderStateApi: orderState,
         setCardState: setState,
         render: rerender,
         ipcRenderer: ipc,
@@ -250,12 +241,10 @@ const rendererHandlers = [{
           if (row) row.valuation = finalValuation;
           if (orderInfo) orderInfo.valuation = finalValuation;
         }
+        if (orderInfo?.ticket) orderState?.unbindTicket?.(orderInfo.ticket);
         optionStratRenderer.markRowClosed(key);
-        placedMap?.delete(key);
+        orderState?.deletePlacedOrder?.(key);
         optionStratRenderer.pendingOptionValuations.delete(key);
-        for (const [ticket, mappedKey] of ticketMap?.entries?.() || []) {
-          if (mappedKey === key) ticketMap.delete(ticket);
-        }
         setState?.(key, 'profit');
         rerender?.();
         return true;

@@ -138,14 +138,15 @@ async function run() {
   assert.strictEqual(queuedOrders[0].meta.qty, 1);
   assert.strictEqual(queuedOrders[0].meta.stopPts, 1);
   assert.strictEqual(queuedOrders[0].meta.takePts, null);
-  assert.strictEqual(t.ticketToKey.get('deal-open'), key);
-  assert.strictEqual(t.placedOrderByKey.get(key).ticket, 'deal-open');
-  assert.strictEqual(t.placedOrderByKey.get(key).payoff, payoff);
+  assert.strictEqual(t.legacyOrderStateApi.resolveTicketKey('deal-open'), key);
+  assert.strictEqual(t.legacyOrderStateApi.getPlacedOrder(key).ticket, 'deal-open');
+  assert.strictEqual(t.legacyOrderStateApi.getPlacedOrder(key).payoff, payoff);
   assert.strictEqual(row.payoff, payoff);
   assert(Number.isFinite(row.openedAt));
-  assert.strictEqual(t.cardStates.get(key), 'placed');
+  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'placed');
 
-  t.placedOrderByKey.set(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: row.name, strategyCommand: 'lcs', payoff });
+  t.legacyOrderStateApi.markPlacedOrder(key, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY', name: row.name, strategyCommand: 'lcs', payoff });
+  t.legacyOrderStateApi.bindTicket('deal-1', key);
   row.valuation = { initialValue: 900, currentValue: 950, change: 50, changePct: 5.56 };
   row.openedAt = Date.UTC(2026, 5, 13, 9, 30);
   t.setCardState(key, 'placed');
@@ -177,7 +178,7 @@ async function run() {
   assert(detailsText.indexOf('Change ') < detailsText.indexOf('RR '));
   assert(detailsText.indexOf('RR ') < detailsText.indexOf('Opened '));
   assert(detailsText.indexOf('Opened ') < detailsText.indexOf('Closed '));
-  assert.strictEqual(t.placedOrderByKey.has(key), false);
+  assert.strictEqual(t.legacyOrderStateApi.getPlacedOrder(key), undefined);
 
   t.setCardState(key, 'profit');
   card = t.cardByKey(key);

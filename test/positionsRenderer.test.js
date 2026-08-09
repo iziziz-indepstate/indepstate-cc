@@ -357,14 +357,14 @@ async function run() {
       data: { ...placedPosition.card.data, state: 'closed' }
     }
   };
-  t.cardStates.set('position|pos-preopen-closed', 'closed');
+  t.legacyOrderStateApi.setCardState('position|pos-preopen-closed', 'closed');
   handlers['positions:changed'](null, { event: { type: 'position.closed' }, position: preOpenClosedPosition });
   await new Promise(resolve => setTimeout(resolve, 0));
   const preOpenCard = document.querySelector('.position-card[data-position-id="pos-preopen-closed"]');
   assert(preOpenCard);
   assert.deepStrictEqual(Array.from(preOpenCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['archive']);
   assert.strictEqual(t.positionsById.get('pos-preopen-closed').state, 'closed');
-  assert.strictEqual(t.cardStates.has('position|pos-preopen-closed'), false);
+  assert.strictEqual(t.legacyOrderStateApi.getCardState('position|pos-preopen-closed'), undefined);
 
   calls.length = 0;
   card = document.querySelector('.position-card[data-position-id="pos-1"]');

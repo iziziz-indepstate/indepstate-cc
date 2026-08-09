@@ -26,14 +26,9 @@ function createOptionStratRenderer({
   render,
   toast,
   shakeCard,
-  placedOrderByKey,
-  cardStates,
-  pendingByReqId,
-  pendingIdByReqId,
-  retryCounts,
+  legacyOrderStateApi,
   pendingOptionValuations = new Set(),
   setCardState,
-  ticketToKey,
   getValuationRefreshMs = () => 5000,
   setTimeoutFn = setTimeout,
   now = () => Date.now()
@@ -41,6 +36,14 @@ function createOptionStratRenderer({
   const pendingOptionPayoffs = new Set();
   let displayFields = { ...DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS };
   let valuationRefreshMs = Number(getValuationRefreshMs()) || 5000;
+  const legacyState = legacyOrderStateApi || {
+    getCardState: () => undefined,
+    clearPendingRequest: () => false,
+    markPlacedOrder: () => false,
+    getPlacedOrder: () => undefined,
+    bindTicket: () => false,
+    listPlacedOrders: () => []
+  };
 
   function setDisplayFields(fields) {
     displayFields = normalizeOptionStratDisplayFields(fields);
@@ -134,8 +137,9 @@ function createOptionStratRenderer({
   function markRowOpened(key, timestamp = now()) {
     const row = state.rows.find(r => rowKey(r) === key);
     if (row && row.instrumentType === 'OPT' && !row.openedAt) row.openedAt = timestamp;
-    const orderInfo = placedOrderByKey.get(key);
+    const orderInfo = legacyState.getPlacedOrder(key);
     if (orderInfo && !orderInfo.openedAt) orderInfo.openedAt = timestamp;
+    if (orderInfo) legacyState.markPlacedOrder(key, orderInfo);
   }
 
   function markRowClosed(key, timestamp = now()) {
@@ -144,10 +148,11 @@ function createOptionStratRenderer({
       if (!row.openedAt) row.openedAt = timestamp;
       row.closedAt = timestamp;
     }
-    const orderInfo = placedOrderByKey.get(key);
+    const orderInfo = legacyState.getPlacedOrder(key);
     if (orderInfo) {
       if (!orderInfo.openedAt) orderInfo.openedAt = timestamp;
       orderInfo.closedAt = timestamp;
+      legacyState.markPlacedOrder(key, orderInfo);
     }
   }
 
@@ -539,8 +544,11 @@ function createOptionStratRenderer({
         current.valuation = result.valuation;
         render();
       }
-      const stored = placedOrderByKey.get(key);
-      if (stored) stored.valuation = result.valuation;
+      const stored = legacyState.getPlacedOrder(key);
+      if (stored) {
+        stored.valuation = result.valuation;
+        legacyState.markPlacedOrder(key, stored);
+      }
       return result;
     }).catch(err => {
       return { status: 'error', reason: err?.message || String(err) };
@@ -552,13 +560,8 @@ function createOptionStratRenderer({
   function startValuationRefresh() {
     setTimeoutFn(async function tick() {
       try {
-        const entries = Array.from(placedOrderByKey.entries())
-          .filter(([key]) => {
-            if (cardStates.get(key) !== 'placed') return false;
-            const row = state.rows.find(r => rowKey(r) === key);
-            return row?.instrumentType === 'OPT';
-          });
-        await Promise.all(entries.map(([key, orderInfo]) => refreshOptionValuation(key, orderInfo)));
+        const entries = legacyState.listPlacedOrders({ state: 'placed', instrumentType: 'OPT' });
+        await Promise.all(entries.map(({ key, orderInfo }) => refreshOptionValuation(key, orderInfo)));
       } finally {
         setTimeoutFn(tick, Math.max(1000, Number(valuationRefreshMs) || 5000));
       }
@@ -570,7 +573,7 @@ function createOptionStratRenderer({
     setTimeoutFn(() => {
       const key = rowKey(row);
       const current = state.rows.find(r => rowKey(r) === key);
-      if (!current || cardStates.get(key)) return;
+      if (!current || legacyState.getCardState(key)) return;
       place('OPEN', current, { valid: true, type: 'option' }, 'OPT', 'OPEN');
     }, 0);
     return true;
@@ -614,10 +617,8 @@ function createOptionStratRenderer({
       return;
     }
     const openedAt = now();
-    pendingByReqId?.delete(requestId);
-    pendingIdByReqId?.delete(requestId);
-    retryCounts?.delete(requestId);
-    placedOrderByKey.set(key, {
+    legacyState.clearPendingRequest(requestId);
+    legacyState.markPlacedOrder(key, {
       provider: result.provider || row.provider || 'optionstrat',
       ticket: String(result.providerOrderId),
       symbol: row.symbol || row.ticker || '',
@@ -630,7 +631,7 @@ function createOptionStratRenderer({
     if (result.payoff || result.raw?.payoff) row.payoff = result.payoff || result.raw.payoff;
     if (result.valuation || result.raw?.valuation) row.valuation = result.valuation || result.raw.valuation;
     row.openedAt = row.openedAt || openedAt;
-    ticketToKey.set(String(result.providerOrderId), key);
+    legacyState.bindTicket(String(result.providerOrderId), key);
     setCardState(key, 'placed');
   }
 

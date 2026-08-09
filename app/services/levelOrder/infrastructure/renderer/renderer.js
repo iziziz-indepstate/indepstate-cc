@@ -359,24 +359,26 @@ function createLevelOrderRenderer({
   function createPositionActionDispatcher({
     positionKey,
     positionCardTitle,
-    pendingByReqId,
-    retryCounts,
-    pendingExecLabels,
+    legacyOrderStateApi,
     cardByKey,
     setCardState,
     toast,
     shakeCard,
     render
   } = {}) {
+    const legacyState = legacyOrderStateApi || {
+      markPendingRequest: () => false,
+      clearPendingRequest: () => false,
+      setPendingExecLabel: () => false
+    };
     return async function placeLevelOrderPositionAction(position = {}, action = {}, base = {}) {
       const id = String(action.id || action.label || base.action || '').toUpperCase();
       const key = positionKey(position);
       const title = positionCardTitle(position);
       const requestId = `${now()}_${random().toString(36).slice(2, 8)}`;
       const strategyId = `${requestId}_${String(id).toLowerCase()}`;
-      pendingByReqId.set(requestId, key);
-      retryCounts.set(requestId, 0);
-      pendingExecLabels.set(key, action.label || id);
+      legacyState.markPendingRequest(requestId, key, { retryCount: 0 });
+      legacyState.setPendingExecLabel(key, action.label || id);
       setCardState(key, 'pending-exec');
       const card = cardByKey(key);
       if (card) {
@@ -392,8 +394,7 @@ function createLevelOrderRenderer({
           strategyId
         });
         if (!res || res.status === 'rejected' || res.status === 'error') {
-          pendingByReqId.delete(requestId);
-          retryCounts.delete(requestId);
+          legacyState.clearPendingRequest(requestId);
           setCardState(key, null);
           toast(`x ${title}: ${res?.reason || 'Rejected'}`);
           shakeCard(key);
@@ -407,8 +408,7 @@ function createLevelOrderRenderer({
         render();
         return res;
       } catch (err) {
-        pendingByReqId.delete(requestId);
-        retryCounts.delete(requestId);
+        legacyState.clearPendingRequest(requestId);
         setCardState(key, null);
         toast(`x ${title}: ${err?.message || err}`);
         shakeCard(key);

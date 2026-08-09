@@ -145,13 +145,11 @@ async function run() {
   assert(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`));
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-opt-1"]'), null);
 
-  t.pendingByReqId.set('req-opt-1', legacyKey);
-  t.pendingIdByReqId.set('req-opt-1', 'pending-opt-1');
-  t.retryCounts.set('req-opt-1', 2);
-  t.pendingExecLabels.set(legacyKey, 'OPEN');
-  t.cardStates.set(legacyKey, 'pending');
-  t.ticketToKey.set('deal-1', legacyKey);
-  t.placedOrderByKey.set(legacyKey, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' });
+  t.legacyOrderStateApi.markPendingRequest('req-opt-1', legacyKey, { retryCount: 2, pendingId: 'pending-opt-1' });
+  t.legacyOrderStateApi.setPendingExecLabel(legacyKey, 'OPEN');
+  t.legacyOrderStateApi.setCardState(legacyKey, 'pending');
+  t.legacyOrderStateApi.bindTicket('deal-1', legacyKey);
+  t.legacyOrderStateApi.markPlacedOrder(legacyKey, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' });
 
   handlers['positions:changed'](null, {
     event: { type: 'position.failed' },
@@ -163,13 +161,13 @@ async function run() {
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`));
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-opt-1"]'), null);
-  assert.strictEqual(t.pendingByReqId.has('req-opt-1'), false);
-  assert.strictEqual(t.pendingIdByReqId.has('req-opt-1'), false);
+  assert.strictEqual(t.legacyOrderStateApi.resolvePendingKey('req-opt-1'), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getPendingId('req-opt-1'), undefined);
   assert.strictEqual(t.retryCounts.has('req-opt-1'), false);
-  assert.strictEqual(t.pendingExecLabels.has(legacyKey), false);
-  assert.strictEqual(t.cardStates.has(legacyKey), false);
-  assert.strictEqual(t.ticketToKey.has('deal-1'), false);
-  assert.strictEqual(t.placedOrderByKey.has(legacyKey), false);
+  assert.strictEqual(t.legacyOrderStateApi.getPendingExecLabel(legacyKey), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getCardState(legacyKey), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.resolveTicketKey('deal-1'), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getPlacedOrder(legacyKey), undefined);
 
   document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card) .card__close`).click();
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -184,13 +182,11 @@ async function run() {
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`));
 
-  t.pendingByReqId.set('req-opt-1', legacyKey);
-  t.pendingIdByReqId.set('req-opt-1', 'pending-opt-1');
-  t.retryCounts.set('req-opt-1', 2);
-  t.pendingExecLabels.set(legacyKey, 'OPEN');
-  t.cardStates.set(legacyKey, 'pending');
-  t.ticketToKey.set('deal-1', legacyKey);
-  t.placedOrderByKey.set(legacyKey, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' });
+  t.legacyOrderStateApi.markPendingRequest('req-opt-1', legacyKey, { retryCount: 2, pendingId: 'pending-opt-1' });
+  t.legacyOrderStateApi.setPendingExecLabel(legacyKey, 'OPEN');
+  t.legacyOrderStateApi.setCardState(legacyKey, 'pending');
+  t.legacyOrderStateApi.bindTicket('deal-1', legacyKey);
+  t.legacyOrderStateApi.markPlacedOrder(legacyKey, { provider: 'optionstrat', ticket: 'deal-1', symbol: 'SPY' });
 
   handlers['positions:changed'](null, {
     event: { type: 'position.placed' },
@@ -211,13 +207,13 @@ async function run() {
   assert(placedCard.textContent.includes('RR'));
   assert.strictEqual(placedCard.querySelector('.position-card__data'), null);
   assert.strictEqual(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`), null);
-  assert.strictEqual(t.pendingByReqId.has('req-opt-1'), false);
-  assert.strictEqual(t.pendingIdByReqId.has('req-opt-1'), false);
+  assert.strictEqual(t.legacyOrderStateApi.resolvePendingKey('req-opt-1'), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getPendingId('req-opt-1'), undefined);
   assert.strictEqual(t.retryCounts.has('req-opt-1'), false);
-  assert.strictEqual(t.pendingExecLabels.has(legacyKey), false);
-  assert.strictEqual(t.cardStates.has(legacyKey), false);
-  assert.strictEqual(t.ticketToKey.has('deal-1'), false);
-  assert.strictEqual(t.placedOrderByKey.has(legacyKey), false);
+  assert.strictEqual(t.legacyOrderStateApi.getPendingExecLabel(legacyKey), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getCardState(legacyKey), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.resolveTicketKey('deal-1'), undefined);
+  assert.strictEqual(t.legacyOrderStateApi.getPlacedOrder(legacyKey), undefined);
 
   const duplicateRow = {
     ...row,

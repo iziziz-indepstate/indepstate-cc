@@ -67,13 +67,17 @@ async function run() {
     state: { rows: [] },
     rowKey: row => row.key || row.ticker,
     render: () => { renderCount += 1; },
-    placedOrderByKey: new Map(),
-    cardStates: new Map(),
-    pendingByReqId: new Map(),
-    pendingIdByReqId: new Map(),
-    retryCounts: new Map(),
+    legacyOrderStateApi: {
+      getCardState: () => undefined,
+      clearPendingRequest: () => {},
+      markPlacedOrder: () => {},
+      getPlacedOrder: () => undefined,
+      bindTicket: () => {},
+      listPlacedOrders: () => [],
+      deletePlacedOrder: () => {},
+      unbindTicket: () => {}
+    },
     setCardState: () => {},
-    ticketToKey: new Map(),
     registerOrderCardInstrumentHandler(instrumentType, handler) {
       registeredInstrument = instrumentType;
       registeredHandler = handler;

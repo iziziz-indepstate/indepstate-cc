@@ -49,7 +49,7 @@ async function run() {
 
   handlers['execution:pending'](null, { reqId: 'r1', pendingId: 'p1', order: { symbol: 'TST', side: 'buy' } });
 
-  assert.strictEqual(t.cardStates.get(key), 'pending');
+  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending');
   const card = t.cardByKey(key);
   const retryBtn = card.querySelector('.retry-btn');
   assert.ok(retryBtn);

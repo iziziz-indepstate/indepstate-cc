@@ -176,6 +176,29 @@ function createLegacyOrderListRuntime({
     }
   }
 
+  function snapshot(value) {
+    if (!value || typeof value !== 'object') return value;
+    return { ...value };
+  }
+
+  function markPendingRequest(reqId, key, options = {}) {
+    if (!reqId || !key) return false;
+    pendingByReqId.set(String(reqId), key);
+    retryCounts.set(String(reqId), Number.isFinite(Number(options.retryCount)) ? Number(options.retryCount) : 0);
+    if (options.pendingId) pendingIdByReqId.set(String(reqId), options.pendingId);
+    return true;
+  }
+
+  function clearPendingRequest(reqId) {
+    if (!reqId) return false;
+    const id = String(reqId);
+    const had = pendingByReqId.has(id) || pendingIdByReqId.has(id) || retryCounts.has(id);
+    pendingByReqId.delete(id);
+    pendingIdByReqId.delete(id);
+    retryCounts.delete(id);
+    return had;
+  }
+
   function clearLegacyExecutionState(_row, key) {
     cardStates.delete(key);
     pendingExecLabels.delete(key);
@@ -185,6 +208,95 @@ function createLegacyOrderListRuntime({
       if (ticketKey === key) ticketToKey.delete(ticket);
     }
   }
+
+  function clearExecutionStateByKey(key) {
+    if (!key) return false;
+    clearLegacyExecutionState(null, key);
+    return true;
+  }
+
+  const legacyOrderStateApi = {
+    getCardState: key => cardStates.get(key),
+    setCardState: (key, stateName) => {
+      if (!key) return false;
+      if (stateName) cardStates.set(key, stateName);
+      else cardStates.delete(key);
+      return true;
+    },
+    clearCardState: key => {
+      if (!key) return false;
+      return cardStates.delete(key);
+    },
+    setPendingExecLabel: (key, label) => {
+      if (!key) return false;
+      if (label) pendingExecLabels.set(key, label);
+      else pendingExecLabels.delete(key);
+      return true;
+    },
+    getPendingExecLabel: key => pendingExecLabels.get(key),
+    clearPendingExecLabel: key => {
+      if (!key) return false;
+      return pendingExecLabels.delete(key);
+    },
+    markPendingRequest,
+    resolvePendingKey: reqId => (reqId ? pendingByReqId.get(String(reqId)) : undefined),
+    setPendingId: (reqId, pendingId) => {
+      if (!reqId) return false;
+      const id = String(reqId);
+      if (pendingId) pendingIdByReqId.set(id, pendingId);
+      else pendingIdByReqId.delete(id);
+      return true;
+    },
+    getPendingId: reqId => (reqId ? pendingIdByReqId.get(String(reqId)) : undefined),
+    clearPendingRequest,
+    clearPendingByKey,
+    markPlacedOrder: (key, orderInfo = {}) => {
+      if (!key) return false;
+      placedOrderByKey.set(key, snapshot(orderInfo));
+      return true;
+    },
+    getPlacedOrder: key => snapshot(placedOrderByKey.get(key)),
+    deletePlacedOrder: key => {
+      if (!key) return false;
+      return placedOrderByKey.delete(key);
+    },
+    resolveTicketKey: ticket => (ticket != null ? ticketToKey.get(String(ticket)) : undefined),
+    bindTicket: (ticket, key) => {
+      if (ticket == null || !key) return false;
+      ticketToKey.set(String(ticket), key);
+      return true;
+    },
+    unbindTicket: ticket => {
+      if (ticket == null) return false;
+      return ticketToKey.delete(String(ticket));
+    },
+    listPlacedOrders: (options = {}) => {
+      const filter = typeof options === 'function' ? options : options.filter;
+      return Array.from(placedOrderByKey.entries())
+        .map(([key, orderInfo]) => ({
+          key,
+          orderInfo: snapshot(orderInfo),
+          row: state.rows.find(r => rowKey(r) === key) || null,
+          state: cardStates.get(key)
+        }))
+        .filter(entry => {
+          if (options && typeof options === 'object') {
+            if (options.state && entry.state !== options.state) return false;
+            if (options.instrumentType) {
+              const instrumentType = entry.row?.instrumentType || entry.orderInfo?.instrumentType;
+              if (String(instrumentType || '') !== String(options.instrumentType)) return false;
+            }
+          }
+          return typeof filter === 'function' ? !!filter(entry) : true;
+        })
+        .map(entry => ({
+          key: entry.key,
+          orderInfo: entry.orderInfo,
+          state: entry.state
+        }));
+    },
+    clearExecutionStateByKey
+  };
 
   function cleanupRemovedRow(row, key = rowKey(row)) {
     clearLegacyExecutionState(row, key);
@@ -531,9 +643,12 @@ function createLegacyOrderListRuntime({
     removeRowByKey,
     clearPendingByKey,
     clearLegacyExecutionState,
+    clearExecutionStateByKey,
     removeLegacyRowsForPosition,
     resetLegacyRowsForPosition,
     scheduleInstantExecution,
+    legacyOrderStateApi,
+    // Compatibility/debug surface. Production service code should use legacyOrderStateApi.
     legacyState: {
       uiState,
       cardStates,

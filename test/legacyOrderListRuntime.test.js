@@ -6,8 +6,8 @@ function createRuntime(overrides = {}) {
   let runtime;
   const rowKey = row => `${row.ticker}|${row.event}|${row.time}|${row.price}`;
   const setCardState = (key, state) => {
-    if (state) runtime.legacyState.cardStates.set(key, state);
-    else runtime.legacyState.cardStates.delete(key);
+    if (state) runtime.legacyOrderStateApi.setCardState(key, state);
+    else runtime.legacyOrderStateApi.clearCardState(key);
   };
   runtime = createLegacyOrderListRuntime({
     ipcRenderer: {
@@ -62,14 +62,14 @@ async function run() {
     const { runtime, handlers, rowKey } = createRuntime();
     const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100 };
     handlers['orders:new'](null, row);
-    runtime.legacyState.cardStates.set(rowKey(row), 'closed');
+    runtime.legacyOrderStateApi.setCardState(rowKey(row), 'closed');
     handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
     assert.deepStrictEqual(runtime.rows()[0], row);
 
     runtime.setClosedCardEventStrategy('revive');
     handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
     assert.strictEqual(runtime.rows()[0].event, 'down');
-    assert.strictEqual(runtime.legacyState.cardStates.has(rowKey(row)), false);
+    assert.strictEqual(runtime.legacyOrderStateApi.getCardState(rowKey(row)), undefined);
   }
 
   {
@@ -77,9 +77,7 @@ async function run() {
     const row = { ticker: 'AAPL', symbol: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
     handlers['orders:new'](null, row);
     const key = rowKey(row);
-    runtime.legacyState.pendingByReqId.set('req-1', key);
-    runtime.legacyState.pendingIdByReqId.set('req-1', 'pending-1');
-    runtime.legacyState.retryCounts.set('req-1', 2);
+    runtime.legacyOrderStateApi.markPendingRequest('req-1', key, { retryCount: 2, pendingId: 'pending-1' });
     handlers['execution:result'](null, {
       reqId: 'req-1',
       provider: 'simulated',
@@ -87,11 +85,11 @@ async function run() {
       providerOrderId: 'ticket-1',
       order: { symbol: 'AAPL', side: 'buy', qty: 1, meta: { requestId: 'req-1' } }
     });
-    assert.strictEqual(runtime.legacyState.pendingByReqId.has('req-1'), false);
-    assert.strictEqual(runtime.legacyState.pendingIdByReqId.has('req-1'), false);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), undefined);
     assert.strictEqual(runtime.legacyState.retryCounts.has('req-1'), false);
-    assert.strictEqual(runtime.legacyState.ticketToKey.get('ticket-1'), key);
-    assert.strictEqual(runtime.legacyState.placedOrderByKey.get(key).ticket, 'ticket-1');
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), key);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(key).ticket, 'ticket-1');
   }
 
   {
@@ -99,16 +97,76 @@ async function run() {
     const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
     handlers['orders:new'](null, row);
     const key = rowKey(row);
-    runtime.legacyState.ticketToKey.set('ticket-1', key);
-    runtime.legacyState.placedOrderByKey.set(key, { ticket: 'ticket-1' });
+    runtime.legacyOrderStateApi.bindTicket('ticket-1', key);
+    runtime.legacyOrderStateApi.markPlacedOrder(key, { ticket: 'ticket-1' });
     handlers['position:opened'](null, { ticket: 'ticket-1', origOrder: {} });
-    assert.strictEqual(runtime.legacyState.cardStates.get(key), 'executing');
-    assert.strictEqual(runtime.legacyState.placedOrderByKey.has(key), false);
+    assert.strictEqual(runtime.legacyOrderStateApi.getCardState(key), 'executing');
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(key), undefined);
     handlers['position:closed'](null, { ticket: 'ticket-1', profit: -5 });
-    assert.strictEqual(runtime.legacyState.cardStates.get(key), 'loss');
+    assert.strictEqual(runtime.legacyOrderStateApi.getCardState(key), 'loss');
     handlers['order:cancelled'](null, { ticket: 'ticket-1' });
     assert.strictEqual(runtime.rows().length, 0);
-    assert.strictEqual(runtime.legacyState.ticketToKey.has('ticket-1'), false);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), undefined);
+  }
+
+  {
+    const { runtime } = createRuntime();
+    const key = 'row|key';
+    runtime.legacyOrderStateApi.markPendingRequest('req-1', key, { retryCount: 3, pendingId: 'pending-1' });
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), key);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), 'pending-1');
+    runtime.legacyOrderStateApi.setPendingId('req-1', 'pending-2');
+    assert.strictEqual(runtime.legacyOrderStateApi.getPendingId('req-1'), 'pending-2');
+    runtime.legacyOrderStateApi.clearPendingRequest('req-1');
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), undefined);
+    runtime.legacyOrderStateApi.markPendingRequest('req-2', key);
+    runtime.legacyOrderStateApi.clearPendingByKey(key);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-2'), undefined);
+  }
+
+  {
+    const { runtime } = createRuntime();
+    const key = 'row|key';
+    runtime.legacyOrderStateApi.markPlacedOrder(key, { provider: 'simulated', ticket: 'ticket-1', symbol: 'AAPL' });
+    runtime.legacyOrderStateApi.bindTicket('ticket-1', key);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), key);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(key).ticket, 'ticket-1');
+    assert.deepStrictEqual(runtime.legacyOrderStateApi.listPlacedOrders(), [{
+      key,
+      orderInfo: { provider: 'simulated', ticket: 'ticket-1', symbol: 'AAPL' },
+      state: undefined
+    }]);
+    runtime.legacyOrderStateApi.deletePlacedOrder(key);
+    runtime.legacyOrderStateApi.unbindTicket('ticket-1');
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(key), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), undefined);
+  }
+
+  {
+    const { runtime, handlers, rowKey } = createRuntime();
+    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100 };
+    handlers['orders:new'](null, row);
+    const oldKey = rowKey(row);
+    runtime.legacyOrderStateApi.markPendingRequest('req-1', oldKey, { pendingId: 'pending-1' });
+    runtime.legacyOrderStateApi.setPendingExecLabel(oldKey, 'OPEN');
+    runtime.legacyOrderStateApi.setCardState(oldKey, 'pending');
+    runtime.legacyOrderStateApi.markPlacedOrder(oldKey, { ticket: 'ticket-1' });
+    runtime.legacyOrderStateApi.bindTicket('ticket-1', oldKey);
+
+    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    const newKey = rowKey(runtime.rows()[0]);
+    assert.notStrictEqual(newKey, oldKey);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), newKey);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPendingExecLabel(newKey), 'OPEN');
+    assert.strictEqual(runtime.legacyOrderStateApi.getCardState(newKey), 'pending');
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(newKey).ticket, 'ticket-1');
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), newKey);
+    runtime.legacyOrderStateApi.clearExecutionStateByKey(newKey);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPendingExecLabel(newKey), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.getCardState(newKey), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.getPlacedOrder(newKey), undefined);
+    assert.strictEqual(runtime.legacyOrderStateApi.resolveTicketKey('ticket-1'), undefined);
   }
 
   console.log('legacyOrderListRuntime tests passed');
