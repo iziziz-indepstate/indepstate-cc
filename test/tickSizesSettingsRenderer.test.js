@@ -15,7 +15,7 @@ async function run() {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, ...args) => {
       calls.push({ ch, args });
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:list') return [{ key: 'tick-sizes', name: 'Tick sizes' }];
       if (ch === 'settings:get') {
         if (args[0] === 'tick-sizes') {

@@ -21,7 +21,7 @@ async function run() {
     on: (channel, handler) => { handlers[channel] = handler; },
     invoke: async (channel, ...args) => {
       calls.push({ channel, args });
-      if (channel === 'orders:list') return [];
+      if (channel === 'order-cards:list') return [];
       if (channel === 'settings:list') return [{ key: 'actions-bus', name: 'Actions bus', group: 'automation' }];
       if (channel === 'settings:get' && args[0] === 'actions-bus') {
         return { config: initialConfig, descriptor };

@@ -88,7 +88,7 @@ async function run() {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, payload) => {
       calls.push({ ch, payload });
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'positions:list') return [optionPosition(row, 'draft')];
       if (ch === 'settings:get' && payload === 'optionstrat') return { valuationRefreshMs: 5000 };
       if (ch === 'settings:get') return {};
@@ -139,7 +139,7 @@ async function run() {
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert(document.querySelector('.position-card[data-position-id="pos-opt-1"]'));
 
-  handlers['orders:new'](null, row);
+  handlers['order-cards:changed'](null, { type: 'upsert', row });
   await new Promise(resolve => setTimeout(resolve, 20));
 
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
@@ -178,7 +178,7 @@ async function run() {
   assert.strictEqual(document.querySelectorAll('.card').length, 0);
   assert(calls.some(call => call.ch === 'positions:remove' && call.payload.positionId === 'pos-opt-1'));
 
-  handlers['orders:new'](null, row);
+  handlers['order-cards:changed'](null, { type: 'upsert', row });
   await new Promise(resolve => setTimeout(resolve, 20));
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`));
@@ -221,7 +221,7 @@ async function run() {
     requestId: 'req-opt-2',
     time: 2
   };
-  handlers['orders:new'](null, duplicateRow);
+  handlers['order-cards:changed'](null, { type: 'upsert', row: duplicateRow });
   await new Promise(resolve => setTimeout(resolve, 20));
   const duplicateKey = t.rowKey(duplicateRow);
   const duplicateCard = document.querySelector(`.card[data-rowkey="${duplicateKey}"]:not(.position-card)`);
@@ -239,7 +239,7 @@ async function run() {
     requestId: 'req-opt-3',
     time: 3
   };
-  handlers['orders:new'](null, noIdentityRow);
+  handlers['order-cards:changed'](null, { type: 'upsert', row: noIdentityRow });
   await new Promise(resolve => setTimeout(resolve, 20));
   const noIdentityKey = t.rowKey(noIdentityRow);
   assert(document.querySelector(`.card[data-rowkey="${noIdentityKey}"]:not(.position-card)`));

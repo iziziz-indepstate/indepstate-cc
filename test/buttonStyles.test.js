@@ -24,7 +24,7 @@ async function run() {
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, ...args) => {
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:get') return { autoscroll: true };
       if (ch === 'settings:list') return [];
       if (ch === 'settings:set') return true;
@@ -54,7 +54,7 @@ async function run() {
   await new Promise(resolve => setImmediate(resolve));
 
   const row = { cardType: 'legacyExtension', ticker: 'TST', event: 'evt', time: 0, price: 1 };
-  handlers['orders:new'](null, row);
+  handlers['order-cards:changed'](null, { type: 'upsert', row });
   const card = t.cardByKey(t.rowKey(row));
   const buttons = card.querySelectorAll('button.btn');
   const bfbBtn = Array.from(buttons).find(b => b.dataset.kind === 'BFB');

@@ -4,6 +4,7 @@ const loadConfig = require('../../config/load');
 const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
+const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 
 settings.register(
   'order-cards',
@@ -113,8 +114,7 @@ function registerMainApplicationServices(context = {}) {
     positions: context.positions || servicesApi.positions,
     resolveProviderName: context.resolveProviderName,
     getSourceServices: () => sourceServices,
-    publish: context.publish || context.sendToRenderer,
-    legacyPublish: context.legacyPublish || context.sendToRenderer
+    publish: context.publish || context.sendToRenderer
   });
   servicesApi.orderCards = applicationService;
 
@@ -127,4 +127,8 @@ function registerMainApplicationServices(context = {}) {
 
 function initService() {}
 
-module.exports = { initService, rendererHandlers, registerMainApplicationServices };
+function registerMainIpcHandlers({ ipcMain, servicesApi } = {}) {
+  registerOrderCardsIpcHandlers({ ipcMain, servicesApi });
+}
+
+module.exports = { initService, rendererHandlers, registerMainApplicationServices, registerMainIpcHandlers };

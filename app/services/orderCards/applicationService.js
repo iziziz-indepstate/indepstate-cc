@@ -39,8 +39,7 @@ function createOrderCardsApplicationService({
   resolveProviderName,
   detectInstrumentType: detectType = detectInstrumentType,
   getSourceServices,
-  publish,
-  legacyPublish
+  publish
 } = {}) {
   const readModel = new Map();
   nextServiceInstanceId += 1;
@@ -70,12 +69,6 @@ function createOrderCardsApplicationService({
 
   function publishUpdate(update) {
     publish?.('order-cards:changed', update);
-    if (update?.type === 'upsert' && shouldRouteRowToLegacyRuntime(update.row)) {
-      legacyPublish?.('orders:new', { ...update.row, __orderCardsEventId: update.eventId });
-    }
-    if (update?.type === 'remove') {
-      legacyPublish?.('orders:remove', { ...update.filter, __orderCardsEventId: update.eventId });
-    }
   }
 
   function ingestRow(row = {}, context = {}) {

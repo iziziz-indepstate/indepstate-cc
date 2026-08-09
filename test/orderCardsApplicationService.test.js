@@ -8,8 +8,7 @@ async function run() {
     const service = createOrderCardsApplicationService({
       positions: { handle: cmd => positionCommands.push(cmd) },
       resolveProviderName: ({ instrumentType }) => instrumentType === 'CX' ? 'ccxt:binance' : 'simulated',
-      publish: (channel, payload) => published.push({ channel, payload }),
-      legacyPublish: (channel, payload) => published.push({ channel, payload, legacy: true })
+      publish: (channel, payload) => published.push({ channel, payload })
     });
 
     const row = service.ingestRow({ symbol: 'BTCUSDT.P', event: 'up', time: 2 }, { source: 'webhook' });
@@ -32,19 +31,16 @@ async function run() {
     const published = [];
     const service = createOrderCardsApplicationService({
       positions: { handle: cmd => positionCommands.push(cmd) },
-      publish: (channel, payload) => published.push({ channel, payload }),
-      legacyPublish: (channel, payload) => published.push({ channel, payload, legacy: true })
+      publish: (channel, payload) => published.push({ channel, payload })
     });
 
     const row = service.ingestRow({ cardType: 'legacyExtension', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'webhook' });
     assert.strictEqual(row.cardType, 'legacyExtension');
     assert.strictEqual(positionCommands.length, 0);
-    assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed', 'orders:new']);
+    assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
     assert.strictEqual(published[0].payload.source, 'webhook');
     assert.ok(published[0].payload.eventId);
-    assert.strictEqual(published[1].payload.__orderCardsEventId, published[0].payload.eventId);
-    assert.strictEqual(published[1].payload.ticker, 'AAPL');
   }
 
   {
@@ -55,8 +51,7 @@ async function run() {
     try {
       const service = createOrderCardsApplicationService({
         positions: { handle: () => ({ ok: false, error: 'invalid position' }) },
-        publish: (channel, payload) => published.push({ channel, payload }),
-        legacyPublish: (channel, payload) => published.push({ channel, payload, legacy: true })
+        publish: (channel, payload) => published.push({ channel, payload })
       });
       const result = service.ingestRow({ ticker: 'MSFT', event: 'up', time: 3 });
       assert.deepStrictEqual(result, { ok: false, error: 'invalid position' });
@@ -75,8 +70,7 @@ async function run() {
     try {
       const service = createOrderCardsApplicationService({
         positions: { handle: () => { throw new Error('boom'); } },
-        publish: (channel, payload) => published.push({ channel, payload }),
-        legacyPublish: (channel, payload) => published.push({ channel, payload, legacy: true })
+        publish: (channel, payload) => published.push({ channel, payload })
       });
       const result = service.ingestRow({ ticker: 'NVDA', event: 'up', time: 4 });
       assert.deepStrictEqual(result, { ok: false, error: 'boom' });
@@ -91,20 +85,15 @@ async function run() {
   {
     const published = [];
     const service = createOrderCardsApplicationService({
-      publish: (channel, payload) => published.push({ channel, payload }),
-      legacyPublish: (channel, payload) => published.push({ channel, payload, legacy: true })
+      publish: (channel, payload) => published.push({ channel, payload })
     });
     service.ingestRow({ cardType: 'legacyExtension', ticker: 'AAPL', producingLineId: 'line-1', time: 1 });
     const result = service.remove({ producingLineId: 'line-1' });
     assert.deepStrictEqual(result, { ok: true });
-    assert.deepStrictEqual(published.slice(-2).map(item => item.channel), ['order-cards:changed', 'orders:remove']);
-    assert.strictEqual(published[published.length - 2].payload.type, 'remove');
-    assert.ok(published[published.length - 2].payload.eventId);
-    assert.strictEqual(
-      published[published.length - 1].payload.__orderCardsEventId,
-      published[published.length - 2].payload.eventId
-    );
-    assert.strictEqual(published[published.length - 1].payload.producingLineId, 'line-1');
+    assert.deepStrictEqual(published.slice(-1).map(item => item.channel), ['order-cards:changed']);
+    assert.strictEqual(published[published.length - 1].payload.type, 'remove');
+    assert.ok(published[published.length - 1].payload.eventId);
+    assert.strictEqual(published[published.length - 1].payload.filter.producingLineId, 'line-1');
   }
 
   {

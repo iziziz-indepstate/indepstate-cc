@@ -404,7 +404,7 @@ function createLegacyOrderListRuntime({
   }
 
   function loadInitialRows(limit = 100) {
-    return ipcRenderer.invoke('orders:list', limit).then(rows => {
+    return ipcRenderer.invoke('order-cards:list', limit).then(rows => {
       state.rows = Array.isArray(rows)
         ? rows.filter(row => shouldRouteRowToLegacyRuntime(row) && !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
         : [];
@@ -554,16 +554,6 @@ function createLegacyOrderListRuntime({
       }
       setCardState(key, null);
       render();
-    });
-
-    ipcRenderer.on('orders:remove', (_evt, filter) => {
-      if (rememberOrderCardsEventId(extractOrderCardsEventId(filter))) return;
-      applyOrderCardRemoval(withoutOrderCardsEventId(filter));
-    });
-
-    ipcRenderer.on('orders:new', (_evt, row) => {
-      if (rememberOrderCardsEventId(extractOrderCardsEventId(row))) return;
-      applyOrderCardUpdate(withoutOrderCardsEventId(row), { place });
     });
 
     ipcRenderer.on('order-cards:changed', (_evt, update) => {

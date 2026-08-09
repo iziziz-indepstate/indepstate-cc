@@ -90,6 +90,17 @@ function run() {
   assert.strictEqual(second, appService);
   assert.strictEqual(sources.length, 2);
 
+  const handlers = new Map();
+  manifest.registerMainIpcHandlers({
+    ipcMain: {
+      handle(name, fn) {
+        handlers.set(name, fn);
+      }
+    },
+    servicesApi
+  });
+  assert.deepStrictEqual([...handlers.keys()], ['order-cards:list']);
+
   console.log('orderCardsManifestMain tests passed');
 }
 

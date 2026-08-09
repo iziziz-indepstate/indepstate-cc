@@ -25,7 +25,7 @@ async function run() {
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, payload, data) => {
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:get' && payload === 'optionstrat') return { valuationRefreshMs: 5000 };
       if (ch === 'settings:get') return { autoscroll: true };
       if (ch === 'settings:list') return [];
@@ -110,7 +110,7 @@ async function run() {
     ]
   };
 
-  handlers['orders:new'](null, row);
+  handlers['order-cards:changed'](null, { type: 'upsert', row });
   await new Promise(resolve => setImmediate(resolve));
   await new Promise(resolve => setImmediate(resolve));
   const key = t.rowKey(row);

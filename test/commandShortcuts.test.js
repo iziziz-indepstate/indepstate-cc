@@ -13,7 +13,7 @@ async function run() {
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, ...args) => {
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:get' && args[0] === 'ui') return { autoscroll: true };
       if (ch === 'cmdline:shortcuts') return ['l'];
       if (ch === 'settings:list') return [];

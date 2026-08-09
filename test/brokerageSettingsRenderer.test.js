@@ -14,7 +14,7 @@ async function run() {
     on: () => {},
     invoke: async (ch, ...args) => {
       calls.push({ ch, args });
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:list') return [{ key: 'brokerage', name: 'Brokerage' }];
       if (ch === 'settings:get') {
         if (args[0] === 'brokerage') {

@@ -14,7 +14,7 @@ async function run() {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, ...args) => {
       invokes.push({ ch, args });
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'settings:get') return { autoscroll: true };
       if (ch === 'settings:list') return [];
       if (ch === 'settings:set') return true;
@@ -43,7 +43,7 @@ async function run() {
   const t = renderer.__testing;
 
   const row = { cardType: 'legacyExtension', ticker: 'TST', event: 'evt', time: 0, price: 1 };
-  handlers['orders:new'](null, row);
+  handlers['order-cards:changed'](null, { type: 'upsert', row });
   const key = t.rowKey(row);
   t.setCardState(key, 'pending-exec');
 

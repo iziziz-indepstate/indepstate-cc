@@ -62,8 +62,8 @@ async function run() {
   {
     const { runtime, handlers } = createRuntime();
     handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 } });
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'MSFT', event: 'up', time: 1, price: 50 });
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'MSFT', event: 'up', time: 1, price: 50 } });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 } });
     assert.strictEqual(runtime.rows().length, 2);
     assert.deepStrictEqual(runtime.rows()[0], { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
   }
@@ -71,7 +71,7 @@ async function run() {
   {
     const { runtime, handlers, getRenderCount } = createRuntime();
     handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100 } });
-    handlers['orders:new'](null, { cardType: 'regular', ticker: 'MSFT', event: 'up', time: 1, price: 50 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'regular', ticker: 'MSFT', event: 'up', time: 1, price: 50 } });
     assert.strictEqual(runtime.rows().length, 0);
     assert.strictEqual(getRenderCount(), 0);
   }
@@ -93,29 +93,18 @@ async function run() {
   }
 
   {
-    const { runtime, handlers, getRenderCount } = createRuntime();
-    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
-    handlers['order-cards:changed'](null, { type: 'upsert', row, eventId: 'evt-upsert-1' });
-    handlers['orders:new'](null, { ...row, __orderCardsEventId: 'evt-upsert-1' });
-    assert.strictEqual(runtime.rows().length, 1);
-    assert.deepStrictEqual(runtime.rows()[0], row);
-    assert.strictEqual(getRenderCount(), 1);
-  }
-
-  {
     const { runtime, handlers, getRenderCount, resetRenderCount } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     resetRenderCount();
     handlers['order-cards:changed'](null, { type: 'remove', filter: { producingLineId: 'line-1' }, eventId: 'evt-remove-1' });
-    handlers['orders:remove'](null, { producingLineId: 'line-1', __orderCardsEventId: 'evt-remove-1' });
     assert.strictEqual(runtime.rows().length, 0);
     assert.strictEqual(getRenderCount(), 1);
   }
 
   {
     const { runtime, handlers, getRenderCount } = createRuntime();
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 } });
     assert.strictEqual(runtime.rows().length, 1);
     assert.strictEqual(getRenderCount(), 1);
   }
@@ -130,9 +119,9 @@ async function run() {
   {
     const { runtime, handlers } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     runtime.markTouched('AAPL');
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 } });
     assert.strictEqual(runtime.rows().length, 1);
     assert.deepStrictEqual(runtime.rows()[0], row);
   }
@@ -140,13 +129,13 @@ async function run() {
   {
     const { runtime, handlers, rowKey } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     runtime.legacyOrderStateApi.setCardState(rowKey(row), 'closed');
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 } });
     assert.deepStrictEqual(runtime.rows()[0], row);
 
     runtime.setClosedCardEventStrategy('revive');
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 } });
     assert.strictEqual(runtime.rows()[0].event, 'down');
     assert.strictEqual(runtime.legacyOrderStateApi.getCardState(rowKey(row)), undefined);
   }
@@ -154,7 +143,7 @@ async function run() {
   {
     const { runtime, handlers, rowKey } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', symbol: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     const key = rowKey(row);
     runtime.legacyOrderStateApi.markPendingRequest('req-1', key, { retryCount: 2, pendingId: 'pending-1' });
     handlers['execution:result'](null, {
@@ -174,7 +163,7 @@ async function run() {
   {
     const { runtime, handlers, rowKey } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     const key = rowKey(row);
     runtime.legacyOrderStateApi.bindTicket('ticket-1', key);
     runtime.legacyOrderStateApi.markPlacedOrder(key, { ticket: 'ticket-1' });
@@ -229,7 +218,7 @@ async function run() {
   {
     const { runtime, handlers, rowKey } = createRuntime();
     const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 };
-    handlers['orders:new'](null, row);
+    handlers['order-cards:changed'](null, { type: 'upsert', row });
     const oldKey = rowKey(row);
     runtime.legacyOrderStateApi.markPendingRequest('req-1', oldKey, { pendingId: 'pending-1' });
     runtime.legacyOrderStateApi.setPendingExecLabel(oldKey, 'OPEN');
@@ -237,7 +226,7 @@ async function run() {
     runtime.legacyOrderStateApi.markPlacedOrder(oldKey, { ticket: 'ticket-1' });
     runtime.legacyOrderStateApi.bindTicket('ticket-1', oldKey);
 
-    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 } });
     const newKey = rowKey(runtime.rows()[0]);
     assert.notStrictEqual(newKey, oldKey);
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), newKey);

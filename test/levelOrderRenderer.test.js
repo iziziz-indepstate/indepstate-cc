@@ -72,7 +72,7 @@ async function run() {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, payload) => {
       calls.push({ ch, payload });
-      if (ch === 'orders:list') return [
+      if (ch === 'order-cards:list') return [
         { cardType: 'levelOrder', ticker: 'LEGACY', event: 'levelOrder', time: 1, level: 10 }
       ];
       if (ch === 'positions:list') return [initialPosition];

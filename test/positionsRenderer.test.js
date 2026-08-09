@@ -104,7 +104,7 @@ async function run() {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, payload) => {
       calls.push({ ch, payload });
-      if (ch === 'orders:list') return [];
+      if (ch === 'order-cards:list') return [];
       if (ch === 'positions:list') return [initialPosition];
       if (ch === 'settings:get') return {};
       if (ch === 'settings:list') return [];
@@ -206,7 +206,7 @@ async function run() {
   assert(regularOpenCall);
   assert.strictEqual(regularOpenCall.payload.ticker, 'MSFT');
 
-  handlers['orders:new'](null, {
+  handlers['order-cards:changed'](null, { type: 'upsert', row: {
     cardType: 'regular',
     ticker: 'MSFT',
     event: 'up',
@@ -218,7 +218,7 @@ async function run() {
     riskUsd: 10,
     provider: 'simulated',
     instrumentType: 'EQ'
-  });
+  } });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(document.querySelectorAll('.position-card[data-position-id="pos-reg-1"]').length, 1);
   assert.strictEqual(document.querySelector('.card[data-ticker="MSFT"]:not(.position-card)'), null);
@@ -292,7 +292,7 @@ async function run() {
   assert.strictEqual(t.positionsById.has('pos-child-1'), true);
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-child-1"]'), null);
 
-  handlers['orders:new'](null, {
+  handlers['order-cards:changed'](null, { type: 'upsert', row: {
     cardType: 'levelOrder',
     ticker: 'ADAUSDT',
     event: 'levelOrder',
@@ -304,7 +304,7 @@ async function run() {
     takeProfitPts: 12,
     provider: 'simulated',
     instrumentType: 'CX'
-  });
+  } });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(t.positionsById.has('pos-1'), true);
   assert(document.querySelector('.position-card[data-position-id="pos-1"]'));

@@ -1,4 +1,4 @@
-const { ipcMain, BrowserWindow } = require('electron');
+const { ipcMain } = require('electron');
 const path = require('path');
 const settings = require('../settings');
 const { createCommandService } = require('.');
@@ -8,26 +8,6 @@ settings.register(
   path.join(__dirname, 'config', 'command-line.json'),
   path.join(__dirname, 'config', 'command-line-settings-descriptor.json')
 );
-
-function isMainAppWindow(win) {
-  if (!win || win.isDestroyed?.()) return false;
-  const url = String(win.webContents?.getURL?.() || '');
-  return /(?:^|\/|\\)index\.html(?:$|[?#])/i.test(url);
-}
-
-function getOrderWindows() {
-  const windows = (BrowserWindow.getAllWindows?.() || []).filter(win => win && !win.isDestroyed?.());
-  return windows.filter(isMainAppWindow);
-}
-
-function sendToOrderWindows(channel, payload) {
-  let sent = 0;
-  for (const win of getOrderWindows()) {
-    win.webContents?.send?.(channel, payload);
-    sent += 1;
-  }
-  return sent;
-}
 
 function initService(servicesApi = {}) {
   const { config } = settings.readConfig('command-line') || {};
@@ -40,8 +20,7 @@ function initService(servicesApi = {}) {
       if (typeof orderCards?.ingestRow === 'function') {
         return orderCards.ingestRow(row, { source: 'commandLine' });
       }
-      sendToOrderWindows('orders:new', row);
-      return row;
+      return { ok: false, error: 'Order cards service unavailable' };
     },
     onRemove(filter) {
       if (!filter || typeof filter !== 'object') return { ok: false, error: 'Invalid remove payload' };
@@ -49,8 +28,7 @@ function initService(servicesApi = {}) {
       if (typeof orderCards?.remove === 'function') {
         return orderCards.remove(filter);
       }
-      if (sendToOrderWindows('orders:remove', filter) > 0) return { ok: true };
-      return { ok: false, error: 'No window' };
+      return { ok: false, error: 'Order cards service unavailable' };
     }
   });
   servicesApi.commandLine = cmdService;
@@ -154,4 +132,4 @@ function hookRenderer(ipcRenderer) {
   });
 }
 
-module.exports = { initService, hookRenderer, isMainAppWindow, getOrderWindows };
+module.exports = { initService, hookRenderer };

@@ -63,7 +63,16 @@ class AddCommand extends Command {
     };
     if (tp != null) row.tp = tp;
     if (risk != null) row.risk = risk;
-    if (typeof this.onAdd === 'function') this.onAdd(row);
+    if (typeof this.onAdd === 'function') {
+      const res = this.onAdd(row);
+      if (res && typeof res.then === 'function') {
+        return res.then((out) => (out && typeof out === 'object' ? out : { ok: true })).catch((err) => ({
+          ok: false,
+          error: err?.message || 'Add handler error'
+        }));
+      }
+      if (res && typeof res === 'object' && res.ok === false) return res;
+    }
     return { ok: true };
   }
 }

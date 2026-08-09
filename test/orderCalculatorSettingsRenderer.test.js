@@ -14,7 +14,7 @@ async function run() {
     on() {},
     invoke: async (channel, ...args) => {
       calls.push({ channel, args });
-      if (channel === 'orders:list') return [];
+      if (channel === 'order-cards:list') return [];
       if (channel === 'settings:list') return [{ key: 'order-calculator', name: 'Order calculator' }];
       if (channel === 'settings:get' && args[0] === 'order-calculator') {
         return {

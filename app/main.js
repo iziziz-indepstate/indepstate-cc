@@ -26,7 +26,6 @@ const {
   registerPositionsIpcHandlers
 } = require('./infrastructure/positions');
 const {
-  registerOrderListIpcHandlers,
   registerWindowStateIpcHandlers
 } = require('./infrastructure/electron');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
@@ -388,10 +387,5 @@ function setupIpc() {
   createPositionsChangedPublisher({
     positionsService: servicesApi.positions,
     getMainWindow: () => mainWindow
-  });
-  registerOrderListIpcHandlers({
-    ipcMain,
-    servicesApi,
-    execLog: EXEC_LOG
   });
 }
