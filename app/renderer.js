@@ -14,7 +14,15 @@ const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
 
 let legacyOrderListRuntime;
-const rendererRuntimes = new Map();
+const defaultInstrumentDisplayPolicy = {
+  getInstrumentRefreshMs: () => 1000,
+  shouldShowBidAsk: () => false,
+  shouldShowSpread: () => false
+};
+const rendererExtensions = {
+  instrumentDisplayPolicy: [],
+  cardStateHook: []
+};
 let state;
 let appState;
 let uiState;
@@ -198,17 +206,61 @@ function isPositionRenderedByLegacyRow(position = {}) {
   return state.rows.some(row => positionMatchesLegacyRow(position, row));
 }
 
-function registerRendererRuntime(name, runtime) {
-  const key = String(name || '').trim();
-  if (!key || !runtime || typeof runtime !== 'object') return false;
-  rendererRuntimes.set(key, runtime);
+function registerRendererExtension(kind, extension) {
+  if (!kind || !extension) return false;
+  if (!rendererExtensions[kind]) rendererExtensions[kind] = [];
+  rendererExtensions[kind].push(extension);
   return () => {
-    if (rendererRuntimes.get(key) === runtime) rendererRuntimes.delete(key);
+    const extensions = rendererExtensions[kind];
+    if (!Array.isArray(extensions)) return;
+    const index = extensions.indexOf(extension);
+    if (index >= 0) extensions.splice(index, 1);
   };
 }
 
-function getRendererRuntime(name) {
-  return rendererRuntimes.get(String(name || '').trim()) || null;
+function registerInstrumentDisplayPolicy(policy) {
+  if (!policy || typeof policy !== 'object') return false;
+  return registerRendererExtension('instrumentDisplayPolicy', policy);
+}
+
+function registerCardStateHook(hook) {
+  if (typeof hook !== 'function') return false;
+  return registerRendererExtension('cardStateHook', hook);
+}
+
+function instrumentDisplayPolicyValue(method) {
+  const policies = rendererExtensions.instrumentDisplayPolicy || [];
+  for (let index = policies.length - 1; index >= 0; index -= 1) {
+    const policy = policies[index];
+    if (typeof policy?.[method] !== 'function') continue;
+    const value = policy[method]();
+    if (value !== undefined) return value;
+  }
+  return defaultInstrumentDisplayPolicy[method]();
+}
+
+function getInstrumentRefreshMs() {
+  const value = Number(instrumentDisplayPolicyValue('getInstrumentRefreshMs'));
+  return Number.isFinite(value) && value > 0 ? value : defaultInstrumentDisplayPolicy.getInstrumentRefreshMs();
+}
+
+function shouldShowBidAsk() {
+  return !!instrumentDisplayPolicyValue('shouldShowBidAsk');
+}
+
+function shouldShowSpread() {
+  return !!instrumentDisplayPolicyValue('shouldShowSpread');
+}
+
+function notifyCardRestored(args = {}) {
+  const hooks = rendererExtensions.cardStateHook || [];
+  for (const hook of hooks) {
+    try {
+      hook(args);
+    } catch (err) {
+      console.error('[rendererExtension] cardStateHook failed', err?.message || err);
+    }
+  }
 }
 
 function positionKey(position = {}) {
@@ -529,8 +581,8 @@ function setCardState(key, state) {
     card.classList.remove('card--pending');
     if (spreadEl) {
       spreadEl.style.display = '';
-      if (getRendererRuntime('orderCards')?.shouldShowSpread?.()) updateSpreadForTicker(card.dataset.ticker);
     }
+    notifyCardRestored({ card, updateSpreadForTicker });
     if (close) close.style.display = '';
     inputs.forEach(inp => {
       inp.disabled = false;
@@ -656,9 +708,9 @@ function positionInstrumentRows() {
 const instrumentInfoRenderer = createInstrumentInfoRenderer({
   ipcRenderer,
   state,
-  getInstrumentRefreshMs: () => getRendererRuntime('orderCards')?.getInstrumentRefreshMs?.() || 1000,
-  shouldShowBidAsk: () => !!getRendererRuntime('orderCards')?.shouldShowBidAsk?.(),
-  shouldShowSpread: () => !!getRendererRuntime('orderCards')?.shouldShowSpread?.(),
+  getInstrumentRefreshMs,
+  shouldShowBidAsk,
+  shouldShowSpread,
   findTickSizeOverride,
   getDefaultTickSize,
   cardByKey,
@@ -858,8 +910,9 @@ loadRendererHandlers({
   dispatchPositionAction,
   requestRemovePosition,
   registerLegacyOrderCardsRuntime,
-  registerRendererRuntime,
-  getRendererRuntime,
+  registerRendererExtension,
+  registerInstrumentDisplayPolicy,
+  registerCardStateHook,
   registerOrderCardInstrumentHandler,
   registerOrderCardTypeHandler,
   registerPositionCardRenderer(cardType, renderer) {
@@ -875,7 +928,7 @@ loadRendererHandlers({
 });
 
 if (!legacyOrderListRuntime || !createLegacyOrderCard) {
-  throw new Error('orderCards renderer runtime was not registered');
+  throw new Error('legacy order cards renderer was not registered');
 }
 
 for (const { dir, manifest } of loadRendererServiceManifests()) {
@@ -1122,8 +1175,12 @@ if (typeof module !== 'undefined') {
     dispatchPositionAction,
     instrumentInfo,
     settingsForms,
-    registerRendererRuntime,
-    getRendererRuntime,
+    registerRendererExtension,
+    registerInstrumentDisplayPolicy,
+    registerCardStateHook,
+    getInstrumentRefreshMs,
+    shouldShowBidAsk,
+    shouldShowSpread,
     migrateKey: legacyOrderListRuntime.migrateKey,
     orderCardInstrumentHandlers: orderCardsApi.instrumentTypeHandlers,
     orderCardTypeHandlers: orderCardsApi.cardTypeHandlers,

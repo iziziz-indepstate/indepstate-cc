@@ -13,9 +13,10 @@ function run() {
     }
   };
   let fakeClosedCardEventStrategy = 'ignore';
+  let fakeShouldShowSpread = true;
   const fakeOrderCardsRuntime = {
     shouldShowBidAsk: () => true,
-    shouldShowSpread: () => true,
+    shouldShowSpread: () => fakeShouldShowSpread,
     getInstrumentRefreshMs: () => 777,
     getCardButtons: () => [{ label: 'LIVE', action: 'BL', style: 'bl' }],
     getButtonRows: () => 2,
@@ -85,7 +86,8 @@ function run() {
   Module._load = originalLoad;
 
   let legacyRegistration = null;
-  let registeredRendererRuntime = null;
+  let registeredInstrumentDisplayPolicy = null;
+  let registeredCardStateHook = null;
   const positionRenderers = {};
   const shellGetter = () => false;
   const orderCardsDeps = {
@@ -117,8 +119,11 @@ function run() {
     registerLegacyOrderCardsRuntime(registration) {
       legacyRegistration = registration;
     },
-    registerRendererRuntime(name, runtime) {
-      registeredRendererRuntime = { name, runtime };
+    registerInstrumentDisplayPolicy(policy) {
+      registeredInstrumentDisplayPolicy = policy;
+    },
+    registerCardStateHook(hook) {
+      registeredCardStateHook = hook;
     },
     registerPositionCardRenderer(cardType, renderer) {
       positionRenderers[cardType] = renderer;
@@ -131,7 +136,24 @@ function run() {
   assert.strictEqual(calls[0][1].env, env);
   assert.strictEqual(calls[0][1].render, render);
   assert.strictEqual(typeof calls[0][1].onConfigApplied, 'function');
-  assert.deepStrictEqual(registeredRendererRuntime, { name: 'orderCards', runtime: fakeOrderCardsRuntime });
+  assert.strictEqual(typeof registeredInstrumentDisplayPolicy.getInstrumentRefreshMs, 'function');
+  assert.strictEqual(registeredInstrumentDisplayPolicy.getInstrumentRefreshMs(), 777);
+  assert.strictEqual(registeredInstrumentDisplayPolicy.shouldShowBidAsk(), true);
+  assert.strictEqual(registeredInstrumentDisplayPolicy.shouldShowSpread(), true);
+  assert.strictEqual(typeof registeredCardStateHook, 'function');
+  const restored = [];
+  registeredCardStateHook({
+    card: { dataset: { ticker: 'AAPL' } },
+    updateSpreadForTicker: ticker => restored.push(ticker)
+  });
+  assert.deepStrictEqual(restored, ['AAPL']);
+  fakeShouldShowSpread = false;
+  registeredCardStateHook({
+    card: { dataset: { ticker: 'MSFT' } },
+    updateSpreadForTicker: ticker => restored.push(ticker)
+  });
+  assert.deepStrictEqual(restored, ['AAPL']);
+  fakeShouldShowSpread = true;
   assert.strictEqual(calls[1][0], 'createOrderCardsRenderer');
   assert.strictEqual(calls[1][1].marker, orderCardsDeps.marker);
   assert.notStrictEqual(calls[1][1].shouldShowBidAsk, shellGetter);

@@ -26,7 +26,14 @@ const rendererHandlers = [{
         legacyOrderListRuntime?.setClosedCardEventStrategy(runtime.getClosedCardEventStrategy());
       }
     });
-    context.registerRendererRuntime?.('orderCards', orderCardsRuntime);
+    context.registerInstrumentDisplayPolicy?.({
+      getInstrumentRefreshMs: () => orderCardsRuntime.getInstrumentRefreshMs(),
+      shouldShowBidAsk: () => orderCardsRuntime.shouldShowBidAsk(),
+      shouldShowSpread: () => orderCardsRuntime.shouldShowSpread()
+    });
+    context.registerCardStateHook?.(({ card, updateSpreadForTicker }) => {
+      if (orderCardsRuntime.shouldShowSpread()) updateSpreadForTicker?.(card?.dataset?.ticker);
+    });
     const orderCardsRenderer = createOrderCardsRenderer({
       ...(context.orderCardsDeps || {}),
       shouldShowBidAsk: () => orderCardsRuntime.shouldShowBidAsk(),
