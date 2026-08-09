@@ -4,6 +4,7 @@ const { createLegacyOrderListRuntime } = require('../app/services/orderCards/leg
 function createRuntime(overrides = {}) {
   const handlers = {};
   let runtime;
+  let renderCount = 0;
   const rowKey = row => `${row.ticker}|${row.event}|${row.time}|${row.price}`;
   const setCardState = (key, state) => {
     if (state) runtime.legacyOrderStateApi.setCardState(key, state);
@@ -30,22 +31,63 @@ function createRuntime(overrides = {}) {
     positionRemovalHandlerFor: () => null,
     positionMatchesLegacyRow: (position, row) => position.ticker === row.ticker,
     isRegularPositionSnapshot: position => (position.card?.type || 'regular') === 'regular',
-    render: () => {},
+    render: () => { renderCount += 1; },
     now: () => 123,
     ...overrides
   });
   runtime.registerIpcHandlers({ place: async () => ({ status: 'ok' }) });
-  return { runtime, handlers, rowKey };
+  return {
+    runtime,
+    handlers,
+    rowKey,
+    getRenderCount: () => renderCount,
+    resetRenderCount: () => { renderCount = 0; }
+  };
 }
 
 async function run() {
   {
     const { runtime, handlers } = createRuntime();
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 } });
     handlers['orders:new'](null, { ticker: 'MSFT', event: 'up', time: 1, price: 50 });
     handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
     assert.strictEqual(runtime.rows().length, 2);
     assert.deepStrictEqual(runtime.rows()[0], { ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+  }
+
+  {
+    const { runtime, handlers, getRenderCount } = createRuntime();
+    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
+    handlers['order-cards:changed'](null, { type: 'upsert', row, eventId: 'evt-upsert-1' });
+    handlers['orders:new'](null, { ...row, __orderCardsEventId: 'evt-upsert-1' });
+    assert.strictEqual(runtime.rows().length, 1);
+    assert.deepStrictEqual(runtime.rows()[0], row);
+    assert.strictEqual(getRenderCount(), 1);
+  }
+
+  {
+    const { runtime, handlers, getRenderCount, resetRenderCount } = createRuntime();
+    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' };
+    handlers['orders:new'](null, row);
+    resetRenderCount();
+    handlers['order-cards:changed'](null, { type: 'remove', filter: { producingLineId: 'line-1' }, eventId: 'evt-remove-1' });
+    handlers['orders:remove'](null, { producingLineId: 'line-1', __orderCardsEventId: 'evt-remove-1' });
+    assert.strictEqual(runtime.rows().length, 0);
+    assert.strictEqual(getRenderCount(), 1);
+  }
+
+  {
+    const { runtime, handlers, getRenderCount } = createRuntime();
+    handlers['orders:new'](null, { ticker: 'AAPL', event: 'up', time: 1, price: 100 });
+    assert.strictEqual(runtime.rows().length, 1);
+    assert.strictEqual(getRenderCount(), 1);
+  }
+
+  {
+    const { runtime, handlers } = createRuntime();
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' } });
+    handlers['order-cards:changed'](null, { type: 'remove', filter: { producingLineId: 'line-1' } });
+    assert.strictEqual(runtime.rows().length, 0);
   }
 
   {

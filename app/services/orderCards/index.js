@@ -6,6 +6,7 @@ const sources = {
   webhook: require('./webhook').WebhookOrderCardsSource,
   file: require('./file').FileOrderCardsSource,
 };
+const { createOrderCardsApplicationService } = require('./applicationService');
 
 function createOrderCardService(opts = {}) {
   const type = opts.type || 'webhook';
@@ -14,4 +15,4 @@ function createOrderCardService(opts = {}) {
   return new Source(opts);
 }
 
-module.exports = { createOrderCardService, OrderCardsSource };
+module.exports = { createOrderCardService, createOrderCardsApplicationService, OrderCardsSource };
