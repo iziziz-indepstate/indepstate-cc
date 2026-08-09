@@ -13,15 +13,25 @@ async function run() {
       ipcMain,
       servicesApi: {
         orderCards: {
-          list: async ({ rows }) => [{ source: 'orderCards', rows }],
-          getOrdersList: async (rows) => [{ source: 'legacy-webhooks', rows }]
+          list: async ({ source, rows }) => [{ source, rows }]
         }
       }
     });
-    assert.deepStrictEqual(await handlers.get('order-cards:list')(null, 5), [{ source: 'orderCards', rows: 5 }]);
     assert.deepStrictEqual(
-      await handlers.get('order-cards:list')(null, { file: 'webhooks', rows: 8 }),
-      [{ source: 'orderCards', rows: 8 }]
+      await handlers.get('order-cards:list')(null, { source: 'webhooks', rows: 8 }),
+      [{ source: 'webhooks', rows: 8 }]
+    );
+    assert.deepStrictEqual(
+      await handlers.get('order-cards:list')(null, {}),
+      [{ source: 'webhooks', rows: 100 }]
+    );
+    await assert.rejects(
+      () => handlers.get('order-cards:list')(null),
+      /order-cards:list request must be an object/
+    );
+    await assert.rejects(
+      () => handlers.get('order-cards:list')(null, null),
+      /order-cards:list request must be an object/
     );
   }
 
@@ -36,31 +46,17 @@ async function run() {
       ipcMain,
       servicesApi: {
         orderCards: {
-          getOrdersList: async (rows) => [{ source: 'legacy-webhooks', rows }]
-        }
-      }
-    });
-    assert.deepStrictEqual(await handlers.get('order-cards:list')(null, 6), [{ source: 'legacy-webhooks', rows: 6 }]);
-  }
-
-  {
-    const handlers = new Map();
-    const ipcMain = {
-      handle(name, fn) {
-        handlers.set(name, fn);
-      }
-    };
-    registerOrderCardsIpcHandlers({
-      ipcMain,
-      servicesApi: {
-        orderCards: {
-          list: async ({ rows }) => [{ source: 'orderCards', rows }]
+          list: async ({ source, rows }) => [{ source, rows }]
         }
       }
     });
     await assert.rejects(
-      () => handlers.get('order-cards:list')(null, { file: 'executions', rows: 10 }),
-      /Unknown order-cards file alias: executions/
+      () => handlers.get('order-cards:list')(null, { source: 'executions', rows: 10 }),
+      /Unknown order-cards source: executions/
+    );
+    await assert.rejects(
+      () => handlers.get('order-cards:list')(null, { file: 'webhooks', rows: 10 }),
+      /order-cards:list no longer accepts file aliases/
     );
   }
 

@@ -404,7 +404,7 @@ function createLegacyOrderListRuntime({
   }
 
   function loadInitialRows(limit = 100) {
-    return ipcRenderer.invoke('order-cards:list', limit).then(rows => {
+    return ipcRenderer.invoke('order-cards:list', { source: 'webhooks', rows: limit }).then(rows => {
       state.rows = Array.isArray(rows)
         ? rows.filter(row => shouldRouteRowToLegacyRuntime(row) && !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
         : [];

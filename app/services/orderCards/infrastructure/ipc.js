@@ -1,41 +1,39 @@
-function parseListArgs(arg) {
-  let file = 'webhooks';
+function parseListRequest(arg) {
+  let source = 'webhooks';
   let rows = 100;
-  if (typeof arg === 'number') {
-    rows = arg;
-  } else if (arg && typeof arg === 'object') {
-    file = arg.file || file;
-    rows = arg.rows || rows;
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
+    throw new Error('order-cards:list request must be an object');
   }
-  return { file, rows };
+  if (Object.prototype.hasOwnProperty.call(arg, 'file')) {
+    throw new Error('order-cards:list no longer accepts file aliases');
+  }
+  source = arg.source || source;
+  rows = arg.rows || rows;
+  return { source, rows };
 }
 
 function registerOrderCardsIpcHandlers({
   ipcMain,
-  servicesApi,
-  orderService
+  servicesApi
 } = {}) {
   if (!ipcMain || typeof ipcMain.handle !== 'function') {
     throw new Error('ipcMain with handle() is required');
   }
   ipcMain.handle('order-cards:list', async (_evt, arg) => {
-    const { file, rows } = parseListArgs(arg);
-    if (file !== 'webhooks') {
-      throw new Error(`Unknown order-cards file alias: ${file}`);
+    const { source, rows } = parseListRequest(arg);
+    if (source !== 'webhooks') {
+      throw new Error(`Unknown order-cards source: ${source}`);
     }
 
-    const service = servicesApi?.orderCards || orderService;
+    const service = servicesApi?.orderCards;
     if (typeof service?.list === 'function') {
-      return service.list({ rows });
-    }
-    if (typeof service?.getOrdersList === 'function') {
-      return service.getOrdersList(rows);
+      return service.list({ source, rows });
     }
     return [];
   });
 }
 
 module.exports = {
-  parseListArgs,
+  parseListRequest,
   registerOrderCardsIpcHandlers
 };

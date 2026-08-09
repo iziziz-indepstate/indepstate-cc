@@ -28,7 +28,7 @@ function run() {
               calls.push(['start', opts.type]);
               opts.onRow({ ticker: 'AAPL', time: 1 });
             },
-            getOrdersList: async () => []
+            list: async () => []
           };
           sources.push(source);
           return source;

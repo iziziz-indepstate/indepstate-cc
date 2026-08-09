@@ -3,9 +3,9 @@ class OrderCardsSource {
   async start() { throw new Error('Not implemented'); }
   /** @returns {Promise<void>} */
   async stop() { throw new Error('Not implemented'); }
-  /** @param {number} rows
+  /** @param {{ rows?: number }} request
       @returns {Promise<any[]>} */
-  async getOrdersList(_rows) { throw new Error('Not implemented'); }
+  async list(_request = {}) { throw new Error('Not implemented'); }
 }
 
 module.exports = { OrderCardsSource };

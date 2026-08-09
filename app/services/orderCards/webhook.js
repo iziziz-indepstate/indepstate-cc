@@ -80,7 +80,7 @@ class WebhookOrderCardsSource extends OrderCardsSource {
     });
   }
 
-  async getOrdersList(rows = 100) {
+  async list({ rows = 100 } = {}) {
     let text = '';
     try {
       text = fs.readFileSync(this.logFile, 'utf8');

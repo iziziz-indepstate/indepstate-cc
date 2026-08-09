@@ -108,12 +108,15 @@ function createOrderCardsApplicationService({
     return { ok: true };
   }
 
-  async function list({ rows = 100 } = {}) {
+  async function list({ rows = 100, source = 'webhooks' } = {}) {
+    if (source !== 'webhooks') {
+      throw new Error(`Unknown order-cards source: ${source}`);
+    }
     const combined = Array.from(readModel.values());
     const services = typeof getSourceServices === 'function' ? getSourceServices() : [];
     for (const service of services || []) {
-      if (typeof service?.getOrdersList !== 'function') continue;
-      const sourceRows = await service.getOrdersList(rows);
+      if (typeof service?.list !== 'function') continue;
+      const sourceRows = await service.list({ rows });
       for (const row of sourceRows || []) combined.push(row);
     }
     const byKey = new Map();

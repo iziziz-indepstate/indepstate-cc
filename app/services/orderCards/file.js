@@ -91,7 +91,7 @@ class FileOrderCardsSource extends OrderCardsSource {
     this.timer = null;
   }
 
-  async getOrdersList(rows = 100) {
+  async list({ rows = 100 } = {}) {
     const arr = Array.from(this.prev.values()).map(rec => rec.row);
     return arr.slice(-Math.max(1, rows));
   }

@@ -97,11 +97,15 @@ async function run() {
   }
 
   {
+    const sourceCalls = [];
     const sourceService = {
-      getOrdersList: async () => [
-        { ticker: 'MSFT', time: 3 },
-        { ticker: 'AAPL', time: 1, provider: 'manual' }
-      ]
+      list: async (request) => {
+        sourceCalls.push(request);
+        return [
+          { ticker: 'MSFT', time: 3 },
+          { ticker: 'AAPL', time: 1, provider: 'manual' }
+        ];
+      }
     };
     const service = createOrderCardsApplicationService({
       getSourceServices: () => [sourceService],
@@ -110,9 +114,14 @@ async function run() {
     });
     service.ingestRow({ ticker: 'TSLA', time: 2 });
     const rows = await service.list({ rows: 10 });
+    assert.deepStrictEqual(sourceCalls, [{ rows: 10 }]);
     assert.deepStrictEqual(rows.map(row => row.ticker), ['MSFT', 'TSLA', 'AAPL']);
     assert.deepStrictEqual(rows.map(row => row.instrumentType), ['EQ', 'EQ', 'EQ']);
     assert.deepStrictEqual(rows.map(row => row.provider), ['simulated', 'simulated', 'manual']);
+    await assert.rejects(
+      () => service.list({ source: 'executions', rows: 10 }),
+      /Unknown order-cards source: executions/
+    );
   }
 
   console.log('orderCardsApplicationService tests passed');
