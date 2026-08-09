@@ -31,6 +31,7 @@ const {
 const {
   registerMainApplicationServicesForManifests
 } = require('./services/serviceMainRegistration');
+const { isDebugPositionEventsEnabled } = require('./debugPositionEvents');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
 
 function loadServices(servicesApi = {}) {
@@ -101,6 +102,12 @@ global.APP_ROOT = APP_ROOT;
 const LOG_DIR = path.join(app.getPath('userData'), 'logs');
 const EXEC_LOG = path.join(LOG_DIR, 'executions.jsonl');
 const WINDOW_STATE_FILE = path.join(app.getPath('userData'), 'window-state.json');
+
+ipcMain.on('debug:position-events', (_event, payload = {}) => {
+  if (!isDebugPositionEventsEnabled()) return;
+  const level = payload.level === 'warn' ? 'warn' : 'log';
+  console[level]?.('[position-events][renderer]', payload.scope || '', payload.details || {});
+});
 
 // ----------------- FS utils -----------------
 function ensureLogs({ truncateExecutionsOnStart = false } = {}) {

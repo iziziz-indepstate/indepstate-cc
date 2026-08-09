@@ -10,7 +10,7 @@ const {
   calculateStrategyValuation,
   buildOpenStrategyPayload
 } = require('../app/services/optionstrat/infrastructure/adapter');
-const { buildOptionStratRow } = require('../app/services/optionstrat/command');
+const { OptionStratCommand, buildOptionStratRow } = require('../app/services/optionstrat/command');
 const { buildOptionStratHedgePayload } = require('../app/services/optionstrat/hedge');
 
 function encodeProtectedJson(obj) {
@@ -194,6 +194,7 @@ async function run() {
     ]
   }, ['755', '756', '10'], 123);
   assert.strictEqual(built.ok, true);
+  assert.strictEqual(built.row.cardType, 'option');
   assert.strictEqual(built.row.instrumentType, 'OPT');
   assert.strictEqual(built.row.name, 'BCS 755/756');
   assert.strictEqual(built.row.ticker, 'SPXW');
@@ -202,6 +203,39 @@ async function run() {
   assert.strictEqual(built.row.strategyCommand, 'bcs');
   assert.strictEqual(built.row.legs[1].side, 'sell');
   assert.strictEqual(built.row.legs[1].quantity, 10);
+
+  const commandDefinition = {
+    command: 'bcs {s1} {s2} {q}',
+    name: 'BCS {s1}/{s2}',
+    ticker: 'SPY',
+    legs: [
+      { option: 'CALL', side: 'buy', strike: '{s1}', quantity: '{q}' },
+      { option: 'CALL', side: 'sell', strike: '{s2}', quantity: '{q}' }
+    ]
+  };
+  const missingAdd = new OptionStratCommand(commandDefinition, { now: () => 130 });
+  assert.deepStrictEqual(missingAdd.run(['755', '756', '1']), {
+    ok: false,
+    error: 'Order add handler unavailable'
+  });
+
+  const syncAdd = new OptionStratCommand(commandDefinition, {
+    now: () => 131,
+    onAdd: row => ({ ok: true, ticker: row.ticker, cardType: row.cardType })
+  });
+  assert.deepStrictEqual(syncAdd.run(['755', '756', '1']), {
+    ok: true,
+    ticker: 'SPY',
+    cardType: 'option'
+  });
+
+  const asyncAdd = new OptionStratCommand(commandDefinition, {
+    now: () => 132,
+    onAdd: async row => ({ ok: true, position: { ticker: row.ticker, card: { type: row.cardType } } })
+  });
+  const asyncAddResult = await asyncAdd.run(['755', '756', '1']);
+  assert.strictEqual(asyncAddResult.ok, true);
+  assert.strictEqual(asyncAddResult.position.card.type, 'option');
 
   const lcsHedge = buildOptionStratHedgePayload('open', { strategyCommand: 'lcs', ticker: 'SPY', provider: 'optionstrat' });
   assert.strictEqual(lcsHedge.eventName, 'optionstrat:open-clicked');

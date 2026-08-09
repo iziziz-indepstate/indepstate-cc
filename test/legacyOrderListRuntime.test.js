@@ -2,6 +2,7 @@ const assert = require('assert');
 const { createLegacyOrderListRuntime } = require('../app/services/orderCards/legacyOrderListRuntime');
 const {
   isRegularLegacyRow,
+  shouldCreatePositionSnapshot,
   shouldRouteRowToLegacyRuntime
 } = require('../app/services/orderCards/legacyRouting');
 
@@ -56,7 +57,14 @@ async function run() {
     assert.strictEqual(isRegularLegacyRow({ type: 'regular' }), true);
     assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'legacyExtension' }), true);
     assert.strictEqual(shouldRouteRowToLegacyRuntime({ type: 'extension' }), true);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'levelOrder' }), false);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'option' }), true);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'optionstrat' }), true);
     assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'regular' }), false);
+    assert.strictEqual(shouldCreatePositionSnapshot({ cardType: 'levelOrder' }), true);
+    assert.strictEqual(shouldCreatePositionSnapshot({ cardType: 'option' }), true);
+    assert.strictEqual(shouldCreatePositionSnapshot({ cardType: 'optionstrat' }), true);
+    assert.strictEqual(shouldCreatePositionSnapshot({ cardType: 'legacyExtension' }), false);
   }
 
   {

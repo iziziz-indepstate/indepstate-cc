@@ -5,6 +5,7 @@
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
 const { CurrentOrderCommand } = require('../commands/currentOrder');
+const { debugPositionEvents } = require('../../debugPositionEvents');
 
 const MAX_ALIAS_DEPTH = 5;
 
@@ -74,6 +75,11 @@ function createCommandService(opts = {}) {
     if (!handler) {
       return { ok: false, error: `Unknown command: ${cmd}` };
     }
+    debugPositionEvents('commandLine.handler:selected', {
+      command: cmd,
+      handlerName: handler.name || '',
+      handlerClass: handler.constructor?.name || ''
+    });
     try {
       return handler.run(args);
     } catch (e) {

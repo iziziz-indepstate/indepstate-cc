@@ -23,7 +23,7 @@
 
 ## Order Flow
 - Order card sources are configured in `app/services/orderCards/config/order-cards.json`.
-- Webhook payloads are parsed by `app/services/webhooks/*`; file/webhook sources become rows emitted to the renderer as `orders:new`.
+- Webhook/file/command sources are ingested through `app/services/orderCards`; supported card rows create position snapshots and publish `order-cards:changed` / `positions:changed`.
 - The UI queues execution over IPC (`queue-place-order` or `queue-place-pending`).
 - `app/main.js` normalizes payloads, assigns `cid`, validates required fields, computes risk-based qty when possible, checks trade rules, and calls a brokerage adapter.
 - Lifecycle events are emitted through `app/services/events.js`: `order:placed`, `position:opened`, `position:closed`, `order:cancelled`.

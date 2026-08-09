@@ -82,6 +82,7 @@ function buildOptionStratRow(definition, args, now = Date.now()) {
   return {
     ok: true,
     row: {
+      cardType: 'option',
       ticker,
       symbol: ticker,
       root: root || undefined,
@@ -113,8 +114,10 @@ class OptionStratCommand extends Command {
   run(args) {
     const built = buildOptionStratRow(this.definition, args, this.now());
     if (!built.ok) return built;
-    if (typeof this.onAdd === 'function') this.onAdd(built.row);
-    return { ok: true };
+    if (typeof this.onAdd !== 'function') {
+      return { ok: false, error: 'Order add handler unavailable' };
+    }
+    return this.onAdd(built.row);
   }
 }
 

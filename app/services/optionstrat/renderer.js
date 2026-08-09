@@ -560,7 +560,7 @@ function createOptionStratRenderer({
   function startValuationRefresh() {
     setTimeoutFn(async function tick() {
       try {
-        const entries = legacyState.listPlacedOrders({ state: 'placed', instrumentType: 'OPT' });
+        const entries = legacyState.listPlacedOrders({ state: 'placed', instrumentType: 'OPT' }) || [];
         await Promise.all(entries.map(({ key, orderInfo }) => refreshOptionValuation(key, orderInfo)));
       } finally {
         setTimeoutFn(tick, Math.max(1000, Number(valuationRefreshMs) || 5000));

@@ -6,6 +6,8 @@ catch (e) {
   process.exit(0);
 }
 const Module = require('module');
+const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
+const { createPositionsRenderer } = require('../app/services/positions/renderer');
 
 function levelOrderSnapshot(id, actions) {
   return {
@@ -95,8 +97,103 @@ function regularSnapshot(id, state = 'draft', actions) {
 }
 
 async function run() {
+  {
+    const isolatedHandlers = {};
+    const isolatedDom = new JSDOM('<!DOCTYPE html><div id="grid"></div>');
+    const isolatedDocument = isolatedDom.window.document;
+    let regularCalls = 0;
+    let levelOrderCalls = 0;
+    let optionCalls = 0;
+    let isolatedRenderer;
+    const grid = isolatedDocument.getElementById('grid');
+    const el = (tag, className, text) => {
+      const node = isolatedDocument.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      return node;
+    };
+    const render = () => {
+      grid.textContent = '';
+      for (const position of isolatedRenderer.positionsById.values()) {
+        grid.appendChild(isolatedRenderer.createPositionSnapshotCard(position));
+      }
+    };
+    isolatedRenderer = createPositionsRenderer({
+      ipcRenderer: {
+        invoke: async channel => channel === 'positions:list' ? [] : null,
+        on: (channel, fn) => { isolatedHandlers[channel] = fn; }
+      },
+      el,
+      createPositionDataGrid: () => el('div', 'grid-rendered'),
+      createPositionActions: () => el('div', 'actions-rendered'),
+      positionKey: position => `position|${position.id}`,
+      positionCardTitle: position => position.ticker,
+      render,
+      positionCardRenderers: {
+        regular(position) {
+          regularCalls += 1;
+          return el('div', 'regular-rendered', position.ticker);
+        },
+        levelOrder(position) {
+          levelOrderCalls += 1;
+          return el('div', 'level-rendered', position.ticker);
+        },
+        option(position) {
+          optionCalls += 1;
+          return el('div', 'option-rendered', position.ticker);
+        }
+      }
+    });
+    isolatedRenderer.mount();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    isolatedHandlers['positions:changed'](null, {
+      event: { type: 'position.created' },
+      position: {
+        id: 'pos-option',
+        state: 'draft',
+        ticker: 'SPY',
+        card: { type: 'option', data: { ticker: 'SPY' }, actions: [] }
+      }
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const optionCard = grid.querySelector('.position-card[data-position-id="pos-option"]');
+    assert(optionCard);
+    assert.strictEqual(optionCard.dataset.cardType, 'option');
+    assert.strictEqual(optionCalls, 1);
+    assert.strictEqual(regularCalls, 0);
+
+    isolatedHandlers['positions:changed'](null, {
+      event: { type: 'position.created' },
+      position: {
+        id: 'pos-level',
+        state: 'draft',
+        ticker: 'ADAUSDT',
+        card: { type: 'levelOrder', data: { ticker: 'ADAUSDT' }, actions: [] }
+      }
+    });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const levelCard = grid.querySelector('.position-card[data-position-id="pos-level"]');
+    assert(levelCard);
+    assert.strictEqual(levelCard.dataset.cardType, 'levelOrder');
+    assert.strictEqual(levelOrderCalls, 1);
+    assert.strictEqual(regularCalls, 0);
+  }
+
   const handlers = {};
   const calls = [];
+  const exactAddRow = {
+    ticker: 'ADAUSDT.cfd',
+    price: 0.1981,
+    sl: 10,
+    time: 42,
+    event: 'manual',
+    provider: 'simulated',
+    instrumentType: 'EQ'
+  };
+  const exactAddSnapshot = createPositionApplicationService({ clock: () => 100 })
+    .handle(legacyRowToCreateCommand(exactAddRow))
+    .position;
   const initialPosition = levelOrderSnapshot('pos-1', [
     { id: 'LS', label: 'LS', command: 'position.levelOrder.sell', style: 'sl' }
   ]);
@@ -222,6 +319,19 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(document.querySelectorAll('.position-card[data-position-id="pos-reg-1"]').length, 1);
   assert.strictEqual(document.querySelector('.card[data-ticker="MSFT"]:not(.position-card)'), null);
+
+  handlers['order-cards:changed'](null, { type: 'upsert', row: exactAddRow });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT.cfd"]:not(.position-card)'), null);
+  assert.strictEqual(document.querySelector('.position-card[data-ticker="ADAUSDT.cfd"]'), null);
+
+  handlers['positions:changed'](null, { event: { type: 'position.created' }, position: exactAddSnapshot });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const exactAddCard = document.querySelector('.position-card[data-ticker="ADAUSDT.cfd"]');
+  assert(exactAddCard);
+  assert.strictEqual(exactAddCard.dataset.positionId, exactAddSnapshot.id);
+  assert.strictEqual(exactAddCard.dataset.cardType, 'regular');
+  assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT.cfd"]:not(.position-card)'), null);
 
   const activeRegular = regularSnapshot('pos-reg-1', 'active', [
     { id: 'close', label: 'Close', command: 'position.close', style: 'close' }

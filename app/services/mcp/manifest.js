@@ -1,7 +1,6 @@
 const path = require('path');
 const settings = require('../settings');
 const loadConfig = require('../../config/load');
-const { start } = require('./index');
 
 settings.register(
   'mcp',
@@ -17,6 +16,7 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   if (cfg.enabled !== true) return;
+  const { start } = require('./index');
 
   start({ ...cfg, servicesApi })
     .then((serverInfo) => {

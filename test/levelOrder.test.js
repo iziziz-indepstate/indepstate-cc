@@ -16,9 +16,11 @@ const orderCalculator = {
 
 (function testCommand() {
   let row;
-  const cmd = new LevelOrderCommand({ now: () => 123, onAdd: r => { row = r; } });
+  const onAddResult = { ok: true, position: { card: { type: 'levelOrder' } } };
+  const cmd = new LevelOrderCommand({ now: () => 123, onAdd: r => { row = r; return onAddResult; } });
   const res = cmd.run(['spx.cfd', '7500']);
-  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res, onAddResult);
+  assert.strictEqual(res.position.card.type, 'levelOrder');
   assert.deepStrictEqual(row, {
     cardType: 'levelOrder',
     ticker: 'spx.cfd',
@@ -27,6 +29,33 @@ const orderCalculator = {
     time: 123
   });
   assert.strictEqual(buildLevelOrderRow(['SPX']).ok, false);
+})();
+
+(async function testCommandAwaitsAsyncOnAdd() {
+  const cmd = new LevelOrderCommand({
+    now: () => 123,
+    onAdd: async (row) => ({ ok: true, position: { ticker: row.ticker, card: { type: row.cardType } } })
+  });
+  const res = await cmd.run(['spx.cfd', '7500']);
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.position.ticker, 'spx.cfd');
+  assert.strictEqual(res.position.card.type, 'levelOrder');
+
+  const failing = new LevelOrderCommand({
+    now: () => 123,
+    onAdd: async () => { throw new Error('async add failed'); }
+  });
+  const failed = await failing.run(['spx.cfd', '7500']);
+  assert.deepStrictEqual(failed, { ok: false, error: 'async add failed' });
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
+
+(function testCommandRequiresAddHandler() {
+  const cmd = new LevelOrderCommand({ now: () => 123 });
+  const res = cmd.run(['spx.cfd', '7500']);
+  assert.deepStrictEqual(res, { ok: false, error: 'Order add handler unavailable' });
 })();
 
 (function testCommandProps() {

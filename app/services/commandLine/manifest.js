@@ -2,12 +2,26 @@ const { ipcMain } = require('electron');
 const path = require('path');
 const settings = require('../settings');
 const { createCommandService } = require('.');
+const { debugPositionEvents } = require('../../debugPositionEvents');
 
 settings.register(
   'command-line',
   path.join(__dirname, 'config', 'command-line.json'),
   path.join(__dirname, 'config', 'command-line-settings-descriptor.json')
 );
+
+function commandResultSummary(result = {}) {
+  if (!result || typeof result !== 'object') {
+    return { ok: result !== false };
+  }
+  const position = result.position || result.row || result;
+  return {
+    ok: result.ok !== false,
+    error: result.error || result.reason || '',
+    ticker: position.ticker || position.symbol || position.card?.data?.ticker || position.card?.data?.symbol || '',
+    cardType: position.card?.type || position.cardType || position.source?.cardType || ''
+  };
+}
 
 function initService(servicesApi = {}) {
   const { config } = settings.readConfig('command-line') || {};
@@ -42,7 +56,26 @@ function initService(servicesApi = {}) {
       servicesApi.actionBus.setCommandRunner(runner);
     }
   }
-  ipcMain.handle('cmdline:run', (_evt, str) => cmdService.run(str));
+  ipcMain.handle('cmdline:run', (_evt, str) => {
+    debugPositionEvents('cmdline:run:start', { command: String(str || '') });
+    try {
+      const result = cmdService.run(str);
+      if (result && typeof result.then === 'function') {
+        return result.then((resolved) => {
+          debugPositionEvents('cmdline:run:result', { command: String(str || ''), ...commandResultSummary(resolved) });
+          return resolved;
+        }).catch((err) => {
+          debugPositionEvents('cmdline:run:result', { command: String(str || ''), ok: false, error: err?.message || String(err) }, 'warn');
+          throw err;
+        });
+      }
+      debugPositionEvents('cmdline:run:result', { command: String(str || ''), ...commandResultSummary(result) });
+      return result;
+    } catch (err) {
+      debugPositionEvents('cmdline:run:result', { command: String(str || ''), ok: false, error: err?.message || String(err) }, 'warn');
+      throw err;
+    }
+  });
   ipcMain.handle('cmdline:shortcuts', () => {
     const { config } = settings.readConfig('command-line') || {};
     const list = config && config.shortcuts;
@@ -55,6 +88,7 @@ function hookRenderer(ipcRenderer) {
   let shortcuts = new Set();
   let pendingShortcutTimer = null;
   const shortcutDelayMs = 250;
+  const cmdlineInput = document.getElementById('cmdline');
 
   function clearPendingShortcut() {
     if (pendingShortcutTimer) {
@@ -73,6 +107,25 @@ function hookRenderer(ipcRenderer) {
       .catch((err) => {
         window.toast?.(err.message || String(err));
       });
+  }
+
+  if (cmdlineInput) {
+    cmdlineInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      const cmd = cmdlineInput.value.trim();
+      if (!cmd) return;
+      ipcRenderer.invoke('cmdline:run', cmd)
+        .then((res) => {
+          if (!res?.ok && res?.error) {
+            window.toast?.(res.error);
+          } else {
+            cmdlineInput.value = '';
+          }
+        })
+        .catch((err) => {
+          window.toast?.(err.message || String(err));
+        });
+    });
   }
 
   ipcRenderer

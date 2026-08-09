@@ -1,3 +1,5 @@
+const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
+
 function createPositionsRenderer({
   ipcRenderer,
   el,
@@ -72,7 +74,6 @@ function createPositionsRenderer({
 
   function mount() {
     ipcRenderer.invoke('positions:list').then(positions => {
-      positionsById.clear();
       if (Array.isArray(positions)) {
         for (const position of positions) setPositionSnapshot(position);
       }
@@ -86,10 +87,24 @@ function createPositionsRenderer({
         const removedFallback = typeof onPositionRemoved === 'function'
           ? onPositionRemoved(payload.position || payload.event)
           : false;
+        debugPositionEvents('renderer.positions:changed:receive', {
+          eventType: payload.event?.type || '',
+          ...positionDebugSummary(payload.position),
+          setPositionSnapshot: false,
+          removedSnapshot,
+          positionsByIdSize: positionsById.size
+        });
         if (removedSnapshot || removedFallback) render();
         return;
       }
-      if (!setPositionSnapshot(payload.position)) return;
+      const didSet = setPositionSnapshot(payload.position);
+      debugPositionEvents('renderer.positions:changed:receive', {
+        eventType: payload.event?.type || '',
+        ...positionDebugSummary(payload.position),
+        setPositionSnapshot: didSet,
+        positionsByIdSize: positionsById.size
+      });
+      if (!didSet) return;
       render();
     });
   }

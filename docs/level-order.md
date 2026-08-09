@@ -10,7 +10,7 @@ lo {ticker} {level}
 lo {ticker} {level} props=key:value;key2:value2
 ```
 
-The command creates a row with `cardType: "levelOrder"`, the trimmed ticker, the level, `event: "levelOrder"`, and the current timestamp. Ticker letter case is preserved.
+The command creates a row with `cardType: "levelOrder"`, the trimmed ticker, the level, `event: "levelOrder"`, and the current timestamp. Ticker letter case is preserved. In the current flow, `commandLine` passes that row to `orderCards.ingestRow`, which creates a position snapshot with `card.type: "levelOrder"`.
 
 The optional `props=` argument attaches custom string properties to the created card row. It accepts
 semicolon-delimited `key:value` pairs without spaces. Core row fields such as `ticker`, `level`,
@@ -103,6 +103,11 @@ Buttons:
 - `LB`: limit buy at the configured buy price source. Default: current bid.
 - `LS`: limit sell at the configured sell price source. Default: current bid.
 
+The renderer handler is registered by `app/services/levelOrder/manifest.js` through
+`rendererPositionHandlers`. The service-local renderer implementation lives at
+`app/services/levelOrder/infrastructure/renderer/renderer.js`; `app/renderer.js` only provides the
+shell registry and injected dependencies.
+
 ## Execution
 
 The renderer sends `level-order:place` to the levelOrder service manifest/application runtime. The service runs the level-order flow:
@@ -161,7 +166,7 @@ If the monitor times out, it logs `[LEVEL][POSITIONS_TIMEOUT]` with a visible te
 - `app/services/levelOrder/strategy.js`: default resolution, sizing, stop math, and split math.
 - `app/services/levelOrder/manifest.js`: settings, command registration, IPC registration, and runtime wiring.
 - `app/services/levelOrder/application/*`: submission flow and terminal-position monitoring.
+- `app/services/levelOrder/infrastructure/renderer/renderer.js`: snapshot card UI, IPC payload, grouped child lifecycle, and status transitions.
 - `app/services/levelTrack/*`: saved active-level tracking and `f:levelTrack:<key>` resolver.
-- `app/renderer.js`: card UI, IPC payload, grouped child lifecycle, and status transitions.
 - `test/levelOrder.test.js`: command and strategy tests.
 - `test/levelOrderRenderer.test.js`: renderer/card lifecycle tests.

@@ -1,5 +1,6 @@
 const { Command } = require('../commands/base');
 const { resolveLevelOrderDefaults } = require('./domain/strategy');
+const { debugPositionEvents } = require('../../debugPositionEvents');
 
 const RESERVED_ROW_PROPS = new Set(['cardType', 'ticker', 'level', 'event', 'time']);
 const PROPS_USAGE = 'Usage: levelOrder {ticker} {level} [props=key:value;key2:value2]';
@@ -83,8 +84,56 @@ class LevelOrderCommand extends Command {
   run(args) {
     const built = buildLevelOrderRow(args, this.now());
     if (!built.ok) return built;
-    if (typeof this.onAdd === 'function') this.onAdd(built.row);
-    return { ok: true };
+    debugPositionEvents('levelOrder.command:built', {
+      ticker: built.row.ticker,
+      cardType: built.row.cardType,
+      hasOnAdd: typeof this.onAdd === 'function'
+    });
+    if (typeof this.onAdd !== 'function') {
+      const result = { ok: false, error: 'Order add handler unavailable' };
+      debugPositionEvents('levelOrder.command:onAdd-result', {
+        ticker: built.row.ticker,
+        cardType: built.row.cardType,
+        ok: false,
+        error: result.error
+      }, 'warn');
+      return result;
+    }
+    try {
+      const res = this.onAdd(built.row);
+      const summarize = (out) => {
+        const result = out && typeof out === 'object' ? out : { ok: true };
+        debugPositionEvents('levelOrder.command:onAdd-result', {
+          ticker: result.position?.ticker || result.ticker || result.row?.ticker || built.row.ticker,
+          cardType: result.position?.card?.type || result.cardType || result.row?.cardType || built.row.cardType,
+          ok: result.ok !== false,
+          error: result.error || result.reason || ''
+        }, result.ok === false ? 'warn' : 'log');
+        return result;
+      };
+      if (res && typeof res.then === 'function') {
+        return res.then(summarize).catch((err) => {
+          const result = { ok: false, error: err?.message || 'Order add handler error' };
+          debugPositionEvents('levelOrder.command:onAdd-result', {
+            ticker: built.row.ticker,
+            cardType: built.row.cardType,
+            ok: false,
+            error: result.error
+          }, 'warn');
+          return result;
+        });
+      }
+      return summarize(res);
+    } catch (err) {
+      const result = { ok: false, error: err?.message || 'Order add handler error' };
+      debugPositionEvents('levelOrder.command:onAdd-result', {
+        ticker: built.row.ticker,
+        cardType: built.row.cardType,
+        ok: false,
+        error: result.error
+      }, 'warn');
+      return result;
+    }
   }
 }
 

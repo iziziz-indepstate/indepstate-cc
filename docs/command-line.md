@@ -1,6 +1,6 @@
 # Command Line Service
 
-The bottom of the application window includes a text input that accepts simple commands. The renderer forwards entered strings to the main process where `app/services/commandLine.js` resolves the command name and executes the corresponding handler.
+The bottom of the application window includes a text input that accepts simple commands. The renderer forwards entered strings to the main process where `app/services/commandLine/index.js` resolves the command name and executes the corresponding handler. `app/services/commandLine/manifest.js` wires the service into main and renderer startup.
 
 Commands are case-insensitive and may define multiple names (aliases).
 
@@ -10,7 +10,23 @@ If a command fails (e.g. due to validation error), the entered text remains in t
 
 `app/services/commandLine/config/command-line.json` may define a `shortcuts` array. When no text input is focused and a pressed key matches one of these commands, it executes immediately without waiting for `Enter`. When the command line input is focused, shortcuts are ignored and `Enter` must be used to run a command. Executing a shortcut does not move focus to the command line input.
 
-The service manifest exports `hookRenderer(ipcRenderer)` which the renderer calls on startup. This hook wires the shortcut handler into the UI. Other services can also provide a `hookRenderer` function in their manifest to register renderer-side behavior.
+The service manifest exports `hookRenderer(ipcRenderer)` which the renderer calls on startup. This hook owns the `Enter` submit wiring and configured shortcut handling for the command-line input. Other services can also provide a `hookRenderer` function in their manifest to register renderer-side behavior.
+
+## Card-Creating Commands
+
+Card-creating commands call an injected `onAdd(row)` handler. In the running app that handler calls
+`servicesApi.orderCards.ingestRow(row, { source: 'commandLine' })`, so these commands create the
+same position snapshots and order-card read models as webhook/file sources.
+
+The command result contract is important: commands that create cards should return the actual
+`onAdd` result. They should not replace it with a synthetic `{ ok: true }`, because the caller and
+debug trace need the created position/card type or the real validation error.
+
+Snapshot-backed command-line card creators include:
+
+- `add` / `a`
+- `levelOrder` / `lo`
+- configured OptionStrat commands
 
 ## Alias templates
 

@@ -1,7 +1,6 @@
 const path = require('path');
 const settings = require('../settings');
 const loadConfig = require('../../config/load');
-const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
@@ -110,6 +109,7 @@ function normalizeSourceConfig(src) {
 function registerMainApplicationServices(context = {}) {
   const { servicesApi = {} } = context;
   if (servicesApi.orderCards) return servicesApi.orderCards;
+  const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 
   const config = context.orderCardsConfig || loadConfig('../services/orderCards/config/order-cards.json');
   const sourcesCfg = Array.isArray(config?.sources) && config.sources.length

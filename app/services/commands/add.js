@@ -32,6 +32,19 @@ function isSL(n) {
   return typeof n === 'number' && isFinite(n) && n > 0;
 }
 
+function normalizeAddResult(out) {
+  if (!out || typeof out !== 'object') return { ok: true };
+  if (out.ok === false) return out;
+  if (
+    Object.prototype.hasOwnProperty.call(out, 'ok') ||
+    out.position ||
+    out.cardType ||
+    out.error ||
+    out.reason
+  ) return out;
+  return { ok: true };
+}
+
 class AddCommand extends Command {
   constructor(opts = {}) {
     super(['add', 'a']);
@@ -66,12 +79,12 @@ class AddCommand extends Command {
     if (typeof this.onAdd === 'function') {
       const res = this.onAdd(row);
       if (res && typeof res.then === 'function') {
-        return res.then((out) => (out && typeof out === 'object' ? out : { ok: true })).catch((err) => ({
+        return res.then(normalizeAddResult).catch((err) => ({
           ok: false,
           error: err?.message || 'Add handler error'
         }));
       }
-      if (res && typeof res === 'object' && res.ok === false) return res;
+      return normalizeAddResult(res);
     }
     return { ok: true };
   }

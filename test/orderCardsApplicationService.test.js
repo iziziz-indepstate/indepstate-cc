@@ -3,6 +3,53 @@ const { createOrderCardsApplicationService } = require('../app/services/orderCar
 
 async function run() {
   {
+    const cases = [
+      { cardType: 'regular', shouldCreateSnapshot: true },
+      { cardType: 'levelOrder', shouldCreateSnapshot: true },
+      { cardType: 'option', shouldCreateSnapshot: true },
+      { cardType: 'optionstrat', shouldCreateSnapshot: true },
+      { cardType: 'legacyExtension', shouldCreateSnapshot: false }
+    ];
+    for (const item of cases) {
+      const positionCommands = [];
+      const published = [];
+      const service = createOrderCardsApplicationService({
+        positions: {
+          handle(cmd) {
+            positionCommands.push(cmd);
+            return {
+              ok: true,
+              position: {
+                id: `pos-${item.cardType}`,
+                ticker: cmd.ticker,
+                card: { type: cmd.cardType || 'regular' }
+              }
+            };
+          }
+        },
+        publish: (channel, payload) => published.push({ channel, payload })
+      });
+      const result = service.ingestRow({
+        cardType: item.cardType,
+        ticker: `TST-${item.cardType}`,
+        event: item.cardType,
+        time: 1
+      }, { source: 'routing-test' });
+      assert.strictEqual(positionCommands.length, item.shouldCreateSnapshot ? 1 : 0, `${item.cardType} snapshot routing`);
+      assert.strictEqual(published.length, 1, `${item.cardType} published row`);
+      assert.strictEqual(published[0].channel, 'order-cards:changed');
+      assert.strictEqual(published[0].payload.type, 'upsert');
+      if (item.shouldCreateSnapshot) {
+        assert.strictEqual(result.ok, true);
+        assert.strictEqual(result.position.card.type, item.cardType);
+        assert.strictEqual(positionCommands[0].cardType, item.cardType);
+      } else {
+        assert.strictEqual(result.cardType, item.cardType);
+      }
+    }
+  }
+
+  {
     const positionCommands = [];
     const published = [];
     const service = createOrderCardsApplicationService({
@@ -24,6 +71,26 @@ async function run() {
     assert.strictEqual(published[0].payload.row.ticker, 'BTCUSDT.P');
     assert.strictEqual(published[0].payload.source, 'webhook');
     assert.ok(published[0].payload.eventId);
+  }
+
+  {
+    const positionCommands = [];
+    const service = createOrderCardsApplicationService({
+      positions: { handle: cmd => positionCommands.push(cmd) },
+      resolveProviderName: () => 'simulated'
+    });
+
+    const row = service.ingestRow({
+      cardType: 'option',
+      ticker: 'SPY',
+      event: 'optionstrat',
+      provider: 'optionstrat',
+      instrumentType: 'OPT',
+      time: 5
+    }, { source: 'commandLine' });
+    assert.strictEqual(row.provider, 'optionstrat');
+    assert.strictEqual(positionCommands[0].provider, 'optionstrat');
+    assert.strictEqual(positionCommands[0].cardType, 'option');
   }
 
   {

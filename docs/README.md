@@ -5,6 +5,7 @@ This directory contains high-level notes about the codebase.
 ## Overview
 - [architecture-layers.md](architecture-layers.md) - domain/application/infrastructure/interfaces boundaries and extension-service layering rules.
 - [target-architecture.md](target-architecture.md) - target Position, command/event, provider, and composite card architecture.
+- [renderer-extension-points.md](renderer-extension-points.md) - renderer shell APIs that service manifests use to register card UI and actions.
 - [settings.md](settings.md) - settings registration, live/restart apply policies, and config/descriptor fragments.
 - [execution-adapters.md](execution-adapters.md) - adapter/provider registration and execution routing extension defaults.
 - [outbound-webhooks.md](outbound-webhooks.md) - outbound webhook sending and lifecycle payload enrichers.
@@ -24,7 +25,7 @@ This directory contains high-level notes about the codebase.
 - `servicesApi.brokerage.registerAdapterFactory()` and `registerExecutionProviderDefaults()` - public extension APIs for broker/provider modules; `app/services/brokerage/brokerageAdapters.js` remains the internal registry store
 - `app/services/brokerage-adapter-*/comps/*` – execution adapters such as the DWX connector and the CCXT adapter; each can provide `listOpenOrders()` and `listClosedPositions()`
 - `app/services/servicesApi.js` – global object that service manifests extend to expose their APIs (e.g. `servicesApi.brokerage` with adapter helpers)
-- `app/services/commandLine.js` – parses text commands sent from the renderer. See [command-line.md](command-line.md) for available commands.
+- `app/services/commandLine/index.js` and `manifest.js` - parse text commands, wire renderer input/shortcuts, and route card-creating commands through `orderCards.ingestRow`. See [command-line.md](command-line.md).
 - `app/services/actions-bus/*` – automation bus connecting service events to command runners. See [actions-bus.md](actions-bus.md) for configuration and usage details.
 - `app/services/instrumentInfo/*` – shared provider-aware quote and trading-metadata cache. See [instrument-info.md](instrument-info.md).
 - `app/services/orderCalculator.js` – shared service computing stop-loss, take-profit and position size for cards and pending orders.

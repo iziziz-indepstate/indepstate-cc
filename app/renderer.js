@@ -12,6 +12,31 @@ const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/rend
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
+const { isDebugPositionEventsEnabled, debugPositionEvents, positionDebugSummary } = require('./debugPositionEvents');
+
+debugPositionEvents('renderer.boot:start');
+
+function registerRendererDebugErrorForwarding() {
+  if (!isDebugPositionEventsEnabled() || typeof window === 'undefined') return;
+  window.addEventListener('error', (event) => {
+    debugPositionEvents('renderer.error', {
+      message: event.message || event.error?.message || '',
+      filename: event.filename || '',
+      lineno: event.lineno || 0,
+      colno: event.colno || 0,
+      stack: event.error?.stack || ''
+    }, 'warn');
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    const reason = event.reason;
+    debugPositionEvents('renderer.unhandledrejection', {
+      message: reason?.message || String(reason || ''),
+      stack: reason?.stack || ''
+    }, 'warn');
+  });
+}
+
+registerRendererDebugErrorForwarding();
 
 let legacyOrderListRuntime;
 const defaultInstrumentDisplayPolicy = {
@@ -104,8 +129,15 @@ const settingsRenderer = createSettingsRenderer({
 });
 const settingsForms = settingsRenderer.settingsForms;
 let rendererServiceManifests = null;
+const rendererHandlerDiagnostics = {
+  serviceList: null,
+  manifests: [],
+  handlers: [],
+  legacyOrderCardsRegistered: false
+};
 
 loadRendererHooks();
+debugPositionEvents('renderer.boot:after-hooks');
 
 settingsRuntime.onApply('ui', ({ config }) => {
   if (typeof config.autoscroll === 'boolean') state.autoscroll = config.autoscroll;
@@ -117,17 +149,42 @@ function loadRendererServiceManifests() {
   let dirs = [];
   try {
     dirs = loadConfig('../services/settings/config/services.json');
-  } catch {
+  } catch (err) {
+    debugPositionEvents('renderer.manifest:service-list-load-failed', {
+      error: err?.message || String(err),
+      stack: err?.stack || '',
+      configRoots: Array.isArray(loadConfig.CONFIG_ROOTS) ? loadConfig.CONFIG_ROOTS.slice() : []
+    }, 'warn');
     dirs = [];
   }
+  rendererHandlerDiagnostics.serviceList = {
+    dirs: Array.isArray(dirs) ? dirs.slice() : [],
+    configRoots: Array.isArray(loadConfig.CONFIG_ROOTS) ? loadConfig.CONFIG_ROOTS.slice() : [],
+    appRoot: loadConfig.APP_ROOT,
+    userRoot: loadConfig.USER_ROOT
+  };
+  debugPositionEvents('renderer.manifest:service-list', rendererHandlerDiagnostics.serviceList);
   rendererServiceManifests = [];
   if (!Array.isArray(dirs)) return rendererServiceManifests;
   for (const dir of dirs) {
     try {
       const manifest = require(path.join(__dirname, dir, 'manifest.js'));
       rendererServiceManifests.push({ dir, manifest });
+      rendererHandlerDiagnostics.manifests.push({
+        dir,
+        rendererHandlers: Array.isArray(manifest?.rendererHandlers) ? manifest.rendererHandlers.length : 0,
+        rendererPositionHandlers: Array.isArray(manifest?.rendererPositionHandlers) ? manifest.rendererPositionHandlers.length : 0
+      });
     } catch (err) {
+      const failure = {
+        dir,
+        failed: true,
+        error: err?.message || String(err),
+        stack: err?.stack || ''
+      };
+      rendererHandlerDiagnostics.manifests.push(failure);
       console.error('[rendererServiceLoader] Failed to load', dir, err.message);
+      debugPositionEvents('renderer.manifest:load-failed', failure, 'warn');
     }
   }
   return rendererServiceManifests;
@@ -143,15 +200,41 @@ function loadRendererHooks() {
 
 function loadRendererHandlers(context = {}) {
   for (const { dir, manifest } of loadRendererServiceManifests()) {
-    try {
-      const handlers = []
-        .concat(Array.isArray(manifest?.rendererHandlers) ? manifest.rendererHandlers : [])
-        .concat(Array.isArray(manifest?.rendererPositionHandlers) ? manifest.rendererPositionHandlers : []);
+    const handlerGroups = [
+      ['rendererHandlers', Array.isArray(manifest?.rendererHandlers) ? manifest.rendererHandlers : []],
+      ['rendererPositionHandlers', Array.isArray(manifest?.rendererPositionHandlers) ? manifest.rendererPositionHandlers : []]
+    ];
+    for (const [group, handlers] of handlerGroups) {
       for (const handler of handlers) {
-        if (typeof handler?.register === 'function') handler.register(context);
+        const handlerInfo = {
+          dir,
+          group,
+          cardType: handler?.cardType || handler?.type || null,
+          registered: false
+        };
+        rendererHandlerDiagnostics.handlers.push(handlerInfo);
+        if (typeof handler?.register !== 'function') {
+          handlerInfo.skipped = 'missing register';
+          debugPositionEvents('renderer.handlers:skip', handlerInfo, 'warn');
+          continue;
+        }
+        try {
+          debugPositionEvents('renderer.handlers:before-register', handlerInfo);
+          handler.register(context);
+          handlerInfo.registered = true;
+          debugPositionEvents('renderer.handlers:after-register', handlerInfo);
+        } catch (err) {
+          handlerInfo.error = err?.message || String(err);
+          console.error('[rendererServiceLoader] Failed to register renderer handler', {
+            dir,
+            group,
+            cardType: handlerInfo.cardType,
+            error: handlerInfo.error,
+            stack: err?.stack || ''
+          });
+          debugPositionEvents('renderer.handlers:error', handlerInfo, 'warn');
+        }
       }
-    } catch (err) {
-      console.error('[rendererServiceLoader] Failed to load renderer handlers', dir, err.message);
     }
   }
 }
@@ -372,11 +455,6 @@ function toast(msg) {
 }
 
 window.toast = toast;
-
-// ======= Command line handling =======
-function runCommand(str) {
-  return ipcRenderer.invoke('cmdline:run', str);
-}
 
 function registerOrderCardInstrumentHandler(instrumentType, handler) {
   return orderCardsApi?.registerInstrumentHandler?.(instrumentType, handler) || false;
@@ -633,19 +711,52 @@ function render() {
     $grid.appendChild(card);
     return card;
   }, cardStateOrder);
-  const positions = Array.from(positionsById.values());
+  const debugPositions = isDebugPositionEventsEnabled();
+  const positions = getPositionSnapshots();
   positions.sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0));
+  let renderedPositionCount = 0;
+  const skippedPositions = [];
   for (const position of positions) {
-    if (shouldHidePositionSnapshot(position)) continue;
-    if (!shouldUseSnapshotInsteadOfLegacyRows(position) && isPositionRenderedByLegacyRow(position)) continue;
+    if (shouldHidePositionSnapshot(position)) {
+      if (debugPositions) skippedPositions.push({ reason: 'hidden', ...positionDebugSummary(position) });
+      continue;
+    }
+    if (!shouldUseSnapshotInsteadOfLegacyRows(position) && isPositionRenderedByLegacyRow(position)) {
+      if (debugPositions) skippedPositions.push({ reason: 'legacy-rendered', ...positionDebugSummary(position) });
+      continue;
+    }
     const key = positionKey(position);
-    const card = createPositionSnapshotCard(position);
+    let card;
+    if (debugPositions) {
+      try {
+        card = createPositionSnapshotCard(position);
+      } catch (err) {
+        skippedPositions.push({
+          reason: 'renderer error',
+          error: err?.message || String(err),
+          ...positionDebugSummary(position)
+        });
+        debugPositionEvents('renderer.render:position-error', {
+          error: err?.message || String(err),
+          ...positionDebugSummary(position)
+        }, 'warn');
+        continue;
+      }
+    } else {
+      card = createPositionSnapshotCard(position);
+    }
     $grid.appendChild(card);
+    renderedPositionCount += 1;
     const reqId = legacyOrderStateApi.findPendingRequestIdByKey(key);
     if (reqId) card.dataset.reqId = reqId;
     const st = legacyOrderStateApi.getCardState(key);
     if (st) setCardState(key, st);
   }
+  debugPositionEvents('renderer.render:positions', {
+    positionsByIdSize: positionsById.size,
+    renderedPositionCount,
+    skippedPositions
+  });
   if (state.autoscroll) {
     try {
       $wrap.scrollTo({top: 0, behavior: 'smooth'});
@@ -690,8 +801,12 @@ function createPositionDataGrid(fields) {
   return grid;
 }
 
+let positionsRenderer = null;
+let positionsById = new Map();
+const getPositionSnapshots = () => Array.from(positionsById.values());
+
 function positionInstrumentRows() {
-  return Array.from(positionsById.values()).map(position => {
+  return getPositionSnapshots().map(position => {
     const data = position.card?.data || {};
     const source = position.source || {};
     const ticker = data.ticker || data.symbol || position.ticker || position.symbol || source.ticker || source.symbol;
@@ -749,6 +864,7 @@ function registerLegacyOrderCardsRuntime(registration = {}, maybeCreateCard) {
   const createCard = registration.createCard || maybeCreateCard;
   if (!runtime || typeof createCard !== 'function') return false;
   legacyOrderListRuntime = runtime;
+  rendererHandlerDiagnostics.legacyOrderCardsRegistered = true;
   orderCardsApi = registration;
   createLegacyOrderCard = createCard;
   legacyOrderListRuntime.setClosedCardEventStrategy(registration.orderCardsRuntime?.getClosedCardEventStrategy?.() || 'ignore');
@@ -811,7 +927,7 @@ function shouldRemovePositionSnapshotForLegacyRowRemoval(row = {}, position = {}
 
 function legacyGuardContext() {
   return {
-    positions: Array.from(positionsById.values()),
+    positions: getPositionSnapshots(),
     rows: state.rows
   };
 }
@@ -926,10 +1042,14 @@ loadRendererHandlers({
   },
   registerRendererLegacyGuard
 });
+debugPositionEvents('renderer.boot:after-handler-load');
 
 if (!legacyOrderListRuntime || !createLegacyOrderCard) {
+  console.error('[renderer.boot] legacy order cards renderer was not registered', rendererHandlerDiagnostics);
+  debugPositionEvents('renderer.boot:legacy-runtime-missing', rendererHandlerDiagnostics, 'warn');
   throw new Error('legacy order cards renderer was not registered');
 }
+debugPositionEvents('renderer.boot:after-legacy-runtime-check');
 
 for (const { dir, manifest } of loadRendererServiceManifests()) {
   try {
@@ -940,7 +1060,7 @@ for (const { dir, manifest } of loadRendererServiceManifests()) {
   }
 }
 
-const positionsRenderer = createPositionsRenderer({
+positionsRenderer = createPositionsRenderer({
   ipcRenderer,
   el,
   createPositionDataGrid,
@@ -959,7 +1079,7 @@ const positionsRenderer = createPositionsRenderer({
     legacyOrderStateApi.clearPendingExecLabel(key);
   }
 });
-const positionsById = positionsRenderer.positionsById;
+positionsById = positionsRenderer.positionsById;
 const setPositionSnapshot = (...args) => positionsRenderer.setPositionSnapshot(...args);
 const removePositionSnapshot = (...args) => positionsRenderer.removePositionSnapshot(...args);
 
@@ -1125,7 +1245,9 @@ function scheduleInstantExecution(row) {
 }
 
 // ======= IPC wiring =======
+debugPositionEvents('renderer.boot:before-positions-mount');
 positionsRenderer.mount();
+debugPositionEvents('renderer.boot:after-positions-mount');
 legacyOrderListRuntime.mount({ place });
 
 // ======= UI events =======
@@ -1137,27 +1259,10 @@ settingsRenderer.mount();
 $wrap.addEventListener('wheel', () => {
   state.autoscroll = false;
 });
-$cmdline.addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') {
-    const cmd = $cmdline.value.trim();
-    if (cmd) {
-      runCommand(cmd)
-        .then((res) => {
-          if (!res?.ok && res?.error) {
-            toast(res.error);
-          } else {
-            $cmdline.value = '';
-          }
-        })
-        .catch((err) => {
-          toast(err.message || String(err));
-        });
-    }
-  }
-});
 
 // initial render
 render();
+debugPositionEvents('renderer.boot:ready');
 
 // expose internals for tests
 if (typeof module !== 'undefined') {

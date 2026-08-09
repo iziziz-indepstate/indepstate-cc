@@ -1,3 +1,5 @@
+const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
+
 function positionSnapshots(positionsService) {
   const snapshot = typeof positionsService?.snapshot === 'function'
     ? positionsService.snapshot()
@@ -30,7 +32,15 @@ function createPositionsChangedPublisher({ positionsService, getMainWindow } = {
 
   const handler = (event, position) => {
     const mainWindow = typeof getMainWindow === 'function' ? getMainWindow() : null;
-    if (!mainWindow || typeof mainWindow.isDestroyed !== 'function' || mainWindow.isDestroyed()) return;
+    const hasMainWindow = !!mainWindow;
+    const destroyed = hasMainWindow && typeof mainWindow.isDestroyed === 'function' ? mainWindow.isDestroyed() : undefined;
+    debugPositionEvents('positions:changed:send', {
+      eventType: event?.type || '',
+      ...positionDebugSummary(position),
+      hasMainWindow,
+      destroyed
+    });
+    if (!mainWindow || typeof mainWindow.isDestroyed !== 'function' || destroyed) return;
     mainWindow.webContents?.send?.('positions:changed', { event, position });
   };
 

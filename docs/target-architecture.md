@@ -101,6 +101,27 @@ Generic services are open for extension through composition. A card type that ne
 
 During migration, an extension may also expose a temporary `legacyGuard.js` to describe compatibility filters for legacy rows, events, or payload-to-policy mapping. These guards are transitional only: once the extension no longer depends on legacy renderer rows/events, every `legacyGuard.js` should be deleted rather than treated as a permanent extension API.
 
+Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
+
+Implemented main extension points:
+
+- `mainApplicationServicePhase` selects when a manifest's application service is registered. The default phase is `after-execution`; services that must exist earlier, such as orderCards, can declare `before-window`.
+- `registerMainApplicationServicesForManifests()` in `app/services/serviceMainRegistration.js` walks loaded service manifests and calls matching `registerMainApplicationServices(context)` hooks for the active phase.
+
+Implemented renderer extension points:
+
+- `hookRenderer(ipcRenderer)` for small renderer boot hooks such as keyboard shortcuts.
+- `rendererHandlers` for general renderer service bootstrap.
+- `rendererPositionHandlers` for position/card UI behavior.
+- `rendererLegacyGuards` for transitional filters between snapshot-backed positions and legacy rows/events.
+- `registerPositionCardRenderer(cardType, renderer)` to render a position snapshot by `position.card.type`.
+- `registerPositionActionHandler(cardType, handler)` to handle snapshot action dispatch for a card type.
+- `registerPositionRemovalHandler(cardType, handler)` to clean up card-type state when a snapshot is removed.
+- `registerInstrumentDisplayPolicy(policy)` to contribute shared instrument refresh/display behavior.
+- `registerCardStateHook(hook)` to run shared card-state refresh hooks from a service-local runtime.
+
+See [renderer-extension-points.md](renderer-extension-points.md) for the renderer shell API used by `handler.register(context)`.
+
 ## Target LevelOrder Flow
 
 Canonical flow:
@@ -136,7 +157,7 @@ The renderer should become a composite renderer:
 
 Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
 
-Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` should gradually move into application read models or infrastructure bridges.
+Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind renderer runtime APIs where service handlers can use them through injected dependencies. They are still transitional compatibility state and should gradually move into application read models or infrastructure bridges.
 
 Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.
 
@@ -197,6 +218,10 @@ true in the code and what remains.
 
 - `LevelOrder` is isolated as an extension-owned service with application logic, renderer handling,
   command registration, and manifest-owned wiring.
+- `commandLine` is manifest-wired and creates snapshot-backed cards through `orderCards.ingestRow`
+  for card-creating commands.
+- The renderer dispatches snapshot cards through a manifest-populated registry keyed by
+  `position.card.type`.
 - `OptionStrat` is isolated as an extension-owned service. Its adapter, renderer behavior, IPC
   handlers, execution payload policy, close controller, legacy guards, settings policy, lifecycle
   enrichment, action helpers, and execution defaults live under `app/services/optionstrat`.
@@ -222,3 +247,11 @@ true in the code and what remains.
   payload mapping, lifecycle handling, settings policy, and automation enrichment into the owning
   service manifest.
 - Keep documentation current as each extension point becomes stable enough for reuse.
+
+## Regression Coverage
+
+- `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
+- `test/positionsRenderer.test.js` covers renderer dispatch by `position.card.type`.
+- `test/orderCardsApplicationService.test.js` covers snapshot routing versus the legacy row path.
+
+For boot/event troubleshooting during development, set `ISCC_DEBUG_POSITION_EVENTS=1`. The trace logs renderer manifest loading, handler registration, position/order-card event routing, and related failures. Keep it dev-only; it is intended for diagnosing boot and event ordering issues, not normal user output.

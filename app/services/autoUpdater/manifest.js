@@ -2,7 +2,6 @@ const { app } = require('electron');
 const path = require('path');
 const settings = require('../settings');
 const loadConfig = require('../../config/load');
-const { start } = require('./index');
 
 settings.register(
   'auto-updater',
@@ -20,6 +19,7 @@ function initService(servicesApi = {}) {
   if (cfg.enabled === false) return;
 
   app.whenReady().then(() => {
+    const { start } = require('./index');
     const svc = start(cfg);
     servicesApi.autoUpdater = svc;
     settings.onApply('auto-updater', ({ config, changedPaths }) => {

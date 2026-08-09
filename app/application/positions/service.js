@@ -7,6 +7,7 @@ const {
   createOpeningPolicyRegistry
 } = require('../../domain/positions');
 const { registerLegacyPositionGuard } = require('./legacy');
+const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -142,6 +143,11 @@ class PositionApplicationService {
 
     const result = aggregate.handle(normalized);
     const snapshot = this.repository.save(aggregate);
+    debugPositionEvents('positions.handle:save', {
+      eventTypes: (result.events || []).map(event => event.type),
+      ...positionDebugSummary(snapshot),
+      repositorySnapshotCount: this.repository.list().length
+    });
     this.#publish(result.events, result.integrationCommands, snapshot);
     if ((result.events || []).some(event => event.type === PositionEvent.REMOVED)) {
       this.repository.delete(snapshot.id);
