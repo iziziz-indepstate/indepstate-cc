@@ -1,5 +1,7 @@
 function createLegacyOrderListRuntime({
   ipcRenderer,
+  state: providedState,
+  legacyState: providedLegacyState = {},
   rowKey,
   findKeyByTicker,
   matchesExistingOrderRow,
@@ -26,18 +28,18 @@ function createLegacyOrderListRuntime({
   now = () => Date.now(),
   maxRows = 500
 } = {}) {
-  const state = { rows: [], filter: '', autoscroll: true };
+  const state = providedState || { rows: [], filter: '', autoscroll: true };
 
-  const cardStates = new Map();
-  const pendingExecLabels = new Map();
-  const pendingByReqId = new Map();
-  const pendingIdByReqId = new Map();
-  const ticketToKey = new Map();
-  const placedOrderByKey = new Map();
-  const retryCounts = new Map();
-  const instantExecutedKeys = new Set();
-  const uiState = new Map();
-  const userTouchedByTicker = new Map();
+  const cardStates = providedLegacyState.cardStates || new Map();
+  const pendingExecLabels = providedLegacyState.pendingExecLabels || new Map();
+  const pendingByReqId = providedLegacyState.pendingByReqId || new Map();
+  const pendingIdByReqId = providedLegacyState.pendingIdByReqId || new Map();
+  const ticketToKey = providedLegacyState.ticketToKey || new Map();
+  const placedOrderByKey = providedLegacyState.placedOrderByKey || new Map();
+  const retryCounts = providedLegacyState.retryCounts || new Map();
+  const instantExecutedKeys = providedLegacyState.instantExecutedKeys || new Set();
+  const uiState = providedLegacyState.uiState || new Map();
+  const userTouchedByTicker = providedLegacyState.userTouchedByTicker || new Map();
 
   let closedCardEventStrategy = 'ignore';
   const closedCardStrategies = {

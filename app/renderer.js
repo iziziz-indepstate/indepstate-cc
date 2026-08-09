@@ -11,8 +11,6 @@ const orderCalc = servicesApi.orderCalculator || require('./services/orderCalcul
 const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/renderer');
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
-const { createOrderCardsRenderer } = require('./services/orderCards/renderer');
-const { createLegacyOrderListRuntime } = require('./services/orderCards/legacyOrderListRuntime');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
 let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 
@@ -51,7 +49,8 @@ let pendingIdByReqId;
 let ticketToKey;
 let placedOrderByKey;
 let retryCounts;
-let orderCardsRenderer;
+let orderCardsApi;
+let createLegacyOrderCard;
 
 // Order for sorting cards by execution state
 const cardStateOrder = {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7};
@@ -68,45 +67,16 @@ const $settingsFields = document.getElementById('settings-fields');
 const $settingsClose = document.getElementById('settings-close');
 const $settingsRestart = document.getElementById('settings-restart-required');
 
-legacyOrderListRuntime = createLegacyOrderListRuntime({
-  ipcRenderer,
-  rowKey,
-  findKeyByTicker,
-  matchesExistingOrderRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
-  isTerminalCardState,
-  cardByKey,
-  setCardState,
-  orderCardHandlerForRow: (...args) => orderCardsRenderer.handlerFor(...args),
-  orderCardHandlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
-  scheduleOrderCardInstantExecution: (...args) => scheduleOrderCardInstantExecution(...args),
-  removePositionSnapshotsForLegacyRow,
-  positionRemovalHandlerFor: cardType => positionRemovalHandlers[cardType],
-  positionMatchesLegacyRow,
-  isRegularPositionSnapshot,
-  shouldFilterLegacyRow,
-  shouldIgnoreLegacyRowForExistingPosition,
-  shouldIgnoreLegacyExecutionEvent,
-  shouldIgnoreLegacyPositionEvent,
-  shouldRemoveLegacyRowForPosition,
-  shouldResetLegacyRowForPosition,
-  forgetInstrument: (...args) => forgetInstrument(...args),
-  toast,
-  shakeCard,
-  render
-});
-state = legacyOrderListRuntime.state;
+state = { rows: [], filter: '', autoscroll: true };
 appState = state;
-({
-  uiState,
-  cardStates,
-  pendingExecLabels,
-  pendingByReqId,
-  pendingIdByReqId,
-  ticketToKey,
-  placedOrderByKey,
-  retryCounts
-} = legacyOrderListRuntime.legacyState);
-legacyOrderListRuntime.setClosedCardEventStrategy(orderCardsCfg?.closedCardEventStrategy || 'ignore');
+uiState = new Map();
+cardStates = new Map();
+pendingExecLabels = new Map();
+pendingByReqId = new Map();
+pendingIdByReqId = new Map();
+ticketToKey = new Map();
+placedOrderByKey = new Map();
+retryCounts = new Map();
 
 ipcRenderer.invoke('settings:get', 'ui').then((res) => {
   if (res && typeof res.autoscroll === 'boolean') {
@@ -144,7 +114,7 @@ function applyOrderCardsConfig(config = {}) {
   SHOW_BID_ASK = !!config.showBidAsk;
   SHOW_SPREAD = !!config.showSpread;
   INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh) ? envInstrRefresh : Number(config.instrumentRefreshMs) || 1000;
-  legacyOrderListRuntime.setClosedCardEventStrategy(config.closedCardEventStrategy || 'ignore');
+  legacyOrderListRuntime?.setClosedCardEventStrategy(config.closedCardEventStrategy || 'ignore');
   BUTTON_ROWS = Number(config.buttonRows) || 1;
   CARD_BUTTONS = Array.isArray(config.buttons) && config.buttons.length
     ? config.buttons.map(b => Array.isArray(b) ? { label: b[0], action: b[1], style: b[2] } : b)
@@ -375,20 +345,20 @@ function runCommand(str) {
 }
 
 function registerOrderCardInstrumentHandler(instrumentType, handler) {
-  return orderCardsRenderer.registerInstrumentHandler(instrumentType, handler);
+  return orderCardsApi?.registerInstrumentHandler?.(instrumentType, handler) || false;
 }
 
 function registerOrderCardTypeHandler(cardType, handler) {
-  return orderCardsRenderer.registerCardTypeHandler(cardType, handler);
+  return orderCardsApi?.registerCardTypeHandler?.(cardType, handler) || false;
 }
 
 function orderCardHandlerForRow(row = {}, instrumentType) {
-  return orderCardsRenderer.handlerFor(row, instrumentType);
+  return orderCardsApi?.handlerFor?.(row, instrumentType) || null;
 }
 
 function orderCardHandlerForCard(card, key) {
   const row = state.rows.find(r => rowKey(r) === key) || {};
-  return orderCardsRenderer.handlerFor(row, card?.dataset?.instrumentType);
+  return orderCardsApi?.handlerFor?.(row, card?.dataset?.instrumentType) || null;
 }
 
 function setCardState(key, state) {
@@ -630,7 +600,7 @@ function isTouched(ticker) {
 function render() {
   $grid.innerHTML = '';
   legacyOrderListRuntime.renderLegacyCards((row, i) => {
-    const card = orderCardsRenderer.createLegacyOrderCard({ row, index: i });
+    const card = createLegacyOrderCard(row, i);
     $grid.appendChild(card);
     return card;
   }, cardStateOrder);
@@ -744,49 +714,25 @@ const positionActionHandlers = {};
 const positionCardRenderers = {};
 const positionRemovalHandlers = {};
 const rendererLegacyGuards = [];
-
-orderCardsRenderer = createOrderCardsRenderer({
-  el,
-  inputNumber,
-  uiState,
-  orderCalc,
-  priceToPoints,
-  normNum: _normNum,
-  isPos,
-  isSL,
-  tickSize,
-  ensureInstrument,
-  instrumentInfoFor,
-  tradeRules,
-  markTouched,
-  detectInstrumentType,
-  rowKey,
-  ipcRenderer,
-  pendingByReqId,
-  pendingIdByReqId,
-  retryCounts,
-  pendingExecLabels,
-  cardByKey,
-  setCardState,
-  pendingActionInfo: (kind) => pendingOrdersRenderer.actionInfo(kind),
-  toast,
-  shakeCard,
-  render,
-  btn,
-  removeRow,
-  formatBidAskText,
-  formatSpreadTriple,
-  updateSpreadForTicker,
-  shouldShowBidAsk: () => SHOW_BID_ASK,
-  shouldShowSpread: () => SHOW_SPREAD,
-  getCardButtons: () => CARD_BUTTONS,
-  getButtonRows: () => BUTTON_ROWS,
-  getRows: () => state.rows
-});
-const scheduleOrderCardInstantExecution = (...args) => orderCardsRenderer.scheduleInstantExecution(...args);
-const place = (...args) => orderCardsRenderer.place(...args);
-
 const pendingOrdersRenderer = createPendingOrdersRenderer();
+
+function registerLegacyOrderCardsRuntime(registration = {}, maybeCreateCard) {
+  const runtime = registration.runtime || registration;
+  const createCard = registration.createCard || maybeCreateCard;
+  if (!runtime || typeof createCard !== 'function') return false;
+  legacyOrderListRuntime = runtime;
+  orderCardsApi = registration;
+  createLegacyOrderCard = createCard;
+  legacyOrderListRuntime.setClosedCardEventStrategy(orderCardsCfg?.closedCardEventStrategy || 'ignore');
+  return () => {
+    if (legacyOrderListRuntime === runtime) legacyOrderListRuntime = null;
+    if (orderCardsApi === registration) orderCardsApi = null;
+    if (createLegacyOrderCard === createCard) createLegacyOrderCard = null;
+  };
+}
+
+const scheduleOrderCardInstantExecution = (...args) => orderCardsApi?.scheduleInstantExecution?.(...args);
+const place = (...args) => orderCardsApi?.place?.(...args);
 
 function registerRendererLegacyGuard(guard = {}) {
   if (!guard || typeof guard !== 'object') return false;
@@ -884,9 +830,80 @@ loadRendererHandlers({
   shakeCard,
   render,
   btn,
-  orderCardsRenderer,
+  orderCardsDeps: {
+    el,
+    inputNumber,
+    uiState,
+    orderCalc,
+    priceToPoints,
+    normNum: _normNum,
+    isPos,
+    isSL,
+    tickSize,
+    ensureInstrument,
+    instrumentInfoFor,
+    tradeRules,
+    markTouched,
+    detectInstrumentType,
+    rowKey,
+    ipcRenderer,
+    pendingByReqId,
+    pendingIdByReqId,
+    retryCounts,
+    pendingExecLabels,
+    cardByKey,
+    setCardState,
+    pendingActionInfo: (kind) => pendingOrdersRenderer.actionInfo(kind),
+    toast,
+    shakeCard,
+    render,
+    btn,
+    removeRow,
+    formatBidAskText,
+    formatSpreadTriple,
+    updateSpreadForTicker,
+    shouldShowBidAsk: () => SHOW_BID_ASK,
+    shouldShowSpread: () => SHOW_SPREAD,
+    getCardButtons: () => CARD_BUTTONS,
+    getButtonRows: () => BUTTON_ROWS,
+    getRows: () => state.rows
+  },
+  legacyOrderListDeps: {
+    ipcRenderer,
+    state,
+    legacyState: {
+      uiState,
+      cardStates,
+      pendingExecLabels,
+      pendingByReqId,
+      pendingIdByReqId,
+      ticketToKey,
+      placedOrderByKey,
+      retryCounts
+    },
+    rowKey,
+    findKeyByTicker,
+    isTerminalCardState,
+    cardByKey,
+    setCardState,
+    removePositionSnapshotsForLegacyRow,
+    positionRemovalHandlerFor: cardType => positionRemovalHandlers[cardType],
+    positionMatchesLegacyRow,
+    isRegularPositionSnapshot,
+    shouldFilterLegacyRow,
+    shouldIgnoreLegacyRowForExistingPosition,
+    shouldIgnoreLegacyExecutionEvent,
+    shouldIgnoreLegacyPositionEvent,
+    shouldRemoveLegacyRowForPosition,
+    shouldResetLegacyRowForPosition,
+    forgetInstrument: (...args) => forgetInstrument(...args),
+    toast,
+    shakeCard,
+    render
+  },
   dispatchPositionAction,
   requestRemovePosition,
+  registerLegacyOrderCardsRuntime,
   registerOrderCardInstrumentHandler,
   registerOrderCardTypeHandler,
   registerPositionCardRenderer(cardType, renderer) {
@@ -900,6 +917,10 @@ loadRendererHandlers({
   },
   registerRendererLegacyGuard
 });
+
+if (!legacyOrderListRuntime || !createLegacyOrderCard) {
+  throw new Error('orderCards renderer runtime was not registered');
+}
 
 for (const { dir, manifest } of loadRendererServiceManifests()) {
   try {
@@ -1152,8 +1173,8 @@ if (typeof module !== 'undefined') {
     instrumentInfo,
     settingsForms,
     migrateKey: legacyOrderListRuntime.migrateKey,
-    orderCardInstrumentHandlers: orderCardsRenderer.instrumentTypeHandlers,
-    orderCardTypeHandlers: orderCardsRenderer.cardTypeHandlers,
+    orderCardInstrumentHandlers: orderCardsApi.instrumentTypeHandlers,
+    orderCardTypeHandlers: orderCardsApi.cardTypeHandlers,
     render
   };
 }

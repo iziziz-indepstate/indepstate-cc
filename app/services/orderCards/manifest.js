@@ -1,5 +1,7 @@
 const path = require('path');
 const settings = require('../settings');
+const { createOrderCardsRenderer } = require('./renderer');
+const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 
 settings.register(
   'order-cards',
@@ -10,8 +12,29 @@ settings.register(
 const rendererHandlers = [{
   cardType: 'regular',
   register(context = {}) {
+    const orderCardsRenderer = createOrderCardsRenderer(context.orderCardsDeps || {});
+    const legacyOrderListRuntime = createLegacyOrderListRuntime({
+      ...(context.legacyOrderListDeps || {}),
+      matchesExistingOrderRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
+      orderCardHandlerForRow: (...args) => orderCardsRenderer.handlerFor(...args),
+      orderCardHandlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
+      scheduleOrderCardInstantExecution: (...args) => orderCardsRenderer.scheduleInstantExecution(...args)
+    });
+    context.registerLegacyOrderCardsRuntime?.({
+      runtime: legacyOrderListRuntime,
+      createCard: (row, index) => orderCardsRenderer.createLegacyOrderCard({ row, index }),
+      registerInstrumentHandler: (...args) => orderCardsRenderer.registerInstrumentHandler(...args),
+      registerCardTypeHandler: (...args) => orderCardsRenderer.registerCardTypeHandler(...args),
+      handlerFor: (...args) => orderCardsRenderer.handlerFor(...args),
+      handlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
+      matchesExistingRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
+      scheduleInstantExecution: (...args) => orderCardsRenderer.scheduleInstantExecution(...args),
+      place: (...args) => orderCardsRenderer.place(...args),
+      instrumentTypeHandlers: orderCardsRenderer.instrumentTypeHandlers,
+      cardTypeHandlers: orderCardsRenderer.cardTypeHandlers
+    });
+
     const {
-      orderCardsRenderer,
       positionKey,
       positionCardTitle,
       btn,
