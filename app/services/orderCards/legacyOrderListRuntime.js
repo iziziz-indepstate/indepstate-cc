@@ -1,3 +1,5 @@
+const { shouldRouteRowToLegacyRuntime } = require('./legacyRouting');
+
 function createLegacyOrderListRuntime({
   ipcRenderer,
   state: providedState,
@@ -396,7 +398,7 @@ function createLegacyOrderListRuntime({
   function loadInitialRows(limit = 100) {
     return ipcRenderer.invoke('orders:list', limit).then(rows => {
       state.rows = Array.isArray(rows)
-        ? rows.filter(row => !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
+        ? rows.filter(row => shouldRouteRowToLegacyRuntime(row) && !shouldFilterLegacyRow(row) && !shouldIgnoreLegacyRowForExistingPosition(row))
         : [];
       render();
     }).catch(() => {});
@@ -435,6 +437,7 @@ function createLegacyOrderListRuntime({
 
   function applyOrderCardUpdate(update, { place } = {}) {
     const row = update?.row || update;
+    if (!shouldRouteRowToLegacyRuntime(row)) return;
     if (shouldFilterLegacyRow(row)) return;
     if (shouldIgnoreLegacyRowForExistingPosition(row)) return;
     let idx = state.rows.findIndex(r => matchesExistingOrderRow(row, r));
@@ -717,4 +720,6 @@ function createLegacyOrderListRuntime({
   };
 }
 
-module.exports = { createLegacyOrderListRuntime };
+module.exports = {
+  createLegacyOrderListRuntime
+};

@@ -1,5 +1,6 @@
 const { detectInstrumentType } = require('../instruments');
 const { legacyRowToCreateCommand } = require('../../application/positions');
+const { shouldRouteRowToLegacyRuntime } = require('./legacyRouting');
 
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -69,7 +70,7 @@ function createOrderCardsApplicationService({
 
   function publishUpdate(update) {
     publish?.('order-cards:changed', update);
-    if (update?.type === 'upsert') {
+    if (update?.type === 'upsert' && shouldRouteRowToLegacyRuntime(update.row)) {
       legacyPublish?.('orders:new', { ...update.row, __orderCardsEventId: update.eventId });
     }
     if (update?.type === 'remove') {
@@ -79,12 +80,24 @@ function createOrderCardsApplicationService({
 
   function ingestRow(row = {}, context = {}) {
     const normalized = normalizeRow(row, context);
-    readModel.set(rowIdentity(normalized), normalized);
-    try {
-      positions?.handle?.(legacyRowToCreateCommand(normalized));
-    } catch (err) {
-      console.warn('[positions] failed to record order card row:', err?.message || String(err));
+    if (!shouldRouteRowToLegacyRuntime(normalized)) {
+      if (typeof positions?.handle !== 'function') {
+        const error = 'position snapshot handler is unavailable';
+        console.warn('[positions] failed to record regular order card row:', error);
+        return { ok: false, error };
+      }
+      try {
+        const result = positions.handle(legacyRowToCreateCommand(normalized));
+        if (result?.ok === false) {
+          console.warn('[positions] failed to record regular order card row:', result.error || result.reason || 'unknown error');
+          return { ok: false, error: result.error || result.reason || 'position snapshot creation failed' };
+        }
+      } catch (err) {
+        console.warn('[positions] failed to record regular order card row:', err?.message || String(err));
+        return { ok: false, error: err?.message || String(err) };
+      }
     }
+    readModel.set(rowIdentity(normalized), normalized);
     publishUpdate({
       type: 'upsert',
       row: clone(normalized),

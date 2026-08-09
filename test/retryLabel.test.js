@@ -42,7 +42,7 @@ async function run() {
   const renderer = require('../app/renderer.js');
   const t = renderer.__testing;
 
-  const row = { ticker: 'TST', event: 'evt', time: 0, price: 1 };
+  const row = { cardType: 'legacyExtension', ticker: 'TST', event: 'evt', time: 0, price: 1 };
   handlers['orders:new'](null, row);
   const key = t.rowKey(row);
   t.setCardState(key, 'pending-exec');

@@ -1,5 +1,9 @@
 const assert = require('assert');
 const { createLegacyOrderListRuntime } = require('../app/services/orderCards/legacyOrderListRuntime');
+const {
+  isRegularLegacyRow,
+  shouldRouteRowToLegacyRuntime
+} = require('../app/services/orderCards/legacyRouting');
 
 function createRuntime(overrides = {}) {
   const handlers = {};
@@ -47,17 +51,50 @@ function createRuntime(overrides = {}) {
 
 async function run() {
   {
+    assert.strictEqual(isRegularLegacyRow({}), true);
+    assert.strictEqual(isRegularLegacyRow({ cardType: 'regular' }), true);
+    assert.strictEqual(isRegularLegacyRow({ type: 'regular' }), true);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'legacyExtension' }), true);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ type: 'extension' }), true);
+    assert.strictEqual(shouldRouteRowToLegacyRuntime({ cardType: 'regular' }), false);
+  }
+
+  {
     const { runtime, handlers } = createRuntime();
-    handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 } });
-    handlers['orders:new'](null, { ticker: 'MSFT', event: 'up', time: 1, price: 50 });
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 } });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'MSFT', event: 'up', time: 1, price: 50 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
     assert.strictEqual(runtime.rows().length, 2);
-    assert.deepStrictEqual(runtime.rows()[0], { ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+    assert.deepStrictEqual(runtime.rows()[0], { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
   }
 
   {
     const { runtime, handlers, getRenderCount } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100 } });
+    handlers['orders:new'](null, { cardType: 'regular', ticker: 'MSFT', event: 'up', time: 1, price: 50 });
+    assert.strictEqual(runtime.rows().length, 0);
+    assert.strictEqual(getRenderCount(), 0);
+  }
+
+  {
+    const { runtime } = createRuntime({
+      ipcRenderer: {
+        on: () => {},
+        invoke: async () => [
+          { ticker: 'AAPL', event: 'up', time: 1, price: 100 },
+          { cardType: 'regular', ticker: 'MSFT', event: 'up', time: 1, price: 50 },
+          { cardType: 'legacyExtension', ticker: 'TSLA', event: 'custom', time: 2, price: 200 }
+        ]
+      }
+    });
+    runtime.mount();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepStrictEqual(runtime.rows().map(row => row.ticker), ['TSLA']);
+  }
+
+  {
+    const { runtime, handlers, getRenderCount } = createRuntime();
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
     handlers['order-cards:changed'](null, { type: 'upsert', row, eventId: 'evt-upsert-1' });
     handlers['orders:new'](null, { ...row, __orderCardsEventId: 'evt-upsert-1' });
     assert.strictEqual(runtime.rows().length, 1);
@@ -67,7 +104,7 @@ async function run() {
 
   {
     const { runtime, handlers, getRenderCount, resetRenderCount } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' };
     handlers['orders:new'](null, row);
     resetRenderCount();
     handlers['order-cards:changed'](null, { type: 'remove', filter: { producingLineId: 'line-1' }, eventId: 'evt-remove-1' });
@@ -78,45 +115,45 @@ async function run() {
 
   {
     const { runtime, handlers, getRenderCount } = createRuntime();
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'up', time: 1, price: 100 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 });
     assert.strictEqual(runtime.rows().length, 1);
     assert.strictEqual(getRenderCount(), 1);
   }
 
   {
     const { runtime, handlers } = createRuntime();
-    handlers['order-cards:changed'](null, { type: 'upsert', row: { ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' } });
+    handlers['order-cards:changed'](null, { type: 'upsert', row: { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, producingLineId: 'line-1' } });
     handlers['order-cards:changed'](null, { type: 'remove', filter: { producingLineId: 'line-1' } });
     assert.strictEqual(runtime.rows().length, 0);
   }
 
   {
     const { runtime, handlers } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, qty: 1 };
     handlers['orders:new'](null, row);
     runtime.markTouched('AAPL');
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101, qty: 2 });
     assert.strictEqual(runtime.rows().length, 1);
     assert.deepStrictEqual(runtime.rows()[0], row);
   }
 
   {
     const { runtime, handlers, rowKey } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100 };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 };
     handlers['orders:new'](null, row);
     runtime.legacyOrderStateApi.setCardState(rowKey(row), 'closed');
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
     assert.deepStrictEqual(runtime.rows()[0], row);
 
     runtime.setClosedCardEventStrategy('revive');
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
     assert.strictEqual(runtime.rows()[0].event, 'down');
     assert.strictEqual(runtime.legacyOrderStateApi.getCardState(rowKey(row)), undefined);
   }
 
   {
     const { runtime, handlers, rowKey } = createRuntime();
-    const row = { ticker: 'AAPL', symbol: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', symbol: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
     handlers['orders:new'](null, row);
     const key = rowKey(row);
     runtime.legacyOrderStateApi.markPendingRequest('req-1', key, { retryCount: 2, pendingId: 'pending-1' });
@@ -136,7 +173,7 @@ async function run() {
 
   {
     const { runtime, handlers, rowKey } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100, provider: 'simulated' };
     handlers['orders:new'](null, row);
     const key = rowKey(row);
     runtime.legacyOrderStateApi.bindTicket('ticket-1', key);
@@ -186,7 +223,7 @@ async function run() {
 
   {
     const { runtime, handlers, rowKey } = createRuntime();
-    const row = { ticker: 'AAPL', event: 'up', time: 1, price: 100 };
+    const row = { cardType: 'legacyExtension', ticker: 'AAPL', event: 'up', time: 1, price: 100 };
     handlers['orders:new'](null, row);
     const oldKey = rowKey(row);
     runtime.legacyOrderStateApi.markPendingRequest('req-1', oldKey, { pendingId: 'pending-1' });
@@ -195,7 +232,7 @@ async function run() {
     runtime.legacyOrderStateApi.markPlacedOrder(oldKey, { ticket: 'ticket-1' });
     runtime.legacyOrderStateApi.bindTicket('ticket-1', oldKey);
 
-    handlers['orders:new'](null, { ticker: 'AAPL', event: 'down', time: 2, price: 101 });
+    handlers['orders:new'](null, { cardType: 'legacyExtension', ticker: 'AAPL', event: 'down', time: 2, price: 101 });
     const newKey = rowKey(runtime.rows()[0]);
     assert.notStrictEqual(newKey, oldKey);
     assert.strictEqual(runtime.legacyOrderStateApi.resolvePendingKey('req-1'), newKey);

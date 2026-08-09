@@ -2,8 +2,6 @@ const { ipcMain, BrowserWindow } = require('electron');
 const path = require('path');
 const settings = require('../settings');
 const { createCommandService } = require('.');
-const { detectInstrumentType } = require('../instruments');
-const { legacyRowToCreateCommand } = require('../../application/positions');
 
 settings.register(
   'command-line',
@@ -38,18 +36,19 @@ function initService(servicesApi = {}) {
     executionApi: servicesApi,
     aliases: config && config.aliases,
     onAdd(row) {
-      const ticker = row?.ticker || row?.symbol;
-      const instrumentType = row?.instrumentType || detectInstrumentType(String(ticker || ''));
-      const provider = servicesApi.brokerage?.resolveProvider?.({ row, symbol: ticker, instrumentType })?.provider || row?.provider;
-      try {
-        servicesApi.positions?.handle?.(legacyRowToCreateCommand({ ...row, instrumentType, provider }));
-      } catch (err) {
-        console.warn('[positions] failed to record command-line row:', err?.message || String(err));
+      const orderCards = servicesApi.orderCards;
+      if (typeof orderCards?.ingestRow === 'function') {
+        return orderCards.ingestRow(row, { source: 'commandLine' });
       }
       sendToOrderWindows('orders:new', row);
+      return row;
     },
     onRemove(filter) {
       if (!filter || typeof filter !== 'object') return { ok: false, error: 'Invalid remove payload' };
+      const orderCards = servicesApi.orderCards;
+      if (typeof orderCards?.remove === 'function') {
+        return orderCards.remove(filter);
+      }
       if (sendToOrderWindows('orders:remove', filter) > 0) return { ok: true };
       return { ok: false, error: 'No window' };
     }
@@ -71,6 +70,7 @@ function initService(servicesApi = {}) {
     const list = config && config.shortcuts;
     return Array.isArray(list) ? list.map(String) : [];
   });
+  return cmdService;
 }
 
 function hookRenderer(ipcRenderer) {

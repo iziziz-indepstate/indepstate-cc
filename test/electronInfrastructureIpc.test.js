@@ -30,12 +30,22 @@ async function run() {
   registerOrderListIpcHandlers({
     ipcMain,
     orderService: {
-      getOrdersList: async (rows) => [{ source: 'webhooks', rows }]
+      list: async ({ rows }) => [{ source: 'orderCards', rows }],
+      getOrdersList: async (rows) => [{ source: 'legacy-webhooks', rows }]
     },
     execLog
   });
-  assert.deepStrictEqual(await handlers.get('orders:list')(null, 5), [{ source: 'webhooks', rows: 5 }]);
+  assert.deepStrictEqual(await handlers.get('orders:list')(null, 5), [{ source: 'orderCards', rows: 5 }]);
   assert.deepStrictEqual(await handlers.get('orders:list')(null, { file: 'executions', rows: 10 }), [{ kind: 'one' }, { kind: 'two' }]);
+
+  registerOrderListIpcHandlers({
+    ipcMain,
+    orderService: {
+      getOrdersList: async (rows) => [{ source: 'legacy-webhooks', rows }]
+    },
+    execLog
+  });
+  assert.deepStrictEqual(await handlers.get('orders:list')(null, 6), [{ source: 'legacy-webhooks', rows: 6 }]);
 
   console.log('electronInfrastructureIpc tests passed');
 }

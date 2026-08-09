@@ -8,7 +8,7 @@ const fs = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '..','.env') });
 
 const servicesApi = require('./services/servicesApi');
-const { createOrderCardService } = require('./services/orderCards');
+const { createOrderCardService, createOrderCardsApplicationService } = require('./services/orderCards');
 const { detectInstrumentType } = require('./services/instruments');
 const events = require('./services/events');
 const { createPendingOrderHub, registerPendingOrdersIpcHandlers } = require('./services/pendingOrders');
@@ -16,7 +16,6 @@ const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const loadConfig = require('./config/load');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { GroupedOrderLifecycleRegistry } = require('./services/brokerage/comps/groupedOrderLifecycle');
-const { legacyRowToCreateCommand } = require('./application/positions');
 const {
   createAdapterLifecycleBridge,
   createExecutionApplicationService,
@@ -299,17 +298,7 @@ app.whenReady().then(() => {
       type,
       nowTs,
       onRow(row) {
-        const ticker = row.ticker || row.symbol;
-        const instrumentType = row.instrumentType || detectInstrumentType(String(ticker || ''));
-        row.provider = resolveProviderName({ row, symbol: ticker, instrumentType });
-        try {
-          servicesApi.positions?.handle?.(legacyRowToCreateCommand({ ...row, instrumentType }));
-        } catch (err) {
-          console.warn('[positions] failed to record legacy row:', err?.message || String(err));
-        }
-        if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('orders:new', row);
-        }
+        servicesApi.orderCards?.ingestRow?.(row, { source: type });
       }
     };
     if (type === 'webhook') {
@@ -319,19 +308,17 @@ app.whenReady().then(() => {
     }
     return createOrderCardService(opts);
   });
-  for (const svc of orderCardServices) svc.start();
 
-  orderCardService = {
-    async getOrdersList(rows = 100) {
-      const lists = await Promise.all(orderCardServices.map((s) => s.getOrdersList(rows)));
-      const combined = lists.flat().sort((a, b) => (b.time || 0) - (a.time || 0));
-      return combined.map((row) => {
-        const ticker = row.ticker || row.symbol;
-        const instrumentType = row.instrumentType || detectInstrumentType(String(ticker || ''));
-        return { ...row, provider: resolveProviderName({ row, symbol: ticker, instrumentType }) };
-      });
-    }
-  };
+  orderCardService = createOrderCardsApplicationService({
+    positions: servicesApi.positions,
+    resolveProviderName,
+    getSourceServices: () => orderCardServices,
+    publish: sendToRenderer,
+    legacyPublish: sendToRenderer
+  });
+  servicesApi.orderCards = orderCardService;
+
+  for (const svc of orderCardServices) svc.start();
 
   createWindow();
   setupIpc(orderCardService);

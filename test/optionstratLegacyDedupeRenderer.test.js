@@ -11,6 +11,7 @@ function optionRow() {
   return {
     ticker: 'SPY',
     symbol: 'SPY',
+    cardType: 'option',
     event: 'optionstrat',
     time: 1,
     instrumentType: 'OPT',

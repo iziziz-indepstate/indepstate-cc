@@ -41,7 +41,13 @@ function registerOrderListIpcHandlers({
     }
 
     if (file === 'webhooks') {
-      return orderService.getOrdersList(rows);
+      if (typeof orderService?.list === 'function') {
+        return orderService.list({ rows });
+      }
+      if (typeof orderService?.getOrdersList === 'function') {
+        return orderService.getOrdersList(rows);
+      }
+      return [];
     }
     if (file === 'executions') {
       return readExecutionRows(execLog, rows);

@@ -53,7 +53,7 @@ async function run() {
   const t = renderer.__testing;
   await new Promise(resolve => setImmediate(resolve));
 
-  const row = { ticker: 'TST', event: 'evt', time: 0, price: 1 };
+  const row = { cardType: 'legacyExtension', ticker: 'TST', event: 'evt', time: 0, price: 1 };
   handlers['orders:new'](null, row);
   const card = t.cardByKey(t.rowKey(row));
   const buttons = card.querySelectorAll('button.btn');

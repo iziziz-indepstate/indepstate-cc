@@ -244,14 +244,8 @@ function isRegularPositionSnapshot(position = {}) {
   return regularCardType(position.card?.type || position.source?.cardType || 'regular');
 }
 
-function matchingRegularPositionSnapshot(row = {}) {
-  if (!regularCardType(row.cardType || row.type || 'regular')) return null;
-  return Array.from(positionsById.values()).find(position => (
-    isRegularPositionSnapshot(position) && positionMatchesLegacyRow(position, row)
-  )) || null;
-}
-
 function isPositionRenderedByLegacyRow(position = {}) {
+  if (isRegularPositionSnapshot(position)) return false;
   return state.rows.some(row => positionMatchesLegacyRow(position, row));
 }
 
@@ -792,7 +786,6 @@ function shouldResetLegacyRowForPosition(position = {}, row = {}) {
 }
 
 function shouldIgnoreLegacyRowForExistingPosition(row = {}) {
-  if (matchingRegularPositionSnapshot(row)) return true;
   const context = legacyGuardContext();
   return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
 }
