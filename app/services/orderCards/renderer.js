@@ -28,14 +28,61 @@ function createOrderCardsRenderer({
   shakeCard,
   render,
   btn,
+  removeRow,
+  formatBidAskText = () => '',
+  formatSpreadTriple = () => '',
+  updateSpreadForTicker = () => {},
+  shouldShowBidAsk = () => false,
+  shouldShowSpread = () => false,
   getCardButtons = () => [],
   getButtonRows = () => 1,
+  getRows = () => [],
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
+function registerInstrumentHandler(instrumentType, handler) {
+  const key = String(instrumentType || '').trim();
+  if (!key || !handler || typeof handler !== 'object') return false;
+  instrumentTypeHandlers[key] = handler;
+  return () => {
+    if (instrumentTypeHandlers[key] === handler) delete instrumentTypeHandlers[key];
+  };
+}
+
+function registerCardTypeHandler(cardType, handler) {
+  const key = String(cardType || '').trim();
+  if (!key || !handler || typeof handler !== 'object') return false;
+  cardTypeHandlers[key] = handler;
+  return () => {
+    if (cardTypeHandlers[key] === handler) delete cardTypeHandlers[key];
+  };
+}
+
 function handlerFor(row = {}, instrumentType) {
   const type = instrumentType || row.instrumentType;
   return instrumentTypeHandlers[type] || cardTypeHandlers[row.cardType] || cardTypeHandlers[row.type] || null;
+}
+
+function handlerForKey(key) {
+  const row = (getRows() || []).find(r => rowKey(r) === key) || {};
+  return handlerFor(row, row.instrumentType);
+}
+
+function titleFor(row = {}, instrumentType) {
+  const handler = handlerFor(row, instrumentType);
+  const custom = typeof handler?.title === 'function'
+    ? handler.title({ row, instrumentType })
+    : null;
+  return custom || row.ticker;
+}
+
+function matchesExistingRow(incomingRow = {}, existingRow = {}) {
+  const instrumentType = incomingRow.instrumentType || detectInstrumentType(incomingRow.ticker);
+  const handler = handlerFor(incomingRow, instrumentType);
+  if (typeof handler?.matchesExistingRow === 'function') {
+    return !!handler.matchesExistingRow({ incomingRow, existingRow, rowKey });
+  }
+  return existingRow.ticker === incomingRow.ticker;
 }
 
 function createBody(row, key, instrumentType) {
@@ -657,6 +704,125 @@ function keyForRow(row = {}) {
   return row.__positionKey || rowKey(row);
 }
 
+function isUpEvent(ev) {
+  return /(up|long)/i.test(String(ev));
+}
+
+function createLegacyOrderCard({ row = {}, index } = {}) {
+  const key = rowKey(row);
+  const instrumentType = row.instrumentType || detectInstrumentType(row.ticker);
+  const cardHandler = handlerFor(row, instrumentType);
+
+  ensureInstrument(row.ticker, row.provider);
+  cardHandler?.onCreateCard?.({ row, key, instrumentType });
+
+  const card = el('div', 'card');
+  card.setAttribute('data-rowkey', key);
+  card.setAttribute('data-ticker', row.ticker);
+  card.setAttribute('data-instrument-type', instrumentType);
+
+  const head = el('div', 'row');
+  const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
+  left.appendChild(el('div', null, titleFor(row, instrumentType), {style: 'font-weight:600;font-size:13px'}));
+  if (shouldShowBidAsk()) {
+    const $bidask = el('span', 'card__bidask');
+    $bidask.title = 'Bid / Ask';
+    $bidask.style.fontSize = '11px';
+    $bidask.style.color = '#6b7280';
+    $bidask.textContent = formatBidAskText(instrumentInfoFor(row.ticker, row), row) || '';
+    left.appendChild($bidask);
+  }
+  head.appendChild(left);
+
+  const right = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
+  const $status = el('span', 'card__status');
+  $status.style.display = 'none';
+  right.appendChild($status);
+
+  if (shouldShowSpread()) {
+    const $spread = el('span', 'card__spread');
+    $spread.title = 'Spread pts: current / avg10 / avg100';
+    $spread.style.fontSize = '11px';
+    $spread.style.color = '#6b7280';
+    $spread.textContent = formatSpreadTriple(row.ticker, row) || '';
+    right.appendChild($spread);
+  }
+
+  const $retry = document.createElement('button');
+  $retry.type = 'button';
+  $retry.className = 'retry-btn';
+  $retry.textContent = '0';
+  $retry.title = 'Stop retries';
+  $retry.style.display = 'none';
+  $retry.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const cardEl = e.currentTarget.closest('.card');
+    const reqId = cardEl?.dataset.reqId;
+    if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId);
+  });
+  right.appendChild($retry);
+
+  const $close = document.createElement('button');
+  $close.type = 'button';
+  $close.textContent = '×';
+  $close.className = 'card__close';
+  Object.assign($close.style, {
+    border: 'none',
+    background: 'transparent',
+    width: '22px',
+    height: '22px',
+    lineHeight: '22px',
+    textAlign: 'center',
+    fontSize: '16px',
+    cursor: 'pointer',
+    borderRadius: '4px',
+    color: isUpEvent(row.event) ? '#2e7d32' : '#c62828',
+    marginLeft: '8px'
+  });
+  $close.title = 'Удалить карточку';
+  $close.addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeRow?.(row);
+  });
+  right.appendChild($close);
+  head.appendChild(right);
+
+  const meta = el('div', 'meta');
+  const body = createBody(row, key, instrumentType);
+  const btns = el('div', 'btns');
+  const mk = (label, cls, kind) => {
+    const b = btn(label, cls, async () => {
+      const v = body.validate();
+      if (!v.valid) return;
+      await place(kind, row, v, instrumentType, label);
+    });
+    b.setAttribute('data-kind', kind);
+    return b;
+  };
+  const cardButtons = buttons(row, instrumentType) || getCardButtons();
+  const rows = Number(getButtonRows()) || 1;
+  const cols = Math.ceil(cardButtons.length / rows);
+  btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
+  for (const {label, action, style} of cardButtons) {
+    btns.appendChild(mk(label, (style || action).toLowerCase(), action));
+  }
+
+  card.appendChild(head);
+  card.appendChild(meta);
+  card.appendChild(body.line);
+  if (body.extraRow) card.appendChild(body.extraRow);
+  card.appendChild(btns);
+  const note = el('div', 'card__note');
+  card.appendChild(note);
+
+  body.setButtons(btns);
+  if (body.setNote) body.setNote(note);
+  body.validate();
+  card._validate = (commit = false) => body.validate(commit);
+
+  return card;
+}
+
 async function place(kind, row, v, instrumentType, btnLabel) {
   if (!v.valid) return;
 
@@ -1010,12 +1176,20 @@ function createRegularPositionCard({
     createFxBody,
     createEquitiesBody,
     createBody,
+    createLegacyOrderCard,
     buttons,
+    registerInstrumentHandler,
+    registerCardTypeHandler,
     handlerFor,
+    handlerForKey,
+    matchesExistingRow,
+    titleFor,
     scheduleInstantExecution,
     place,
     regularRowFromPosition,
-    createRegularPositionCard
+    createRegularPositionCard,
+    instrumentTypeHandlers,
+    cardTypeHandlers
   };
 }
 

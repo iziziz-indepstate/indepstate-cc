@@ -51,12 +51,11 @@ let pendingIdByReqId;
 let ticketToKey;
 let placedOrderByKey;
 let retryCounts;
+let orderCardsRenderer;
 
 // Order for sorting cards by execution state
 const cardStateOrder = {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7};
 const terminalCardStates = new Set(['closed', 'profit', 'loss']);
-const orderCardInstrumentHandlers = {};
-const orderCardTypeHandlers = {};
 
 const $wrap = document.getElementById('wrap');
 const $grid = document.getElementById('grid');
@@ -73,12 +72,12 @@ legacyOrderListRuntime = createLegacyOrderListRuntime({
   ipcRenderer,
   rowKey,
   findKeyByTicker,
-  matchesExistingOrderRow,
+  matchesExistingOrderRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
   isTerminalCardState,
   cardByKey,
   setCardState,
-  orderCardHandlerForRow,
-  orderCardHandlerForKey,
+  orderCardHandlerForRow: (...args) => orderCardsRenderer.handlerFor(...args),
+  orderCardHandlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
   scheduleOrderCardInstantExecution: (...args) => scheduleOrderCardInstantExecution(...args),
   removePositionSnapshotsForLegacyRow,
   positionRemovalHandlerFor: cardType => positionRemovalHandlers[cardType],
@@ -284,10 +283,6 @@ function isSL(n) {
   return typeof n === 'number' && isFinite(n) && n > 0;
 }
 
-function isUpEvent(ev) {
-  return /(up|long)/i.test(String(ev));
-}
-
 function priceToPoints(inp, price, row, commit = false) {
   const raw = String(inp?.value ?? '').trim();
   if (!raw || !raw.includes('.')) return _normNum(raw);
@@ -380,53 +375,20 @@ function runCommand(str) {
 }
 
 function registerOrderCardInstrumentHandler(instrumentType, handler) {
-  const key = String(instrumentType || '').trim();
-  if (!key || !handler || typeof handler !== 'object') return false;
-  orderCardInstrumentHandlers[key] = handler;
-  return () => {
-    if (orderCardInstrumentHandlers[key] === handler) delete orderCardInstrumentHandlers[key];
-  };
+  return orderCardsRenderer.registerInstrumentHandler(instrumentType, handler);
 }
 
 function registerOrderCardTypeHandler(cardType, handler) {
-  const key = String(cardType || '').trim();
-  if (!key || !handler || typeof handler !== 'object') return false;
-  orderCardTypeHandlers[key] = handler;
-  return () => {
-    if (orderCardTypeHandlers[key] === handler) delete orderCardTypeHandlers[key];
-  };
+  return orderCardsRenderer.registerCardTypeHandler(cardType, handler);
 }
 
 function orderCardHandlerForRow(row = {}, instrumentType) {
-  const type = instrumentType || row.instrumentType;
-  return orderCardInstrumentHandlers[type] || orderCardTypeHandlers[row.cardType] || orderCardTypeHandlers[row.type] || null;
+  return orderCardsRenderer.handlerFor(row, instrumentType);
 }
 
 function orderCardHandlerForCard(card, key) {
   const row = state.rows.find(r => rowKey(r) === key) || {};
-  return orderCardHandlerForRow(row, card?.dataset?.instrumentType);
-}
-
-function orderCardHandlerForKey(key) {
-  const row = state.rows.find(r => rowKey(r) === key) || {};
-  return orderCardHandlerForRow(row, row.instrumentType);
-}
-
-function orderCardTitle(row = {}, instrumentType) {
-  const handler = orderCardHandlerForRow(row, instrumentType);
-  const custom = typeof handler?.title === 'function'
-    ? handler.title({ row, instrumentType })
-    : null;
-  return custom || row.ticker;
-}
-
-function matchesExistingOrderRow(incomingRow = {}, existingRow = {}) {
-  const instrumentType = incomingRow.instrumentType || detectInstrumentType(incomingRow.ticker);
-  const handler = orderCardHandlerForRow(incomingRow, instrumentType);
-  if (typeof handler?.matchesExistingRow === 'function') {
-    return !!handler.matchesExistingRow({ incomingRow, existingRow, rowKey });
-  }
-  return existingRow.ticker === incomingRow.ticker;
+  return orderCardsRenderer.handlerFor(row, card?.dataset?.instrumentType);
 }
 
 function setCardState(key, state) {
@@ -668,7 +630,7 @@ function isTouched(ticker) {
 function render() {
   $grid.innerHTML = '';
   legacyOrderListRuntime.renderLegacyCards((row, i) => {
-    const card = createCard(row, i);
+    const card = orderCardsRenderer.createLegacyOrderCard({ row, index: i });
     $grid.appendChild(card);
     return card;
   }, cardStateOrder);
@@ -694,133 +656,6 @@ function render() {
   }
 }
 
-function createCard(row, index) {
-  const key = rowKey(row);
-  const instrumentType = row.instrumentType || detectInstrumentType(row.ticker); // fallback to EQ if not set
-  const cardHandler = orderCardHandlerForRow(row, instrumentType);
-
-  // ensure we have a quote for this symbol ASAP
-  ensureInstrument(row.ticker, row.provider);
-  cardHandler?.onCreateCard?.({ row, key, instrumentType });
-
-  const card = el('div', 'card');
-  card.setAttribute('data-rowkey', key);
-  card.setAttribute('data-ticker', row.ticker);
-  card.setAttribute('data-instrument-type', instrumentType);
-
-  // head
-  const head = el('div', 'row');
-
-  // Левая часть: тикер (+ bid/ask при наявності)
-  const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
-  left.appendChild(el('div', null, orderCardTitle(row, instrumentType), {style: 'font-weight:600;font-size:13px'}));
-  if (SHOW_BID_ASK) {
-    const $bidask = el('span', 'card__bidask');
-    $bidask.title = 'Bid / Ask';
-    $bidask.style.fontSize = '11px';
-    $bidask.style.color = '#6b7280';
-    $bidask.textContent = formatBidAskText(instrumentInfoFor(row.ticker, row), row) || '';
-    left.appendChild($bidask);
-  }
-  head.appendChild(left);
-
-  // Правая часть: статус + кнопка удаления
-  const right = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
-  const $status = el('span', 'card__status');
-  $status.style.display = 'none';
-  right.appendChild($status);
-
-  if (SHOW_SPREAD) {
-    const $spread = el('span', 'card__spread');
-    $spread.title = 'Spread pts: current / avg10 / avg100';
-    $spread.style.fontSize = '11px';
-    $spread.style.color = '#6b7280';
-    $spread.textContent = formatSpreadTriple(row.ticker, row) || '';
-    right.appendChild($spread);
-  }
-
-  const $retry = document.createElement('button');
-  $retry.type = 'button';
-  $retry.className = 'retry-btn';
-  $retry.textContent = '0';
-  $retry.title = 'Stop retries';
-  $retry.style.display = 'none';
-  $retry.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const cardEl = e.currentTarget.closest('.card');
-    const reqId = cardEl?.dataset.reqId;
-    if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId);
-  });
-  right.appendChild($retry);
-
-  const $close = document.createElement('button');
-  $close.type = 'button';
-  $close.textContent = '×';
-  $close.className = 'card__close';
-  Object.assign($close.style, {
-    border: 'none',
-    background: 'transparent',
-    width: '22px',
-    height: '22px',
-    lineHeight: '22px',
-    textAlign: 'center',
-    fontSize: '16px',
-    cursor: 'pointer',
-    borderRadius: '4px',
-    color: isUpEvent(row.event) ? '#2e7d32' : '#c62828',
-    marginLeft: '8px'
-  });
-  $close.title = 'Удалить карточку';
-  $close.addEventListener('click', (e) => {
-    e.stopPropagation();
-    removeRow(row);
-  });
-  right.appendChild($close);
-  head.appendChild(right);
-
-  // meta
-  const meta = el('div', 'meta');
-
-  // body
-  const body = createOrderCardBody(row, key, instrumentType);
-
-
-  // buttons
-  const btns = el('div', 'btns');
-  const mk = (label, cls, kind) => {
-    const b = btn(label, cls, async () => {
-      const v = body.validate();
-      if (!v.valid) return;
-      await place(kind, row, v, instrumentType, label);
-    });
-    b.setAttribute('data-kind', kind);
-    return b;
-  };
-  const cardButtons = orderCardButtons(row, instrumentType) || CARD_BUTTONS;
-  const cols = Math.ceil(cardButtons.length / BUTTON_ROWS);
-  btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
-  for (const {label, action, style} of cardButtons) {
-    btns.appendChild(mk(label, (style || action).toLowerCase(), action));
-  }
-
-  // assemble
-  card.appendChild(head);
-  card.appendChild(meta);
-  card.appendChild(body.line);
-  if (body.extraRow) card.appendChild(body.extraRow); // Risk$ line for equities
-  card.appendChild(btns);
-  const note = el('div', 'card__note');
-  card.appendChild(note);
-
-  // let validator manage buttons state
-  body.setButtons(btns);
-  if (body.setNote) body.setNote(note);
-  body.validate();
-  // expose validator for external revalidation on instrument updates
-  card._validate = (commit = false) => body.validate(commit);
-
-  return card;
-}
 
 function positionCardTitle(position = {}) {
   const data = position.card?.data || {};
@@ -910,7 +745,7 @@ const positionCardRenderers = {};
 const positionRemovalHandlers = {};
 const rendererLegacyGuards = [];
 
-const orderCardsRenderer = createOrderCardsRenderer({
+orderCardsRenderer = createOrderCardsRenderer({
   el,
   inputNumber,
   uiState,
@@ -934,17 +769,20 @@ const orderCardsRenderer = createOrderCardsRenderer({
   cardByKey,
   setCardState,
   pendingActionInfo: (kind) => pendingOrdersRenderer.actionInfo(kind),
-  instrumentTypeHandlers: orderCardInstrumentHandlers,
-  cardTypeHandlers: orderCardTypeHandlers,
   toast,
   shakeCard,
   render,
   btn,
+  removeRow,
+  formatBidAskText,
+  formatSpreadTriple,
+  updateSpreadForTicker,
+  shouldShowBidAsk: () => SHOW_BID_ASK,
+  shouldShowSpread: () => SHOW_SPREAD,
   getCardButtons: () => CARD_BUTTONS,
-  getButtonRows: () => BUTTON_ROWS
+  getButtonRows: () => BUTTON_ROWS,
+  getRows: () => state.rows
 });
-const createOrderCardBody = (...args) => orderCardsRenderer.createBody(...args);
-const orderCardButtons = (...args) => orderCardsRenderer.buttons(...args);
 const scheduleOrderCardInstantExecution = (...args) => orderCardsRenderer.scheduleInstantExecution(...args);
 const place = (...args) => orderCardsRenderer.place(...args);
 
@@ -1314,8 +1152,8 @@ if (typeof module !== 'undefined') {
     instrumentInfo,
     settingsForms,
     migrateKey: legacyOrderListRuntime.migrateKey,
-    orderCardInstrumentHandlers,
-    orderCardTypeHandlers,
+    orderCardInstrumentHandlers: orderCardsRenderer.instrumentTypeHandlers,
+    orderCardTypeHandlers: orderCardsRenderer.cardTypeHandlers,
     render
   };
 }
