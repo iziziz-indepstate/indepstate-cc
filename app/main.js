@@ -28,6 +28,9 @@ const {
 const {
   registerWindowStateIpcHandlers
 } = require('./infrastructure/electron');
+const {
+  registerMainApplicationServicesForManifests
+} = require('./services/serviceMainRegistration');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
 
 function loadServices(servicesApi = {}) {
@@ -55,15 +58,9 @@ function loadServices(servicesApi = {}) {
 
 const serviceManifests = loadServices(servicesApi);
 function registerServiceMainApplicationServices(context = {}) {
-  for (const { dir, manifest } of serviceManifests) {
-    if (context.onlyServiceDir && dir !== context.onlyServiceDir) continue;
-    if (typeof manifest?.registerMainApplicationServices !== 'function') continue;
-    try {
-      manifest.registerMainApplicationServices({ ...context, serviceDir: dir });
-    } catch (err) {
-      console.error('[serviceLoader] Failed to register application services for', dir, err);
-    }
-  }
+  registerMainApplicationServicesForManifests(serviceManifests, context, (err, dir) => {
+    console.error('[serviceLoader] Failed to register application services for', dir, err);
+  });
 }
 function registerServiceMainIpcHandlers(context = {}) {
   for (const { dir, manifest } of serviceManifests) {
@@ -283,7 +280,7 @@ app.whenReady().then(() => {
     nowTs,
     logDir: LOG_DIR,
     defaultWebhookPort: PORT,
-    onlyServiceDir: 'services/orderCards'
+    phase: 'before-window'
   });
 
   createWindow();
@@ -342,7 +339,8 @@ function setupIpc() {
     executionService,
     pendingIndex,
     trackerPending,
-    groupedOrderLifecycles
+    groupedOrderLifecycles,
+    phase: 'after-execution'
   });
 
   const pendingHub = createPendingOrderHub({

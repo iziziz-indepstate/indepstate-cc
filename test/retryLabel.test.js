@@ -41,6 +41,11 @@ async function run() {
 
   const renderer = require('../app/renderer.js');
   const t = renderer.__testing;
+  const testRuntime = { marker: 'generic-runtime' };
+  const unregisterRuntime = t.registerRendererRuntime('test-runtime', testRuntime);
+  assert.strictEqual(t.getRendererRuntime('test-runtime'), testRuntime);
+  unregisterRuntime();
+  assert.strictEqual(t.getRendererRuntime('test-runtime'), null);
 
   const row = { cardType: 'legacyExtension', ticker: 'TST', event: 'evt', time: 0, price: 1 };
   handlers['order-cards:changed'](null, { type: 'upsert', row });

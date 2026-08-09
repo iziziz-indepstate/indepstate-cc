@@ -3,6 +3,7 @@ const settings = require('../settings');
 const loadConfig = require('../../config/load');
 const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 const { createOrderCardsRenderer } = require('./renderer');
+const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 
@@ -15,14 +16,32 @@ settings.register(
 const rendererHandlers = [{
   cardType: 'regular',
   register(context = {}) {
-    const orderCardsRenderer = createOrderCardsRenderer(context.orderCardsDeps || {});
-    const legacyOrderListRuntime = createLegacyOrderListRuntime({
+    let legacyOrderListRuntime;
+    const orderCardsRuntime = createOrderCardsRendererConfigRuntime({
+      loadConfig: context.loadConfig || loadConfig,
+      settingsRuntime: context.settingsRuntime,
+      env: context.env || process.env,
+      render: context.render,
+      onConfigApplied: (runtime) => {
+        legacyOrderListRuntime?.setClosedCardEventStrategy(runtime.getClosedCardEventStrategy());
+      }
+    });
+    context.registerRendererRuntime?.('orderCards', orderCardsRuntime);
+    const orderCardsRenderer = createOrderCardsRenderer({
+      ...(context.orderCardsDeps || {}),
+      shouldShowBidAsk: () => orderCardsRuntime.shouldShowBidAsk(),
+      shouldShowSpread: () => orderCardsRuntime.shouldShowSpread(),
+      getCardButtons: () => orderCardsRuntime.getCardButtons(),
+      getButtonRows: () => orderCardsRuntime.getButtonRows()
+    });
+    legacyOrderListRuntime = createLegacyOrderListRuntime({
       ...(context.legacyOrderListDeps || {}),
       matchesExistingOrderRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
       orderCardHandlerForRow: (...args) => orderCardsRenderer.handlerFor(...args),
       orderCardHandlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
       scheduleOrderCardInstantExecution: (...args) => orderCardsRenderer.scheduleInstantExecution(...args)
     });
+    legacyOrderListRuntime?.setClosedCardEventStrategy?.(orderCardsRuntime.getClosedCardEventStrategy?.() || 'ignore');
     context.registerLegacyOrderCardsRuntime?.({
       runtime: legacyOrderListRuntime,
       createCard: (row, index) => orderCardsRenderer.createLegacyOrderCard({ row, index }),
@@ -33,6 +52,7 @@ const rendererHandlers = [{
       matchesExistingRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
       scheduleInstantExecution: (...args) => orderCardsRenderer.scheduleInstantExecution(...args),
       place: (...args) => orderCardsRenderer.place(...args),
+      orderCardsRuntime,
       instrumentTypeHandlers: orderCardsRenderer.instrumentTypeHandlers,
       cardTypeHandlers: orderCardsRenderer.cardTypeHandlers
     });
@@ -131,4 +151,10 @@ function registerMainIpcHandlers({ ipcMain, servicesApi } = {}) {
   registerOrderCardsIpcHandlers({ ipcMain, servicesApi });
 }
 
-module.exports = { initService, rendererHandlers, registerMainApplicationServices, registerMainIpcHandlers };
+module.exports = {
+  initService,
+  mainApplicationServicePhase: 'before-window',
+  rendererHandlers,
+  registerMainApplicationServices,
+  registerMainIpcHandlers
+};

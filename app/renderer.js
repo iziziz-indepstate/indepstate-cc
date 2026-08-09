@@ -12,33 +12,9 @@ const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/rend
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
-let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
-
-let SHOW_BID_ASK = !!(orderCardsCfg && orderCardsCfg.showBidAsk);
-let SHOW_SPREAD = !!(orderCardsCfg && orderCardsCfg.showSpread);
-
-
-const envInstrRefresh = Number(process.env.INSTRUMENT_REFRESH_MS);
-let INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh)
-  ? envInstrRefresh
-  : Number(orderCardsCfg?.instrumentRefreshMs) || 1000;
-
-let BUTTON_ROWS = Number(orderCardsCfg?.buttonRows) || 1;
-
-const DEFAULT_CARD_BUTTONS = [
-  {label: 'BL', action: 'BL', style: 'bl'},
-  {label: 'BC', action: 'BC', style: 'bc'},
-  {label: 'BFB', action: 'BFB', style: 'bc'},
-  {label: 'SL', action: 'SL', style: 'sl'},
-  {label: 'SC', action: 'SC', style: 'sc'},
-  {label: 'SFB', action: 'SFB', style: 'sc'}
-];
-let CARD_BUTTONS = Array.isArray(orderCardsCfg?.buttons) && orderCardsCfg.buttons.length
-  ? orderCardsCfg.buttons.map((b) => Array.isArray(b) ? {label: b[0], action: b[1], style: b[2]} : b)
-    .filter((b) => b && b.label && b.action)
-  : DEFAULT_CARD_BUTTONS;
 
 let legacyOrderListRuntime;
+const rendererRuntimes = new Map();
 let state;
 let appState;
 let uiState;
@@ -123,24 +99,9 @@ let rendererServiceManifests = null;
 
 loadRendererHooks();
 
-function applyOrderCardsConfig(config = {}) {
-  orderCardsCfg = config;
-  SHOW_BID_ASK = !!config.showBidAsk;
-  SHOW_SPREAD = !!config.showSpread;
-  INSTRUMENT_REFRESH_MS = Number.isFinite(envInstrRefresh) ? envInstrRefresh : Number(config.instrumentRefreshMs) || 1000;
-  legacyOrderListRuntime?.setClosedCardEventStrategy(config.closedCardEventStrategy || 'ignore');
-  BUTTON_ROWS = Number(config.buttonRows) || 1;
-  CARD_BUTTONS = Array.isArray(config.buttons) && config.buttons.length
-    ? config.buttons.map(b => Array.isArray(b) ? { label: b[0], action: b[1], style: b[2] } : b)
-      .filter(b => b && b.label && b.action)
-    : DEFAULT_CARD_BUTTONS;
-  render();
-}
-
 settingsRuntime.onApply('ui', ({ config }) => {
   if (typeof config.autoscroll === 'boolean') state.autoscroll = config.autoscroll;
 });
-settingsRuntime.onApply('order-cards', ({ config }) => applyOrderCardsConfig(config));
 settingsRuntime.onApply('order-calculator', () => render());
 
 function loadRendererServiceManifests() {
@@ -235,6 +196,19 @@ function isRegularPositionSnapshot(position = {}) {
 function isPositionRenderedByLegacyRow(position = {}) {
   if (isRegularPositionSnapshot(position)) return false;
   return state.rows.some(row => positionMatchesLegacyRow(position, row));
+}
+
+function registerRendererRuntime(name, runtime) {
+  const key = String(name || '').trim();
+  if (!key || !runtime || typeof runtime !== 'object') return false;
+  rendererRuntimes.set(key, runtime);
+  return () => {
+    if (rendererRuntimes.get(key) === runtime) rendererRuntimes.delete(key);
+  };
+}
+
+function getRendererRuntime(name) {
+  return rendererRuntimes.get(String(name || '').trim()) || null;
 }
 
 function positionKey(position = {}) {
@@ -555,7 +529,7 @@ function setCardState(key, state) {
     card.classList.remove('card--pending');
     if (spreadEl) {
       spreadEl.style.display = '';
-      if (SHOW_SPREAD) updateSpreadForTicker(card.dataset.ticker);
+      if (getRendererRuntime('orderCards')?.shouldShowSpread?.()) updateSpreadForTicker(card.dataset.ticker);
     }
     if (close) close.style.display = '';
     inputs.forEach(inp => {
@@ -682,9 +656,9 @@ function positionInstrumentRows() {
 const instrumentInfoRenderer = createInstrumentInfoRenderer({
   ipcRenderer,
   state,
-  getInstrumentRefreshMs: () => INSTRUMENT_REFRESH_MS,
-  shouldShowBidAsk: () => SHOW_BID_ASK,
-  shouldShowSpread: () => SHOW_SPREAD,
+  getInstrumentRefreshMs: () => getRendererRuntime('orderCards')?.getInstrumentRefreshMs?.() || 1000,
+  shouldShowBidAsk: () => !!getRendererRuntime('orderCards')?.shouldShowBidAsk?.(),
+  shouldShowSpread: () => !!getRendererRuntime('orderCards')?.shouldShowSpread?.(),
   findTickSizeOverride,
   getDefaultTickSize,
   cardByKey,
@@ -725,7 +699,7 @@ function registerLegacyOrderCardsRuntime(registration = {}, maybeCreateCard) {
   legacyOrderListRuntime = runtime;
   orderCardsApi = registration;
   createLegacyOrderCard = createCard;
-  legacyOrderListRuntime.setClosedCardEventStrategy(orderCardsCfg?.closedCardEventStrategy || 'ignore');
+  legacyOrderListRuntime.setClosedCardEventStrategy(registration.orderCardsRuntime?.getClosedCardEventStrategy?.() || 'ignore');
   return () => {
     if (legacyOrderListRuntime === runtime) legacyOrderListRuntime = null;
     if (orderCardsApi === registration) orderCardsApi = null;
@@ -824,6 +798,7 @@ loadRendererHandlers({
   toast,
   shakeCard,
   render,
+  env: process.env,
   btn,
   orderCardsDeps: {
     el,
@@ -854,10 +829,6 @@ loadRendererHandlers({
     formatBidAskText,
     formatSpreadTriple,
     updateSpreadForTicker,
-    shouldShowBidAsk: () => SHOW_BID_ASK,
-    shouldShowSpread: () => SHOW_SPREAD,
-    getCardButtons: () => CARD_BUTTONS,
-    getButtonRows: () => BUTTON_ROWS,
     getRows: () => state.rows
   },
   legacyOrderListDeps: {
@@ -887,6 +858,8 @@ loadRendererHandlers({
   dispatchPositionAction,
   requestRemovePosition,
   registerLegacyOrderCardsRuntime,
+  registerRendererRuntime,
+  getRendererRuntime,
   registerOrderCardInstrumentHandler,
   registerOrderCardTypeHandler,
   registerPositionCardRenderer(cardType, renderer) {
@@ -1149,6 +1122,8 @@ if (typeof module !== 'undefined') {
     dispatchPositionAction,
     instrumentInfo,
     settingsForms,
+    registerRendererRuntime,
+    getRendererRuntime,
     migrateKey: legacyOrderListRuntime.migrateKey,
     orderCardInstrumentHandlers: orderCardsApi.instrumentTypeHandlers,
     orderCardTypeHandlers: orderCardsApi.cardTypeHandlers,

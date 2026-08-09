@@ -47,6 +47,8 @@ function run() {
   const manifest = require(manifestPath);
   Module._load = originalLoad;
 
+  assert.strictEqual(manifest.mainApplicationServicePhase, 'before-window');
+
   const servicesApi = {};
   const positions = { handle: () => ({ ok: true }) };
   const resolveProviderName = () => 'simulated';

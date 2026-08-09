@@ -288,7 +288,9 @@ async function run() {
     'emitOptionStratButtonEvent',
     'ensureOptionPayoff',
     "instrumentType === 'OPT'",
-    "instrumentType !== 'OPT'"
+    "instrumentType !== 'OPT'",
+    'registerOrderCardsRuntime',
+    'let orderCardsRuntime'
   ].forEach(pattern => {
     assert.strictEqual(rendererSource.includes(pattern), false, `app/renderer.js still contains ${pattern}`);
   });
