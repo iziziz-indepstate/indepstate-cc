@@ -25,6 +25,7 @@ function readExecutionRows(execLog, rows) {
 function registerOrderListIpcHandlers({
   ipcMain,
   orderService,
+  servicesApi,
   execLog
 } = {}) {
   if (!ipcMain || typeof ipcMain.handle !== 'function') {
@@ -41,11 +42,12 @@ function registerOrderListIpcHandlers({
     }
 
     if (file === 'webhooks') {
-      if (typeof orderService?.list === 'function') {
-        return orderService.list({ rows });
+      const service = servicesApi?.orderCards || orderService;
+      if (typeof service?.list === 'function') {
+        return service.list({ rows });
       }
-      if (typeof orderService?.getOrdersList === 'function') {
-        return orderService.getOrdersList(rows);
+      if (typeof service?.getOrdersList === 'function') {
+        return service.getOrdersList(rows);
       }
       return [];
     }

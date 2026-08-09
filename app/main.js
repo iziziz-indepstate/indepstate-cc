@@ -8,7 +8,6 @@ const fs = require('fs');
 require('dotenv').config({ path: path.resolve(__dirname, '..','.env') });
 
 const servicesApi = require('./services/servicesApi');
-const { createOrderCardService, createOrderCardsApplicationService } = require('./services/orderCards');
 const { detectInstrumentType } = require('./services/instruments');
 const events = require('./services/events');
 const { createPendingOrderHub, registerPendingOrdersIpcHandlers } = require('./services/pendingOrders');
@@ -30,7 +29,6 @@ const {
   registerOrderListIpcHandlers,
   registerWindowStateIpcHandlers
 } = require('./infrastructure/electron');
-const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let uiCfg = loadConfig('../services/ui/config/ui.json');
 
 function loadServices(servicesApi = {}) {
@@ -59,6 +57,7 @@ function loadServices(servicesApi = {}) {
 const serviceManifests = loadServices(servicesApi);
 function registerServiceMainApplicationServices(context = {}) {
   for (const { dir, manifest } of serviceManifests) {
+    if (context.onlyServiceDir && dir !== context.onlyServiceDir) continue;
     if (typeof manifest?.registerMainApplicationServices !== 'function') continue;
     try {
       manifest.registerMainApplicationServices({ ...context, serviceDir: dir });
@@ -94,14 +93,6 @@ function envBool(name, fallback = false) {
 function envInt(name, fallback = 0) {
   const n = parseInt(process.env[name] ?? '', 10);
   return Number.isFinite(n) ? n : fallback;
-}
-
-function resolveWebhookPort(candidate, fallback) {
-  const num = Number(candidate);
-  if (!Number.isFinite(num)) return fallback;
-  const port = Math.trunc(num);
-  if (port <= 0 || port > 65535) return fallback;
-  return port;
 }
 
 // ----------------- CONSTS -----------------
@@ -168,8 +159,6 @@ function wireAdapter(adapter, providerName) {
 
 // ----------------- Electron window -----------------
 let mainWindow;
-let orderCardServices = [];
-let orderCardService;
 let windowStateSaveTimer = null;
 
 function loadWindowState() {
@@ -287,41 +276,19 @@ registerWindowStateIpcHandlers({
 app.whenReady().then(() => {
   ensureLogs({ truncateExecutionsOnStart: true });
 
-  const sourcesCfg = orderCardsCfg?.sources || [{ type: 'webhook' }];
-  orderCardServices = sourcesCfg.map((src) => {
-    const normalized = (src && typeof src === 'object' && !Array.isArray(src))
-      ? src
-      : { type: typeof src === 'string' ? src : 'webhook' };
-    const type = normalized.type || 'webhook';
-    const opts = {
-      ...normalized,
-      type,
-      nowTs,
-      onRow(row) {
-        servicesApi.orderCards?.ingestRow?.(row, { source: type });
-      }
-    };
-    if (type === 'webhook') {
-      opts.port = resolveWebhookPort(normalized.port, PORT);
-      opts.logFile = path.join(LOG_DIR, normalized.logFile || 'webhooks.jsonl');
-      opts.truncateOnStart = normalized.truncateOnStart ?? true;
-    }
-    return createOrderCardService(opts);
-  });
-
-  orderCardService = createOrderCardsApplicationService({
+  registerServiceMainApplicationServices({
+    servicesApi,
     positions: servicesApi.positions,
     resolveProviderName,
-    getSourceServices: () => orderCardServices,
-    publish: sendToRenderer,
-    legacyPublish: sendToRenderer
+    sendToRenderer,
+    nowTs,
+    logDir: LOG_DIR,
+    defaultWebhookPort: PORT,
+    onlyServiceDir: 'services/orderCards'
   });
-  servicesApi.orderCards = orderCardService;
-
-  for (const svc of orderCardServices) svc.start();
 
   createWindow();
-  setupIpc(orderCardService);
+  setupIpc();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -334,7 +301,7 @@ app.on('window-all-closed', () => {
 app.on('quit', () => {
 });
 
-function setupIpc(orderSvc) {
+function setupIpc() {
   const executionService = createExecutionApplicationService({
     getAdapter,
     wireAdapter,
@@ -424,7 +391,7 @@ function setupIpc(orderSvc) {
   });
   registerOrderListIpcHandlers({
     ipcMain,
-    orderService: orderSvc,
+    servicesApi,
     execLog: EXEC_LOG
   });
 }

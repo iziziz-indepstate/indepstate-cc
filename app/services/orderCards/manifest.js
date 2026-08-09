@@ -1,5 +1,7 @@
 const path = require('path');
 const settings = require('../settings');
+const loadConfig = require('../../config/load');
+const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 
@@ -59,6 +61,70 @@ const rendererHandlers = [{
   }
 }];
 
+function resolveWebhookPort(candidate, fallback) {
+  const num = Number(candidate);
+  if (!Number.isFinite(num)) return fallback;
+  const port = Math.trunc(num);
+  if (port <= 0 || port > 65535) return fallback;
+  return port;
+}
+
+function normalizeSourceConfig(src) {
+  const normalized = (src && typeof src === 'object' && !Array.isArray(src))
+    ? src
+    : { type: typeof src === 'string' ? src : 'webhook' };
+  return {
+    ...normalized,
+    type: normalized.type || 'webhook'
+  };
+}
+
+function registerMainApplicationServices(context = {}) {
+  const { servicesApi = {} } = context;
+  if (servicesApi.orderCards) return servicesApi.orderCards;
+
+  const config = context.orderCardsConfig || loadConfig('../services/orderCards/config/order-cards.json');
+  const sourcesCfg = Array.isArray(config?.sources) && config.sources.length
+    ? config.sources
+    : [{ type: 'webhook' }];
+  const sourceServices = [];
+  let applicationService;
+
+  for (const src of sourcesCfg) {
+    const normalized = normalizeSourceConfig(src);
+    const type = normalized.type;
+    const opts = {
+      ...normalized,
+      type,
+      nowTs: context.nowTs,
+      onRow(row) {
+        applicationService?.ingestRow?.(row, { source: type });
+      }
+    };
+    if (type === 'webhook') {
+      opts.port = resolveWebhookPort(normalized.port, context.defaultWebhookPort);
+      opts.logFile = path.join(context.logDir || '.', normalized.logFile || 'webhooks.jsonl');
+      opts.truncateOnStart = normalized.truncateOnStart ?? true;
+    }
+    sourceServices.push(createOrderCardService(opts));
+  }
+
+  applicationService = createOrderCardsApplicationService({
+    positions: context.positions || servicesApi.positions,
+    resolveProviderName: context.resolveProviderName,
+    getSourceServices: () => sourceServices,
+    publish: context.publish || context.sendToRenderer,
+    legacyPublish: context.legacyPublish || context.sendToRenderer
+  });
+  servicesApi.orderCards = applicationService;
+
+  for (const service of sourceServices) {
+    service?.start?.();
+  }
+
+  return applicationService;
+}
+
 function initService() {}
 
-module.exports = { initService, rendererHandlers };
+module.exports = { initService, rendererHandlers, registerMainApplicationServices };
