@@ -39,6 +39,10 @@ async function run() {
           { option: 'CALL', side: 'sell', strike: '{s2}', quantity: '{q}' }
         ]
       }]
+    }, {
+      onAdd(row) {
+        return servicesApi.orderCards.ingestRow(row, { source: 'commandLine' });
+      }
     }));
     registerPositionsIpcHandlers({ ipcMain, positionsService: positions });
 

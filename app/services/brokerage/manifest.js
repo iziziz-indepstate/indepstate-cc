@@ -14,6 +14,7 @@ const { resolveProvider, resolveAdapter } = require('./providerResolver');
 const path = require('path');
 const settings = require('../settings');
 const loadConfig = require('../../config/load');
+const { CurrentOrderCommand } = require('../commands/currentOrder');
 
 settings.register(
   'execution',
@@ -50,6 +51,11 @@ function initService(servicesApi = {}) {
     hasAdapterFactory,
     listAdapterFactories
   };
+  if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
+  servicesApi.commands.push(
+    new CurrentOrderCommand('limit', { executionApi: servicesApi }),
+    new CurrentOrderCommand('market', { executionApi: servicesApi })
+  );
   settings.onApply('execution', ({ config, changedPaths }) => {
     const unavailable = updateExecutionRouting(config, changedPaths);
     if (!unavailable.length) return;

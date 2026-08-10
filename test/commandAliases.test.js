@@ -6,8 +6,10 @@ function createService(aliases) {
   let row;
   const service = createCommandService({
     aliases,
-    commands: [new LevelOrderCommand({ now: () => 123 })],
-    onAdd: r => { row = r; }
+    commands: [new LevelOrderCommand({
+      now: () => 123,
+      onAdd: r => { row = r; }
+    })]
   });
   return {
     run: cmd => service.run(cmd),

@@ -27,23 +27,7 @@ function initService(servicesApi = {}) {
   const { config } = settings.readConfig('command-line') || {};
   const cmdService = createCommandService({
     commands: servicesApi.commands,
-    executionApi: servicesApi,
-    aliases: config && config.aliases,
-    onAdd(row) {
-      const orderCards = servicesApi.orderCards;
-      if (typeof orderCards?.ingestRow === 'function') {
-        return orderCards.ingestRow(row, { source: 'commandLine' });
-      }
-      return { ok: false, error: 'Order cards service unavailable' };
-    },
-    onRemove(filter) {
-      if (!filter || typeof filter !== 'object') return { ok: false, error: 'Invalid remove payload' };
-      const orderCards = servicesApi.orderCards;
-      if (typeof orderCards?.remove === 'function') {
-        return orderCards.remove(filter);
-      }
-      return { ok: false, error: 'Order cards service unavailable' };
-    }
+    aliases: config && config.aliases
   });
   servicesApi.commandLine = cmdService;
   settings.onApply('command-line', ({ config }) => cmdService.configure({ aliases: config?.aliases }));

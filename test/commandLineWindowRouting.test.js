@@ -19,36 +19,28 @@ try {
   {
     const calls = [];
     const servicesApi = {
-      commands: [],
-      orderCards: {
-        ingestRow(row, context) {
-          calls.push({ method: 'ingestRow', row, context });
-          return row;
-        },
-        remove(filter) {
-          calls.push({ method: 'remove', filter });
-          return { ok: true };
+      commands: [{
+        name: 'ping',
+        run(args) {
+          calls.push(args);
+          return { ok: true, args };
         }
-      }
+      }]
     };
     const commandLine = initService(servicesApi);
-    assert.deepStrictEqual(commandLine.run('add AAPL 100 10'), { ok: true });
-    assert.strictEqual(calls[0].method, 'ingestRow');
-    assert.strictEqual(calls[0].row.ticker, 'AAPL');
-    assert.deepStrictEqual(calls[0].context, { source: 'commandLine' });
-    assert.deepStrictEqual(commandLine.run('rm producingLineId:line-1'), { ok: true });
-    assert.deepStrictEqual(calls[1], { method: 'remove', filter: { producingLineId: 'line-1' } });
+    assert.deepStrictEqual(commandLine.run('ping one two'), { ok: true, args: ['one', 'two'] });
+    assert.deepStrictEqual(calls, [['one', 'two']]);
   }
 
   {
     const commandLine = initService({ commands: [] });
     assert.deepStrictEqual(commandLine.run('add AAPL 100 10'), {
       ok: false,
-      error: 'Order cards service unavailable'
+      error: 'Unknown command: add'
     });
     assert.deepStrictEqual(commandLine.run('rm producingLineId:line-1'), {
       ok: false,
-      error: 'Order cards service unavailable'
+      error: 'Unknown command: rm'
     });
   }
 

@@ -63,6 +63,16 @@ function registerActionFunctions(servicesApi = {}) {
   ].filter(Boolean);
 }
 
+function createOrderCardAddHandler(servicesApi = {}) {
+  return (row) => {
+    const orderCards = servicesApi.orderCards;
+    if (typeof orderCards?.ingestRow === 'function') {
+      return orderCards.ingestRow(row, { source: 'commandLine' });
+    }
+    return { ok: false, error: 'Order cards service unavailable' };
+  };
+}
+
 function initService(servicesApi = {}) {
   servicesApi.brokerage.registerAdapterFactory(
     'optionstrat',
@@ -87,9 +97,10 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
-  servicesApi.commands.push(...createOptionStratCommands(cfg));
+  const commandOpts = { onAdd: createOrderCardAddHandler(servicesApi) };
+  servicesApi.commands.push(...createOptionStratCommands(cfg, commandOpts));
   settings.onApply('optionstrat', ({ config }) => {
-    const commands = createOptionStratCommands(config);
+    const commands = createOptionStratCommands(config, commandOpts);
     for (let i = servicesApi.commands.length - 1; i >= 0; i -= 1) {
       if (servicesApi.commands[i]?.constructor?.name === 'OptionStratCommand') servicesApi.commands.splice(i, 1);
     }

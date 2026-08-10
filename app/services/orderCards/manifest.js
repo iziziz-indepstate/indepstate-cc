@@ -5,6 +5,8 @@ const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
+const { AddCommand } = require('../commands/add');
+const { RemoveCommand } = require('../commands/remove');
 
 settings.register(
   'order-cards',
@@ -106,8 +108,37 @@ function normalizeSourceConfig(src) {
   };
 }
 
+function registerOrderCardCommands(servicesApi = {}) {
+  if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
+  if (servicesApi.__orderCardsCommandsRegistered) return;
+  servicesApi.__orderCardsCommandsRegistered = true;
+
+  servicesApi.commands.push(
+    new AddCommand({
+      onAdd(row) {
+        const orderCards = servicesApi.orderCards;
+        if (typeof orderCards?.ingestRow === 'function') {
+          return orderCards.ingestRow(row, { source: 'commandLine' });
+        }
+        return { ok: false, error: 'Order cards service unavailable' };
+      }
+    }),
+    new RemoveCommand({
+      onRemove(filter) {
+        if (!filter || typeof filter !== 'object') return { ok: false, error: 'Invalid remove payload' };
+        const orderCards = servicesApi.orderCards;
+        if (typeof orderCards?.remove === 'function') {
+          return orderCards.remove(filter);
+        }
+        return { ok: false, error: 'Order cards service unavailable' };
+      }
+    })
+  );
+}
+
 function registerMainApplicationServices(context = {}) {
   const { servicesApi = {} } = context;
+  registerOrderCardCommands(servicesApi);
   if (servicesApi.orderCards) return servicesApi.orderCards;
   const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
 
@@ -152,7 +183,9 @@ function registerMainApplicationServices(context = {}) {
   return applicationService;
 }
 
-function initService() {}
+function initService(servicesApi = {}) {
+  registerOrderCardCommands(servicesApi);
+}
 
 function registerMainIpcHandlers({ ipcMain, servicesApi } = {}) {
   registerOrderCardsIpcHandlers({ ipcMain, servicesApi });
@@ -162,6 +195,7 @@ module.exports = {
   initService,
   mainApplicationServicePhase: 'before-window',
   rendererHandlers,
+  registerOrderCardCommands,
   registerMainApplicationServices,
   registerMainIpcHandlers
 };

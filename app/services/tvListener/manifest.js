@@ -115,7 +115,15 @@ function initService(servicesApi = {}) {
 
   class LastCommand extends AddCommand {
     constructor() {
-      super();
+      super({
+        onAdd(row) {
+          const orderCards = servicesApi.orderCards;
+          if (typeof orderCards?.ingestRow === 'function') {
+            return orderCards.ingestRow(row, { source: 'commandLine' });
+          }
+          return { ok: false, error: 'Order cards service unavailable' };
+        }
+      });
       this.names = ['last', 'l'];
       this.name = this.names[0];
     }

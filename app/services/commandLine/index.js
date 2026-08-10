@@ -2,9 +2,6 @@
 // Parses and executes text commands using registered command objects
 // Commands may expose multiple names/aliases
 
-const { AddCommand } = require('../commands/add');
-const { RemoveCommand } = require('../commands/remove');
-const { CurrentOrderCommand } = require('../commands/currentOrder');
 const { debugPositionEvents } = require('../../debugPositionEvents');
 
 const MAX_ALIAS_DEPTH = 5;
@@ -37,22 +34,7 @@ function expandAlias(input, aliases) {
 
 function createCommandService(opts = {}) {
   let aliases = normalizeAliases(opts.aliases);
-  const extra = Array.isArray(opts.commands)
-    ? opts.commands.map(c => {
-        if (c && typeof c === 'object') {
-          if (c.onAdd == null) c.onAdd = opts.onAdd;
-          if (c.onRemove == null) c.onRemove = opts.onRemove;
-        }
-        return c;
-      })
-    : [];
-  const list = [
-    new AddCommand({ onAdd: opts.onAdd }),
-    new RemoveCommand({ onRemove: opts.onRemove }),
-    new CurrentOrderCommand('limit', { executionApi: opts.executionApi }),
-    new CurrentOrderCommand('market', { executionApi: opts.executionApi }),
-    ...extra
-  ];
+  const list = Array.isArray(opts.commands) ? opts.commands : [];
 
   function run(str, depth = 0) {
     if (!str) return { ok: false, error: 'Empty command' };
@@ -93,7 +75,7 @@ function createCommandService(opts = {}) {
 
   function replaceCommands(predicate, commands = []) {
     if (typeof predicate !== 'function') return;
-    for (let i = list.length - 1; i >= 2; i -= 1) {
+    for (let i = list.length - 1; i >= 0; i -= 1) {
       if (predicate(list[i])) list.splice(i, 1);
     }
     list.push(...commands);

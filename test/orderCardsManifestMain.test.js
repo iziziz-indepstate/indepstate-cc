@@ -11,6 +11,10 @@ function run() {
     ingestRow(row, context) {
       this.ingested.push({ row, context });
       return { ok: true };
+    },
+    remove(filter) {
+      calls.push(['remove', filter]);
+      return { ok: true, removed: 1 };
     }
   };
 
@@ -45,7 +49,6 @@ function run() {
   const manifestPath = '../app/services/orderCards/manifest';
   delete require.cache[require.resolve(manifestPath)];
   const manifest = require(manifestPath);
-  Module._load = originalLoad;
 
   assert.strictEqual(manifest.mainApplicationServicePhase, 'before-window');
 
@@ -70,6 +73,16 @@ function run() {
 
   assert.strictEqual(service, appService);
   assert.strictEqual(servicesApi.orderCards, appService);
+  assert.strictEqual(servicesApi.commands.length, 2);
+  assert.deepStrictEqual(servicesApi.commands[0].names, ['add', 'a']);
+  assert.deepStrictEqual(servicesApi.commands[1].names, ['rm']);
+  assert.deepStrictEqual(servicesApi.commands[0].run(['MSFT', '300', '10']), { ok: true });
+  assert.deepStrictEqual(appService.ingested[2], {
+    row: { ticker: 'MSFT', price: 300, sl: 10, time: appService.ingested[2].row.time, event: 'manual' },
+    context: { source: 'commandLine' }
+  });
+  assert.deepStrictEqual(servicesApi.commands[1].run(['producingLineId:line-1']), { ok: true, removed: 1 });
+  assert.deepStrictEqual(calls[calls.length - 1], ['remove', { producingLineId: 'line-1' }]);
   assert.strictEqual(sources.length, 2);
   assert.strictEqual(sources[0].started, true);
   assert.strictEqual(sources[1].started, true);
@@ -83,7 +96,7 @@ function run() {
   assert.strictEqual(calls[2][1].positions, positions);
   assert.strictEqual(calls[2][1].resolveProviderName, resolveProviderName);
   assert.deepStrictEqual(calls[2][1].getSourceServices(), sources);
-  assert.deepStrictEqual(appService.ingested, [
+  assert.deepStrictEqual(appService.ingested.slice(0, 2), [
     { row: { ticker: 'AAPL', time: 1 }, context: { source: 'webhook' } },
     { row: { ticker: 'AAPL', time: 1 }, context: { source: 'file' } }
   ]);

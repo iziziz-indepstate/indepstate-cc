@@ -21,6 +21,16 @@ const levelOrderPositionMonitors = new Map();
 const levelOrderIntentRegistry = new Map();
 let levelOrderService = null;
 
+function createOrderCardAddHandler(servicesApi = {}) {
+  return (row) => {
+    const orderCards = servicesApi.orderCards;
+    if (typeof orderCards?.ingestRow === 'function') {
+      return orderCards.ingestRow(row, { source: 'commandLine' });
+    }
+    return { ok: false, error: 'Order cards service unavailable' };
+  };
+}
+
 function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
   if (!Array.isArray(servicesApi.executionCardControllers)) servicesApi.executionCardControllers = [];
@@ -39,7 +49,7 @@ function initService(servicesApi = {}) {
       return resolvers.get(String(name || '').trim());
     }
   };
-  servicesApi.commands.push(new LevelOrderCommand());
+  servicesApi.commands.push(new LevelOrderCommand({ onAdd: createOrderCardAddHandler(servicesApi) }));
   const commandOpts = {
     servicesApi,
     getConfig() {
