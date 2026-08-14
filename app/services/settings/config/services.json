@@ -28,6 +28,7 @@
   "services/tvListener",
   "services/tvAggregatorListener",
   "services/optionstrat",
+  "services/levelsList",
   "services/commandLine",
   "services/ui",
   "services/autoUpdater",

@@ -55,7 +55,7 @@ function initService(servicesApi = {}) {
       servicesApi.actionBus.setCommandRunner(runner);
     }
   }
-  ipcMain.handle('cmdline:run', (_evt, str) => cmdService.run(str));
+  ipcMain.handle('cmdline:run', (evt, str) => cmdService.run(str, { sender: evt?.sender }));
   ipcMain.handle('cmdline:shortcuts', () => {
     const { config } = settings.readConfig('command-line') || {};
     const list = config && config.shortcuts;

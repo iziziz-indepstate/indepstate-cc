@@ -1,0 +1,15 @@
+{
+  "properties": {
+    "name": "Levels List",
+    "group": "Order Cards"
+  },
+  "options": {
+    "sources": {
+      "description": "Level sources used by levelsList",
+      "item": {
+        "type": "string",
+        "description": "Source field: level or price"
+      }
+    }
+  }
+}

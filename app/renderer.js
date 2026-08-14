@@ -948,6 +948,33 @@ function rowKey(row) {
   return `${row.ticker}|${row.event}|${row.time}|${row.price}`;
 }
 
+function getVisibleOrderRowsForLevelsList() {
+  const rowsByKey = new Map();
+  for (const row of state.rows || []) {
+    const key = rowKey(row);
+    const bucket = rowsByKey.get(key) || [];
+    bucket.push(row);
+    rowsByKey.set(key, bucket);
+  }
+
+  const rows = [];
+  const cards = $grid ? Array.from($grid.querySelectorAll('.card[data-rowkey]')) : [];
+  for (const card of cards) {
+    const key = card.dataset.rowkey;
+    const bucket = rowsByKey.get(key);
+    const row = bucket && bucket.shift();
+    if (!row) continue;
+    rows.push({
+      ticker: row.ticker,
+      level: row.level,
+      price: row.price
+    });
+  }
+  return rows;
+}
+
+window.__isccGetVisibleOrderRows = getVisibleOrderRowsForLevelsList;
+
 function isTerminalCardState(stateName) {
   return terminalCardStates.has(stateName);
 }

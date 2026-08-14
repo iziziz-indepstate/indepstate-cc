@@ -53,7 +53,7 @@ function createCommandService(opts = {}) {
     ...extra
   ];
 
-  function run(str, depth = 0) {
+  function run(str, context = {}, depth = 0) {
     if (!str) return { ok: false, error: 'Empty command' };
     const input = String(str).trim();
     if (!input) return { ok: false, error: 'Empty command' };
@@ -62,7 +62,7 @@ function createCommandService(opts = {}) {
       if (depth >= MAX_ALIAS_DEPTH) {
         return { ok: false, error: 'Command alias loop detected' };
       }
-      return run(expanded, depth + 1);
+      return run(expanded, context, depth + 1);
     }
 
     const [cmd, ...args] = input.split(/\s+/);
@@ -75,7 +75,7 @@ function createCommandService(opts = {}) {
       return { ok: false, error: `Unknown command: ${cmd}` };
     }
     try {
-      return handler.run(args);
+      return handler.run(args, context);
     } catch (e) {
       return { ok: false, error: e.message || 'Command error' };
     }

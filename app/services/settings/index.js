@@ -14,6 +14,7 @@ const APPLY_POLICIES = {
   },
   'level-order': { livePaths: ['*'] },
   'level-track': { livePaths: ['*'] },
+  'levels-list': { livePaths: ['*'] },
   'pending-strategies': { livePaths: ['*'] },
   'tick-sizes': { livePaths: ['*'] },
   'trade-rules': { livePaths: ['*'] },
