@@ -4,7 +4,7 @@ const loadConfig = require('../../config/load');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
-const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('./rendererStateBridge');
+const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('../../infrastructure/renderer/cardRuntime');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
@@ -302,6 +302,7 @@ const rendererHandlers = [{
       getCardButtons: () => orderCardsRuntime.getCardButtons(),
       getButtonRows: () => orderCardsRuntime.getButtonRows()
     });
+    context.cardRuntime?.connectLegacyOrderCardRenderer?.(orderCardsRenderer);
     legacyOrderListRuntime = createLegacyOrderListRuntime({
       ipcRenderer,
       state,
@@ -344,8 +345,18 @@ const rendererHandlers = [{
     context.cardVisualState = orderStateFacades.cardVisualState;
     context.ticketBinding = orderStateFacades.ticketBinding;
     context.orderCardsState = state;
-    context.registerOrderCardInstrumentHandler = (...args) => orderCardsRenderer.registerInstrumentHandler(...args);
-    context.registerOrderCardTypeHandler = (...args) => orderCardsRenderer.registerCardTypeHandler(...args);
+    context.registerOrderCardInstrumentHandler = (...args) => {
+      if (context.cardRuntime?.registerOrderCardInstrumentHandler) {
+        return context.cardRuntime.registerOrderCardInstrumentHandler(...args);
+      }
+      return orderCardsRenderer.registerInstrumentHandler(...args);
+    };
+    context.registerOrderCardTypeHandler = (...args) => {
+      if (context.cardRuntime?.registerOrderCardTypeHandler) {
+        return context.cardRuntime.registerOrderCardTypeHandler(...args);
+      }
+      return orderCardsRenderer.registerCardTypeHandler(...args);
+    };
     context.orderCardHandlerFor = (...args) => orderCardsRenderer.handlerFor(...args);
     context.orderCardHandlerForKey = (...args) => orderCardsRenderer.handlerForKey(...args);
     context.setLegacyOrderCardState = setLegacyCardState;

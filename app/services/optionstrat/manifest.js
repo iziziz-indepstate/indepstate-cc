@@ -176,6 +176,7 @@ const rendererHandlers = [{
     } = context;
 
     if (!ipcRenderer || !el || !state || !rowKey) return;
+    const cardRuntime = context.cardRuntime || context;
     let optionStratValuationRefreshMs = 5000;
     const optionStratRenderer = createOptionStratRenderer({
       ipcRenderer,
@@ -290,7 +291,12 @@ const rendererHandlers = [{
       }
     };
 
-    context.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
+    cardRuntime.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
+    cardRuntime.registerCardType?.({
+      type: 'option',
+      match: position => ['option', 'optionstrat'].includes(String(position?.card?.type || position?.source?.cardType || '').toLowerCase()),
+      shape: 'option-position-card'
+    });
     ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
       const cfg = res?.config || res || {};
       const ms = Number(cfg.valuationRefreshMs);
@@ -309,7 +315,7 @@ const rendererHandlers = [{
     });
     optionStratRenderer.startValuationRefresh();
 
-    const register = cardType => context.registerPositionCardRenderer?.(cardType, (position) => {
+    const register = cardType => cardRuntime.registerPositionCardRenderer?.(cardType, (position) => {
       return optionStratRenderer.createOptionPositionCard({
         position,
         key: positionKey(position),

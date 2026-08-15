@@ -19,9 +19,13 @@ function run() {
   }
 
   const rendererSource = read('app/renderer.js');
+  assert(!rendererSource.includes("services/orderCards/rendererStateBridge"), 'renderer must not import generic state from orderCards');
   for (const name of ['pendingRequestLabels', 'placedOrderLookup', 'cardVisualState', 'ticketBinding']) {
     assert(rendererSource.includes(name), `renderer context should expose ${name}`);
   }
+
+  const orderCardsManifest = read('app/services/orderCards/manifest.js');
+  assert(!orderCardsManifest.includes("./rendererStateBridge"), 'orderCards must consume shell-owned card runtime state facades');
 
   console.log('rendererExtensionStateBridge tests passed');
 }

@@ -12,7 +12,7 @@ const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/rend
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
-const { createOrderStateFacades } = require('./services/orderCards/rendererStateBridge');
+const { createCardRuntime } = require('./infrastructure/renderer/cardRuntime');
 const { isDebugPositionEventsEnabled, debugPositionEvents, positionDebugSummary } = require('./debugPositionEvents');
 
 debugPositionEvents('renderer.boot:start');
@@ -44,18 +44,11 @@ const defaultInstrumentDisplayPolicy = {
   shouldShowBidAsk: () => false,
   shouldShowSpread: () => false
 };
-const rendererExtensions = {
-  instrumentDisplayPolicy: [],
-  cardStateHook: []
-};
-const rendererLayers = [];
-const rendererRowProviders = [];
-const positionSnapshotHooks = [];
-const positionRemovedHooks = [];
 const testingExtensions = {};
 let state;
 let uiState;
 let cardStateApi;
+let cardRuntime;
 
 const $wrap = document.getElementById('wrap');
 const $grid = document.getElementById('grid');
@@ -70,159 +63,9 @@ const $settingsRestart = document.getElementById('settings-restart-required');
 
 state = { filter: '', autoscroll: true };
 uiState = new Map();
-function createCardStateApi() {
-  const cardStates = new Map();
-  const pendingExecLabels = new Map();
-  const pendingByReqId = new Map();
-  const pendingIdByReqId = new Map();
-  const ticketToKey = new Map();
-  const placedOrderByKey = new Map();
-  const retryCounts = new Map();
-  const touchedByTicker = new Map();
-
-  function snapshot(value) {
-    return value && typeof value === 'object' ? { ...value } : value;
-  }
-
-  function clearPendingByKey(key) {
-    let removed = false;
-    for (const [reqId, pendingKey] of pendingByReqId.entries()) {
-      if (pendingKey !== key) continue;
-      pendingByReqId.delete(reqId);
-      pendingIdByReqId.delete(reqId);
-      retryCounts.delete(reqId);
-      removed = true;
-    }
-    return removed;
-  }
-
-  function clearExecutionStateByKey(key) {
-    if (!key) return false;
-    cardStates.delete(key);
-    pendingExecLabels.delete(key);
-    placedOrderByKey.delete(key);
-    clearPendingByKey(key);
-    for (const [ticket, ticketKey] of ticketToKey.entries()) {
-      if (ticketKey === key) ticketToKey.delete(ticket);
-    }
-    return true;
-  }
-
-  function migrateKey(oldKey, newKey) {
-    if (!oldKey || !newKey || oldKey === newKey) return;
-    for (const map of [cardStates, pendingExecLabels, placedOrderByKey]) {
-      if (!map.has(oldKey)) continue;
-      map.set(newKey, map.get(oldKey));
-      map.delete(oldKey);
-    }
-    for (const [reqId, key] of pendingByReqId.entries()) {
-      if (key === oldKey) pendingByReqId.set(reqId, newKey);
-    }
-    for (const [ticket, key] of ticketToKey.entries()) {
-      if (key === oldKey) ticketToKey.set(ticket, newKey);
-    }
-    if (uiState.has(oldKey)) {
-      uiState.set(newKey, uiState.get(oldKey));
-      uiState.delete(oldKey);
-    }
-  }
-
-  return {
-    getCardState: key => cardStates.get(key),
-    setCardState: (key, stateName) => {
-      if (!key) return false;
-      if (stateName) cardStates.set(key, stateName);
-      else cardStates.delete(key);
-      return true;
-    },
-    clearCardState: key => {
-      if (!key) return false;
-      return cardStates.delete(key);
-    },
-    setPendingExecLabel: (key, label) => {
-      if (!key) return false;
-      if (label) pendingExecLabels.set(key, label);
-      else pendingExecLabels.delete(key);
-      return true;
-    },
-    getPendingExecLabel: key => pendingExecLabels.get(key),
-    clearPendingExecLabel: key => {
-      if (!key) return false;
-      return pendingExecLabels.delete(key);
-    },
-    markPendingRequest: (reqId, key, options = {}) => {
-      if (!reqId || !key) return false;
-      const id = String(reqId);
-      pendingByReqId.set(id, key);
-      retryCounts.set(id, Number.isFinite(Number(options.retryCount)) ? Number(options.retryCount) : 0);
-      if (options.pendingId) pendingIdByReqId.set(id, options.pendingId);
-      return true;
-    },
-    resolvePendingKey: reqId => (reqId ? pendingByReqId.get(String(reqId)) : undefined),
-    setPendingId: (reqId, pendingId) => {
-      if (!reqId) return false;
-      const id = String(reqId);
-      if (pendingId) pendingIdByReqId.set(id, pendingId);
-      else pendingIdByReqId.delete(id);
-      return true;
-    },
-    getPendingId: reqId => (reqId ? pendingIdByReqId.get(String(reqId)) : undefined),
-    getRetryCount: reqId => (reqId ? retryCounts.get(String(reqId)) : undefined),
-    findPendingRequestIdByKey: key => {
-      if (!key) return undefined;
-      for (const [reqId, pendingKey] of pendingByReqId.entries()) {
-        if (pendingKey === key) return reqId;
-      }
-      return undefined;
-    },
-    clearPendingRequest: reqId => {
-      if (!reqId) return false;
-      const id = String(reqId);
-      const had = pendingByReqId.has(id) || pendingIdByReqId.has(id) || retryCounts.has(id);
-      pendingByReqId.delete(id);
-      pendingIdByReqId.delete(id);
-      retryCounts.delete(id);
-      return had;
-    },
-    clearPendingByKey,
-    markPlacedOrder: (key, orderInfo = {}) => {
-      if (!key) return false;
-      placedOrderByKey.set(key, snapshot(orderInfo));
-      return true;
-    },
-    getPlacedOrder: key => snapshot(placedOrderByKey.get(key)),
-    deletePlacedOrder: key => {
-      if (!key) return false;
-      return placedOrderByKey.delete(key);
-    },
-    resolveTicketKey: ticket => (ticket != null ? ticketToKey.get(String(ticket)) : undefined),
-    bindTicket: (ticket, key) => {
-      if (ticket == null || !key) return false;
-      ticketToKey.set(String(ticket), key);
-      return true;
-    },
-    unbindTicket: ticket => {
-      if (ticket == null) return false;
-      return ticketToKey.delete(String(ticket));
-    },
-    listPlacedOrders: () => Array.from(placedOrderByKey.entries()).map(([key, orderInfo]) => ({
-      key,
-      orderInfo: snapshot(orderInfo),
-      state: cardStates.get(key)
-    })),
-    clearExecutionStateByKey,
-    markTouched: ticker => {
-      if (ticker) touchedByTicker.set(ticker, true);
-    },
-    isTouched: ticker => !!touchedByTicker.get(ticker),
-    setFilter: filter => {
-      state.filter = filter || '';
-    },
-    migrateKey
-  };
-}
-cardStateApi = createCardStateApi();
-const rendererOrderStateFacades = createOrderStateFacades(cardStateApi);
+cardRuntime = createCardRuntime({ state, uiState });
+cardStateApi = cardRuntime.stateApi;
+const rendererOrderStateFacades = cardRuntime.stateFacades;
 
 ipcRenderer.invoke('settings:get', 'ui').then((res) => {
   if (res && typeof res.autoscroll === 'boolean') {
@@ -413,73 +256,35 @@ function isPositionRenderedByLegacyRow(position = {}) {
 }
 
 function registerRendererExtension(kind, extension) {
-  if (!kind || !extension) return false;
-  if (!rendererExtensions[kind]) rendererExtensions[kind] = [];
-  rendererExtensions[kind].push(extension);
-  return () => {
-    const extensions = rendererExtensions[kind];
-    if (!Array.isArray(extensions)) return;
-    const index = extensions.indexOf(extension);
-    if (index >= 0) extensions.splice(index, 1);
-  };
+  return cardRuntime.registerRendererExtension(kind, extension);
 }
 
 function registerInstrumentDisplayPolicy(policy) {
-  if (!policy || typeof policy !== 'object') return false;
-  return registerRendererExtension('instrumentDisplayPolicy', policy);
+  return cardRuntime.registerInstrumentDisplayPolicy(policy);
 }
 
 function registerCardStateHook(hook) {
-  if (typeof hook !== 'function') return false;
-  return registerRendererExtension('cardStateHook', hook);
+  return cardRuntime.registerCardStateHook(hook);
 }
 
 function registerRendererLayer(layer) {
-  if (typeof layer !== 'function') return false;
-  rendererLayers.push(layer);
-  return () => {
-    const index = rendererLayers.indexOf(layer);
-    if (index >= 0) rendererLayers.splice(index, 1);
-  };
+  return cardRuntime.registerRendererLayer(layer);
 }
 
 function registerRendererRowProvider(provider) {
-  if (typeof provider !== 'function') return false;
-  rendererRowProviders.push(provider);
-  return () => {
-    const index = rendererRowProviders.indexOf(provider);
-    if (index >= 0) rendererRowProviders.splice(index, 1);
-  };
+  return cardRuntime.registerRendererRowProvider(provider);
 }
 
 function rendererRows() {
-  return rendererRowProviders.flatMap(provider => {
-    try {
-      const rows = provider();
-      return Array.isArray(rows) ? rows : [];
-    } catch (err) {
-      console.error('[rendererExtension] row provider failed', err?.message || err);
-      return [];
-    }
-  });
+  return cardRuntime.rendererRows();
 }
 
 function registerPositionSnapshotHook(hook) {
-  if (typeof hook !== 'function') return false;
-  positionSnapshotHooks.push(hook);
-  return () => {
-    const index = positionSnapshotHooks.indexOf(hook);
-    if (index >= 0) positionSnapshotHooks.splice(index, 1);
-  };
+  return cardRuntime.registerPositionSnapshotHook(hook);
 }
 
 function registerPositionRemovedHook(hook) {
-  if (typeof hook !== 'function') return false;
-  positionRemovedHooks.push(hook);
-  return () => {
-    const index = positionRemovedHooks.indexOf(hook);
-    if (index >= 0) positionRemovedHooks.splice(index, 1);
-  };
+  return cardRuntime.registerPositionRemovedHook(hook);
 }
 
 function registerTestingExtension(name, value) {
@@ -492,7 +297,7 @@ function registerTestingExtension(name, value) {
 }
 
 function notifyPositionSnapshot(position = {}) {
-  for (const hook of positionSnapshotHooks) {
+  for (const hook of cardRuntime.positionSnapshotHooks) {
     try {
       hook(position);
     } catch (err) {
@@ -503,7 +308,7 @@ function notifyPositionSnapshot(position = {}) {
 
 function notifyPositionRemoved(positionOrEvent = {}) {
   let removed = false;
-  for (const hook of positionRemovedHooks) {
+  for (const hook of cardRuntime.positionRemovedHooks) {
     try {
       removed = hook(positionOrEvent) === true || removed;
     } catch (err) {
@@ -514,7 +319,7 @@ function notifyPositionRemoved(positionOrEvent = {}) {
 }
 
 function instrumentDisplayPolicyValue(method) {
-  const policies = rendererExtensions.instrumentDisplayPolicy || [];
+  const policies = cardRuntime.rendererExtensions.instrumentDisplayPolicy || [];
   for (let index = policies.length - 1; index >= 0; index -= 1) {
     const policy = policies[index];
     if (typeof policy?.[method] !== 'function') continue;
@@ -538,7 +343,7 @@ function shouldShowSpread() {
 }
 
 function notifyCardRestored(args = {}) {
-  const hooks = rendererExtensions.cardStateHook || [];
+  const hooks = cardRuntime.rendererExtensions.cardStateHook || [];
   for (const hook of hooks) {
     try {
       hook(args);
@@ -750,7 +555,7 @@ function isTouched(ticker) {
 // ======= Rendering =======
 function render() {
   $grid.innerHTML = '';
-  for (const layer of rendererLayers) {
+  for (const layer of cardRuntime.rendererLayers) {
     try {
       layer({ grid: $grid });
     } catch (err) {
@@ -899,23 +704,17 @@ const updateSpreadForTicker = (...args) => instrumentInfoRenderer.updateSpreadFo
 const revalidateCardsForTicker = (...args) => instrumentInfoRenderer.revalidateCardsForTicker(...args);
 instrumentInfoRenderer.startPeriodicRefresh();
 
-const positionActionHandlers = {};
-const positionCardRenderers = {};
-const positionRemovalHandlers = {};
-const rendererLegacyGuards = [];
+const positionActionHandlers = cardRuntime.positionActionHandlers;
+const positionCardRenderers = cardRuntime.positionCardRenderers;
+const positionRemovalHandlers = cardRuntime.positionRemovalHandlers;
 const pendingOrdersRenderer = createPendingOrdersRenderer();
 
 function registerRendererLegacyGuard(guard = {}) {
-  if (!guard || typeof guard !== 'object') return false;
-  rendererLegacyGuards.push(guard);
-  return () => {
-    const idx = rendererLegacyGuards.indexOf(guard);
-    if (idx >= 0) rendererLegacyGuards.splice(idx, 1);
-  };
+  return cardRuntime.registerRendererLegacyGuard(guard);
 }
 
 function shouldFilterLegacyRow(row = {}) {
-  return rendererLegacyGuards.some(guard => {
+  return cardRuntime.rendererLegacyGuards.some(guard => {
     if (guard.shouldFilterRow?.(row)) return true;
     const types = Array.isArray(guard.filteredRowTypes) ? guard.filteredRowTypes : [];
     return types.map(String).includes(String(row?.cardType || ''));
@@ -923,33 +722,33 @@ function shouldFilterLegacyRow(row = {}) {
 }
 
 function shouldIgnoreLegacyExecutionEvent(rec = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec, legacyGuardContext()));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec, legacyGuardContext()));
 }
 
 function shouldIgnoreLegacyPositionEvent(rec = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec, legacyGuardContext()));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec, legacyGuardContext()));
 }
 
 function shouldHidePositionSnapshot(position = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position, legacyGuardContext()));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position, legacyGuardContext()));
 }
 
 function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldRemoveLegacyRowForPosition?.(position, row, legacyGuardContext()));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldRemoveLegacyRowForPosition?.(position, row, legacyGuardContext()));
 }
 
 function shouldResetLegacyRowForPosition(position = {}, row = {}) {
-  return rendererLegacyGuards.some(guard => guard.shouldResetLegacyRowForPosition?.(position, row, legacyGuardContext()));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldResetLegacyRowForPosition?.(position, row, legacyGuardContext()));
 }
 
 function shouldIgnoreLegacyRowForExistingPosition(row = {}) {
   const context = legacyGuardContext();
-  return rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
 }
 
 function shouldRemovePositionSnapshotForLegacyRowRemoval(row = {}, position = {}) {
   const context = legacyGuardContext();
-  return rendererLegacyGuards.some(guard => guard.shouldRemovePositionSnapshotForLegacyRowRemoval?.(row, position, context));
+  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldRemovePositionSnapshotForLegacyRowRemoval?.(row, position, context));
 }
 
 function legacyGuardContext() {
@@ -1033,14 +832,25 @@ loadRendererHandlers({
   registerPositionRemovedHook,
   registerTestingExtension,
   registerPositionCardRenderer(cardType, renderer) {
-    if (cardType && typeof renderer === 'function') positionCardRenderers[cardType] = renderer;
+    cardRuntime.registerPositionCardRenderer(cardType, renderer);
   },
   registerPositionActionHandler(cardType, handler) {
-    if (cardType && typeof handler === 'function') positionActionHandlers[cardType] = handler;
+    cardRuntime.registerPositionActionHandler(cardType, handler);
   },
   registerPositionRemovalHandler(cardType, handler) {
-    if (cardType && typeof handler === 'function') positionRemovalHandlers[cardType] = handler;
+    cardRuntime.registerPositionRemovalHandler(cardType, handler);
   },
+  registerOrderCardInstrumentHandler: (...args) => cardRuntime.registerOrderCardInstrumentHandler(...args),
+  registerOrderCardTypeHandler: (...args) => cardRuntime.registerOrderCardTypeHandler(...args),
+  registerCardType: (...args) => cardRuntime.registerCardType(...args),
+  resolveCardType: (...args) => cardRuntime.resolveCardType(...args),
+  registerCardView: (...args) => cardRuntime.registerCardView(...args),
+  getCardView: (...args) => cardRuntime.getCardView(...args),
+  registerCardControl: (...args) => cardRuntime.registerCardControl(...args),
+  getCardControl: (...args) => cardRuntime.getCardControl(...args),
+  registerCardShape: (...args) => cardRuntime.registerCardShape(...args),
+  getCardShape: (...args) => cardRuntime.getCardShape(...args),
+  cardRuntime,
   registerRendererLegacyGuard
 });
 debugPositionEvents('renderer.boot:after-handler-load');
@@ -1253,6 +1063,7 @@ if (typeof module !== 'undefined') {
     findKeyByTicker,
     cardByKey,
     state,
+    cardRuntime,
     cardStateApi,
     pendingRequestLabels: testingExtensions.pendingRequestLabels || rendererOrderStateFacades.pendingRequestLabels,
     placedOrderLookup: testingExtensions.placedOrderLookup || rendererOrderStateFacades.placedOrderLookup,
@@ -1268,6 +1079,14 @@ if (typeof module !== 'undefined') {
     registerRendererExtension,
     registerInstrumentDisplayPolicy,
     registerCardStateHook,
+    registerCardType: (...args) => cardRuntime.registerCardType(...args),
+    resolveCardType: (...args) => cardRuntime.resolveCardType(...args),
+    registerCardView: (...args) => cardRuntime.registerCardView(...args),
+    getCardView: (...args) => cardRuntime.getCardView(...args),
+    registerCardControl: (...args) => cardRuntime.registerCardControl(...args),
+    getCardControl: (...args) => cardRuntime.getCardControl(...args),
+    registerCardShape: (...args) => cardRuntime.registerCardShape(...args),
+    getCardShape: (...args) => cardRuntime.getCardShape(...args),
     getInstrumentRefreshMs,
     shouldShowBidAsk,
     shouldShowSpread,

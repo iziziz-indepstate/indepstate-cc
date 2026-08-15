@@ -167,6 +167,7 @@ const rendererPositionHandlers = [{
       dispatchPositionAction,
       requestRemovePosition
     } = context;
+    const cardRuntime = context.cardRuntime || context;
 
     let levelOrderCfg = typeof loadConfig === 'function'
       ? loadConfig('../services/levelOrder/config/level-order.json')
@@ -205,14 +206,20 @@ const rendererPositionHandlers = [{
       render
     });
 
-    context.registerPositionActionHandler?.(
+    cardRuntime.registerPositionActionHandler?.(
       'levelOrder',
       levelOrderRenderer.createSnapshotActionHandler({
         placePositionAction: placeLevelOrderPositionAction
       })
     );
 
-    context.registerPositionCardRenderer?.('levelOrder', (position) => {
+    cardRuntime.registerCardType?.({
+      type: 'levelOrder',
+      match: position => String(position?.card?.type || position?.source?.cardType || '') === 'levelOrder',
+      shape: 'level-order-position-card'
+    });
+
+    cardRuntime.registerPositionCardRenderer?.('levelOrder', (position) => {
       return levelOrderRenderer.createLevelOrderPositionCard({
         position,
         key: positionKey(position),
@@ -227,7 +234,7 @@ const rendererPositionHandlers = [{
       });
     });
 
-    context.registerPositionRemovalHandler?.(
+    cardRuntime.registerPositionRemovalHandler?.(
       'levelOrder',
       position => levelOrderRenderer.onPositionRemoved(position)
     );
