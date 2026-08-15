@@ -158,6 +158,7 @@ const rendererPositionHandlers = [{
       positionKey,
       positionCardTitle,
       legacyOrderStateApi,
+      cardStateApi,
       cardByKey,
       setCardState,
       toast,
@@ -197,7 +198,7 @@ const rendererPositionHandlers = [{
     const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDispatcher({
       positionKey,
       positionCardTitle,
-      legacyOrderStateApi,
+      legacyOrderStateApi: cardStateApi || legacyOrderStateApi,
       cardByKey,
       setCardState,
       toast,

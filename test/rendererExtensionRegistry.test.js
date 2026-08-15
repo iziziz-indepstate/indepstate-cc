@@ -58,6 +58,7 @@ async function run() {
         rendererHandlers: [{
           register(context = {}) {
             const cardStates = new Map();
+            const rows = [];
             const runtime = {
               legacyOrderStateApi: {
                 getCardState: key => cardStates.get(key),
@@ -85,7 +86,7 @@ async function run() {
               },
               setClosedCardEventStrategy: () => {},
               renderLegacyCards(createCard) {
-                for (const [index, row] of context.state.rows.entries()) createCard(row, index);
+                for (const [index, row] of rows.entries()) createCard(row, index);
               },
               mount: () => {},
               markTouched: () => {},
@@ -97,9 +98,11 @@ async function run() {
               scheduleInstantExecution: () => {},
               migrateKey: key => key
             };
-            context.registerLegacyOrderCardsRuntime({
-              runtime,
-              createCard(row) {
+            context.registerTestingExtension?.('orderCardsRows', rows);
+            context.registerTestingExtension?.('legacyOrderStateApi', runtime.legacyOrderStateApi);
+            context.registerRendererRowProvider?.(() => rows);
+            context.registerRendererLayer?.(({ grid } = {}) => {
+              runtime.renderLegacyCards((row) => {
                 const card = document.createElement('div');
                 card.className = 'card';
                 card.dataset.rowkey = context.rowKey(row);
@@ -118,10 +121,9 @@ async function run() {
                 button.className = 'btn';
                 buttons.appendChild(button);
                 card.appendChild(buttons);
+                if (grid) grid.appendChild(card);
                 return card;
-              },
-              instrumentTypeHandlers: {},
-              cardTypeHandlers: {}
+              });
             });
           }
         }],
@@ -149,7 +151,7 @@ async function run() {
 
   const row = { ticker: 'TST', event: 'evt', time: 0, price: 1 };
   const key = t.rowKey(row);
-  t.state.rows.push(row);
+  t.orderCardsRows.push(row);
   t.render();
 
   t.registerCardStateHook(({ card, updateSpreadForTicker }) => {

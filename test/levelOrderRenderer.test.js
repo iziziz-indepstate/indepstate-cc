@@ -119,7 +119,7 @@ async function run() {
   const t = renderer.__testing;
   await new Promise(resolve => setTimeout(resolve, 20));
 
-  assert.strictEqual(t.state.rows.some(row => row.cardType === 'levelOrder'), false);
+  assert.strictEqual(t.orderCardsRows.some(row => row.cardType === 'levelOrder'), false);
   const key = 'position|pos-level-1';
   let card = t.cardByKey(key);
   assert(card);
@@ -152,7 +152,7 @@ async function run() {
   assert.strictEqual(call.payload.takeProfitPts, 12);
 
   const parentRequestId = call.payload.requestId;
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
 
   handlers['execution:pending'](null, {
     reqId: `${parentRequestId}_1`,
@@ -164,7 +164,7 @@ async function run() {
       meta: { requestId: `${parentRequestId}_1`, parentRequestId, childCount: 2 }
     }
   });
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
 
   handlers['execution:result'](null, {
     reqId: `${parentRequestId}_1`,
@@ -190,18 +190,18 @@ async function run() {
       meta: { requestId: `${parentRequestId}_2`, parentRequestId, childCount: 2 }
     }
   });
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
 
   handlers['position:opened'](null, {
     ticket: 'position-1',
     origOrder: { meta: { requestId: `${parentRequestId}_1`, parentRequestId, childCount: 2 } }
   });
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
   handlers['position:opened'](null, {
     ticket: 'position-2',
     origOrder: { meta: { requestId: `${parentRequestId}_2`, parentRequestId, childCount: 2 } }
   });
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
 
   const placedSnapshot = levelOrderSnapshot('pos-level-1', {
     state: 'placed',
@@ -215,7 +215,7 @@ async function run() {
   });
   handlers['positions:changed'](null, { event: { type: 'position.placed' }, position: placedSnapshot });
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.strictEqual(t.legacyOrderStateApi.getCardState(key), undefined);
+  assert.strictEqual(t.cardStateApi.getCardState(key), undefined);
   card = t.cardByKey(key);
   assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['close']);
 

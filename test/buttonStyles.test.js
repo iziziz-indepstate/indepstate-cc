@@ -68,7 +68,7 @@ async function run() {
     appliedPaths: ['buttons']
   });
   assert.deepStrictEqual(rendererFailures, []);
-  assert.strictEqual(t.state.rows.length, 1);
+  assert.strictEqual(t.orderCardsRows.length, 1);
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert.deepStrictEqual(
     Array.from(document.querySelectorAll('.card button.btn')).map(button => button.textContent),

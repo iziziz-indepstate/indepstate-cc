@@ -157,12 +157,14 @@ const rendererHandlers = [{
       ipcRenderer,
       el,
       state,
+      orderCardsState,
       rowKey,
       render,
       toast,
       shakeCard,
       legacyOrderStateApi,
       setCardState,
+      setLegacyOrderCardState,
       settingsRuntime,
       positionKey,
       btn,
@@ -175,13 +177,13 @@ const rendererHandlers = [{
     const optionStratRenderer = createOptionStratRenderer({
       ipcRenderer,
       el,
-      state,
+      state: orderCardsState || state,
       rowKey,
       render,
       toast,
       shakeCard,
       legacyOrderStateApi,
-      setCardState,
+      setCardState: setLegacyOrderCardState || setCardState,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
     });
 

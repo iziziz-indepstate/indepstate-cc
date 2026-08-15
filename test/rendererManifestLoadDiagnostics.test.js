@@ -59,48 +59,7 @@ async function run() {
         rendererHandlers: [{
           cardType: 'regular',
           register(context = {}) {
-            context.registerLegacyOrderCardsRuntime({
-              runtime: {
-                legacyOrderStateApi: {
-                  getCardState: () => null,
-                  setCardState: () => {},
-                  clearCardState: () => {},
-                  setPendingExecLabel: () => {},
-                  getPendingExecLabel: () => null,
-                  clearPendingExecLabel: () => {},
-                  markPendingRequest: () => {},
-                  resolvePendingKey: () => null,
-                  setPendingId: () => {},
-                  getPendingId: () => null,
-                  getRetryCount: () => 0,
-                  findPendingRequestIdByKey: () => null,
-                  clearPendingRequest: () => {},
-                  clearPendingByKey: () => {},
-                  markPlacedOrder: () => {},
-                  getPlacedOrder: () => null,
-                  deletePlacedOrder: () => {},
-                  resolveTicketKey: () => null,
-                  bindTicket: () => {},
-                  unbindTicket: () => {},
-                  listPlacedOrders: () => [],
-                  clearExecutionStateByKey: () => {}
-                },
-                setClosedCardEventStrategy: () => {},
-                renderLegacyCards: () => {},
-                mount: () => {},
-                markTouched: () => {},
-                isTouched: () => false,
-                removeRow: () => false,
-                removeLegacyRowsForPosition: () => false,
-                resetLegacyRowsForPosition: () => false,
-                removeRowByKey: () => false,
-                scheduleInstantExecution: () => {},
-                migrateKey: key => key
-              },
-              createCard: () => document.createElement('div'),
-              instrumentTypeHandlers: {},
-              cardTypeHandlers: {}
-            });
+            context.registerRendererLayer?.(() => {});
           }
         }]
       };

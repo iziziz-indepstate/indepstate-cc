@@ -158,7 +158,7 @@ async function run() {
   });
   await new Promise(resolve => setTimeout(resolve, 20));
 
-  assert.strictEqual(t.state.rows.length, 1);
+  assert.strictEqual(t.orderCardsRows.length, 1);
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert(document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card)`));
   assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-opt-1"]'), null);
@@ -173,7 +173,7 @@ async function run() {
   document.querySelector(`.card[data-rowkey="${legacyKey}"]:not(.position-card) .card__close`).click();
   await new Promise(resolve => setTimeout(resolve, 20));
 
-  assert.strictEqual(t.state.rows.length, 0);
+  assert.strictEqual(t.orderCardsRows.length, 0);
   assert.strictEqual(t.positionsById.has('pos-opt-1'), false);
   assert.strictEqual(document.querySelectorAll('.card').length, 0);
   assert(calls.some(call => call.ch === 'positions:remove' && call.payload.positionId === 'pos-opt-1'));
@@ -195,7 +195,7 @@ async function run() {
   });
   await new Promise(resolve => setTimeout(resolve, 20));
 
-  assert.strictEqual(t.state.rows.length, 0);
+  assert.strictEqual(t.orderCardsRows.length, 0);
   assert.strictEqual(document.querySelectorAll('.card').length, 1);
   assert.strictEqual(document.querySelectorAll('.position-card').length, 1);
   const placedCard = document.querySelector('.position-card[data-position-id="pos-opt-1"]');

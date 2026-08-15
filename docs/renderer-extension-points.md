@@ -17,13 +17,20 @@ registration functions. Common extension points are:
 - `registerPositionRemovalHandler(cardType, handler)` handles cleanup when a snapshot disappears.
 - `registerInstrumentDisplayPolicy(policy)` contributes shared bid/ask/spread display policy.
 - `registerCardStateHook(hook)` contributes card-state refresh behavior.
-- `registerLegacyOrderCardsRuntime(runtime)` installs the transitional legacy row runtime.
+- `registerRendererLayer(layer)` adds a shell render pass. The layer receives `{ grid }` and may
+  append service-owned DOM nodes.
+- `registerRendererRowProvider(provider)` exposes service-owned rows to shared renderer utilities
+  such as instrument refresh and legacy guard context.
+- `registerPositionSnapshotHook(hook)` observes every `positions:changed` snapshot accepted by the
+  shell, before the shell decides whether to render it.
+- `registerPositionRemovedHook(hook)` handles service cleanup when a position snapshot is removed
+  or archived.
 - `registerRendererLegacyGuard(guard)` installs compatibility filters for legacy rows/events.
 
 The context also injects renderer helpers such as `ipcRenderer`, `btn`, `render`, `toast`,
 `positionKey`, `positionCardTitle`, `dispatchPositionAction`, `requestRemovePosition`, config
-loading, settings runtime, instrument helpers, and legacy state APIs. Treat these as injected
-dependencies from the shell; services should not import `app/renderer.js`.
+loading, settings runtime, instrument helpers, and generic card-state APIs for snapshot cards.
+Treat these as injected dependencies from the shell; services should not import `app/renderer.js`.
 
 ## Minimal Examples
 
@@ -33,6 +40,17 @@ Regular cards are registered by `app/services/orderCards/manifest.js`:
 const rendererHandlers = [{
   cardType: 'regular',
   register(context = {}) {
+    const rows = [];
+    context.registerRendererRowProvider?.(() => rows);
+    context.registerRendererLayer?.(({ grid } = {}) => {
+      for (const row of rows) grid.appendChild(createLegacyOrderCard(row));
+    });
+    context.registerPositionSnapshotHook?.((position) => {
+      removeRowsOwnedByPosition(position);
+    });
+    context.registerPositionRemovedHook?.((position) => {
+      return removeRowsOwnedByPosition(position);
+    });
     context.registerPositionCardRenderer?.('regular', (position) => {
       return createRegularPositionCard({ position });
     });

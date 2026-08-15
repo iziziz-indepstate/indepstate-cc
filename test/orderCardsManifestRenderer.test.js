@@ -8,9 +8,40 @@ function run() {
     state: { rows: [] },
     legacyState: {},
     closedCardEventStrategy: null,
+    legacyOrderStateApi: {
+      getCardState: () => undefined,
+      setCardState: () => true,
+      clearCardState: () => false,
+      setPendingExecLabel: () => true,
+      getPendingExecLabel: () => undefined,
+      clearPendingExecLabel: () => false,
+      markPendingRequest: () => true,
+      resolvePendingKey: () => undefined,
+      setPendingId: () => true,
+      getPendingId: () => undefined,
+      getRetryCount: () => undefined,
+      findPendingRequestIdByKey: () => undefined,
+      clearPendingRequest: () => false,
+      clearPendingByKey: () => false,
+      markPlacedOrder: () => true,
+      getPlacedOrder: () => undefined,
+      deletePlacedOrder: () => false,
+      resolveTicketKey: () => undefined,
+      bindTicket: () => true,
+      unbindTicket: () => false,
+      listPlacedOrders: () => [],
+      clearExecutionStateByKey: () => false
+    },
     setClosedCardEventStrategy(strategy) {
       this.closedCardEventStrategy = strategy;
-    }
+    },
+    renderLegacyCards(createCard) {
+      return createCard({ ticker: 'AAPL' }, 0);
+    },
+    mount: (...args) => calls.push(['legacyMount', args]),
+    removeRow: () => false,
+    resetLegacyRowsForPosition: () => false,
+    removeLegacyRowsForPosition: () => false
   };
   let fakeClosedCardEventStrategy = 'ignore';
   let fakeShouldShowSpread = true;
@@ -85,19 +116,13 @@ function run() {
   const manifest = require(manifestPath);
   Module._load = originalLoad;
 
-  let legacyRegistration = null;
   let registeredInstrumentDisplayPolicy = null;
   let registeredCardStateHook = null;
+  const testingExtensions = {};
+  const rendererLayers = [];
+  const rowProviders = [];
   const positionRenderers = {};
   const shellGetter = () => false;
-  const orderCardsDeps = {
-    marker: 'order-cards-deps',
-    shouldShowBidAsk: shellGetter,
-    shouldShowSpread: shellGetter,
-    getCardButtons: () => [],
-    getButtonRows: () => 1
-  };
-  const legacyOrderListDeps = { marker: 'legacy-order-list-deps' };
   const loadConfig = () => ({});
   const settingsRuntime = { onApply: () => {} };
   const env = { INSTRUMENT_REFRESH_MS: '999' };
@@ -109,21 +134,66 @@ function run() {
     settingsRuntime,
     env,
     render,
-    orderCardsDeps,
-    legacyOrderListDeps,
+    el: () => ({}),
+    inputNumber: () => ({}),
+    uiState: new Map(),
+    orderCalc: {},
+    priceToPoints: () => 1,
+    normNum: Number,
+    isPos: () => true,
+    isSL: () => true,
+    tickSize: () => 1,
+    instrumentInfoFor: () => ({}),
+    tradeRules: { validate: () => ({ ok: true }) },
+    markTouched: () => {},
+    detectInstrumentType: () => 'EQ',
+    rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`,
+    ipcRenderer: { invoke: async () => ({}), on: () => {} },
+    cardByKey: () => null,
+    setCardState: () => {},
+    pendingActionInfo: () => null,
+    toast: () => {},
+    shakeCard: () => {},
+    getGrid: () => ({ appendChild: () => {} }),
+    cardStateOrder: {},
+    isTerminalCardState: () => false,
+    findKeyByTicker: () => null,
+    removePositionSnapshotsForRow: () => false,
+    positionRemovalHandlerFor: () => null,
+    positionMatchesLegacyRow: () => false,
+    isRegularPositionSnapshot: () => false,
+    shouldFilterLegacyRow: () => false,
+    shouldIgnoreLegacyRowForExistingPosition: () => false,
+    shouldIgnoreLegacyExecutionEvent: () => false,
+    shouldIgnoreLegacyPositionEvent: () => false,
+    shouldRemoveLegacyRowForPosition: () => false,
+    shouldResetLegacyRowForPosition: () => false,
+    forgetInstrument: () => {},
+    formatBidAskText: () => '',
+    formatSpreadTriple: () => '',
+    updateSpreadForTicker: () => {},
+    notifyCardRestored: () => {},
     positionKey: position => `position|${position.id}`,
     positionCardTitle: position => position.title,
     btn: () => ({ dataset: {} }),
     dispatchPositionAction: () => {},
     requestRemovePosition: () => {},
-    registerLegacyOrderCardsRuntime(registration) {
-      legacyRegistration = registration;
-    },
     registerInstrumentDisplayPolicy(policy) {
       registeredInstrumentDisplayPolicy = policy;
     },
     registerCardStateHook(hook) {
       registeredCardStateHook = hook;
+    },
+    registerRendererLayer(layer) {
+      rendererLayers.push(layer);
+    },
+    registerRendererRowProvider(provider) {
+      rowProviders.push(provider);
+    },
+    registerPositionSnapshotHook() {},
+    registerPositionRemovedHook() {},
+    registerTestingExtension(name, value) {
+      testingExtensions[name] = value;
     },
     registerPositionCardRenderer(cardType, renderer) {
       positionRenderers[cardType] = renderer;
@@ -155,33 +225,29 @@ function run() {
   assert.deepStrictEqual(restored, ['AAPL']);
   fakeShouldShowSpread = true;
   assert.strictEqual(calls[1][0], 'createOrderCardsRenderer');
-  assert.strictEqual(calls[1][1].marker, orderCardsDeps.marker);
-  assert.notStrictEqual(calls[1][1].shouldShowBidAsk, shellGetter);
   assert.strictEqual(calls[1][1].shouldShowBidAsk(), true);
   assert.strictEqual(calls[1][1].shouldShowSpread(), true);
   assert.deepStrictEqual(calls[1][1].getCardButtons(), [{ label: 'LIVE', action: 'BL', style: 'bl' }]);
   assert.strictEqual(calls[1][1].getButtonRows(), 2);
   assert.strictEqual(calls[2][0], 'createLegacyOrderListRuntime');
-  assert.strictEqual(calls[2][1].marker, legacyOrderListDeps.marker);
   assert.strictEqual(typeof calls[2][1].matchesExistingOrderRow, 'function');
   assert.strictEqual(typeof calls[2][1].orderCardHandlerForRow, 'function');
   assert.strictEqual(typeof calls[2][1].scheduleOrderCardInstantExecution, 'function');
-
-  assert.strictEqual(legacyRegistration.runtime, fakeRuntime);
-  assert.strictEqual(legacyRegistration.orderCardsRuntime, fakeOrderCardsRuntime);
   assert.strictEqual(fakeRuntime.closedCardEventStrategy, 'ignore');
   fakeClosedCardEventStrategy = 'remove';
   onConfigApplied(fakeOrderCardsRuntime);
   assert.strictEqual(fakeRuntime.closedCardEventStrategy, 'remove');
-  assert.strictEqual(legacyRegistration.createCard({ ticker: 'AAPL' }, 2), fakeCard);
+  assert.strictEqual(typeof rendererLayers[0], 'function');
+  rendererLayers[0]({ grid: { appendChild: () => {} } });
   assert.deepStrictEqual(calls.find(call => call[0] === 'createLegacyOrderCard')[1], {
     row: { ticker: 'AAPL' },
-    index: 2
+    index: 0
   });
-  assert.strictEqual(legacyRegistration.registerInstrumentHandler('EQ', {}), 'unregister-instrument');
-  assert.strictEqual(legacyRegistration.registerCardTypeHandler('regular', {}), 'unregister-card-type');
-  assert.strictEqual(legacyRegistration.instrumentTypeHandlers, fakeRenderer.instrumentTypeHandlers);
-  assert.strictEqual(legacyRegistration.cardTypeHandlers, fakeRenderer.cardTypeHandlers);
+  assert.strictEqual(calls.some(call => call[0] === 'legacyMount'), true);
+  assert.strictEqual(rowProviders[0](), calls[2][1].state.rows);
+  assert.strictEqual(testingExtensions.legacyOrderStateApi.getCardState('x'), undefined);
+  assert.strictEqual(testingExtensions.orderCardInstrumentHandlers, fakeRenderer.instrumentTypeHandlers);
+  assert.strictEqual(testingExtensions.orderCardTypeHandlers, fakeRenderer.cardTypeHandlers);
 
   assert.strictEqual(typeof positionRenderers.regular, 'function');
   assert.strictEqual(positionRenderers.regular({ id: 'p1', title: 'AAPL' }), fakePositionCard);
