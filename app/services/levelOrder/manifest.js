@@ -157,8 +157,7 @@ const rendererPositionHandlers = [{
       untrackInstrument,
       positionKey,
       positionCardTitle,
-      legacyOrderStateApi,
-      cardStateApi,
+      pendingRequestLabels,
       cardByKey,
       setCardState,
       toast,
@@ -198,7 +197,7 @@ const rendererPositionHandlers = [{
     const placeLevelOrderPositionAction = levelOrderRenderer.createPositionActionDispatcher({
       positionKey,
       positionCardTitle,
-      legacyOrderStateApi: cardStateApi || legacyOrderStateApi,
+      pendingRequestLabels,
       cardByKey,
       setCardState,
       toast,

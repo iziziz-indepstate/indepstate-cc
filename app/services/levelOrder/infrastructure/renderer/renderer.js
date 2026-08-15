@@ -359,14 +359,14 @@ function createLevelOrderRenderer({
   function createPositionActionDispatcher({
     positionKey,
     positionCardTitle,
-    legacyOrderStateApi,
+    pendingRequestLabels,
     cardByKey,
     setCardState,
     toast,
     shakeCard,
     render
   } = {}) {
-    const legacyState = legacyOrderStateApi || {
+    const pendingState = pendingRequestLabels || {
       markPendingRequest: () => false,
       clearPendingRequest: () => false,
       setPendingExecLabel: () => false
@@ -377,8 +377,8 @@ function createLevelOrderRenderer({
       const title = positionCardTitle(position);
       const requestId = `${now()}_${random().toString(36).slice(2, 8)}`;
       const strategyId = `${requestId}_${String(id).toLowerCase()}`;
-      legacyState.markPendingRequest(requestId, key, { retryCount: 0 });
-      legacyState.setPendingExecLabel(key, action.label || id);
+      pendingState.markPendingRequest(requestId, key, { retryCount: 0 });
+      pendingState.setPendingExecLabel(key, action.label || id);
       setCardState(key, 'pending-exec');
       const card = cardByKey(key);
       if (card) {
@@ -394,7 +394,7 @@ function createLevelOrderRenderer({
           strategyId
         });
         if (!res || res.status === 'rejected' || res.status === 'error') {
-          legacyState.clearPendingRequest(requestId);
+          pendingState.clearPendingRequest(requestId);
           setCardState(key, null);
           toast(`x ${title}: ${res?.reason || 'Rejected'}`);
           shakeCard(key);
@@ -408,7 +408,7 @@ function createLevelOrderRenderer({
         render();
         return res;
       } catch (err) {
-        legacyState.clearPendingRequest(requestId);
+        pendingState.clearPendingRequest(requestId);
         setCardState(key, null);
         toast(`x ${title}: ${err?.message || err}`);
         shakeCard(key);

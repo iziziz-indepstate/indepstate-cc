@@ -13,7 +13,7 @@ async function run() {
     state: { rows: [] },
     rowKey: row => row.key,
     render: () => {},
-    legacyOrderStateApi: {
+    placedOrderLookup: {
       listPlacedOrders: () => undefined,
       getPlacedOrder: () => undefined,
       markPlacedOrder: () => false

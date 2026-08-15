@@ -4,6 +4,7 @@ const loadConfig = require('../../config/load');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
+const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('./rendererStateBridge');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
@@ -45,6 +46,7 @@ const rendererHandlers = [{
     const render = context.render || (() => {});
     const toast = context.toast || (() => {});
     const shakeCard = context.shakeCard || (() => {});
+    let orderStateFacades = null;
     const legacyOrderStateApi = {};
     for (const method of [
       'getCardState',
@@ -121,7 +123,10 @@ const rendererHandlers = [{
               key,
               row: currentRow,
               orderInfo,
-              legacyOrderStateApi,
+              pendingRequestLabels: orderStateFacades?.pendingRequestLabels,
+              placedOrderLookup: orderStateFacades?.placedOrderLookup,
+              cardVisualState: orderStateFacades?.cardVisualState,
+              ticketBinding: orderStateFacades?.ticketBinding,
               setCardState: setLegacyCardState,
               render,
               ipcRenderer,
@@ -327,7 +332,17 @@ const rendererHandlers = [{
     });
     legacyOrderListRuntime?.setClosedCardEventStrategy?.(orderCardsRuntime.getClosedCardEventStrategy?.() || 'ignore');
 
-    context.legacyOrderStateApi = legacyOrderStateApi;
+    const rendererStateCompat = createLegacyOrderStateCompatApi({
+      pendingRequestLabels: context.pendingRequestLabels,
+      placedOrderLookup: context.placedOrderLookup,
+      cardVisualState: context.cardVisualState,
+      ticketBinding: context.ticketBinding
+    });
+    orderStateFacades = createOrderStateFacades(legacyOrderStateApi, rendererStateCompat);
+    context.pendingRequestLabels = orderStateFacades.pendingRequestLabels;
+    context.placedOrderLookup = orderStateFacades.placedOrderLookup;
+    context.cardVisualState = orderStateFacades.cardVisualState;
+    context.ticketBinding = orderStateFacades.ticketBinding;
     context.orderCardsState = state;
     context.registerOrderCardInstrumentHandler = (...args) => orderCardsRenderer.registerInstrumentHandler(...args);
     context.registerOrderCardTypeHandler = (...args) => orderCardsRenderer.registerCardTypeHandler(...args);
@@ -335,6 +350,10 @@ const rendererHandlers = [{
     context.orderCardHandlerForKey = (...args) => orderCardsRenderer.handlerForKey(...args);
     context.setLegacyOrderCardState = setLegacyCardState;
     context.registerTestingExtension?.('legacyOrderStateApi', legacyOrderStateApi);
+    context.registerTestingExtension?.('pendingRequestLabels', orderStateFacades.pendingRequestLabels);
+    context.registerTestingExtension?.('placedOrderLookup', orderStateFacades.placedOrderLookup);
+    context.registerTestingExtension?.('cardVisualState', orderStateFacades.cardVisualState);
+    context.registerTestingExtension?.('ticketBinding', orderStateFacades.ticketBinding);
     context.registerTestingExtension?.('orderCardInstrumentHandlers', orderCardsRenderer.instrumentTypeHandlers);
     context.registerTestingExtension?.('orderCardTypeHandlers', orderCardsRenderer.cardTypeHandlers);
     context.registerTestingExtension?.('orderCardsRows', {

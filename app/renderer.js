@@ -12,6 +12,7 @@ const { createInstrumentInfoRenderer } = require('./services/instrumentInfo/rend
 const { createPositionsRenderer } = require('./services/positions/renderer');
 const { createSettingsRenderer } = require('./services/settings/renderer');
 const { createPendingOrdersRenderer } = require('./services/pendingOrders/renderer');
+const { createOrderStateFacades } = require('./services/orderCards/rendererStateBridge');
 const { isDebugPositionEventsEnabled, debugPositionEvents, positionDebugSummary } = require('./debugPositionEvents');
 
 debugPositionEvents('renderer.boot:start');
@@ -221,6 +222,7 @@ function createCardStateApi() {
   };
 }
 cardStateApi = createCardStateApi();
+const rendererOrderStateFacades = createOrderStateFacades(cardStateApi);
 
 ipcRenderer.invoke('settings:get', 'ui').then((res) => {
   if (res && typeof res.autoscroll === 'boolean') {
@@ -987,7 +989,10 @@ loadRendererHandlers({
   ipcRenderer,
   trackInstrument: row => instrumentInfoRenderer.trackInstrument(row),
   untrackInstrument: row => instrumentInfoRenderer.untrackInstrument(row),
-  cardStateApi,
+  pendingRequestLabels: rendererOrderStateFacades.pendingRequestLabels,
+  placedOrderLookup: rendererOrderStateFacades.placedOrderLookup,
+  cardVisualState: rendererOrderStateFacades.cardVisualState,
+  ticketBinding: rendererOrderStateFacades.ticketBinding,
   setCardState,
   positionKey,
   positionCardTitle,
@@ -1249,6 +1254,10 @@ if (typeof module !== 'undefined') {
     cardByKey,
     state,
     cardStateApi,
+    pendingRequestLabels: testingExtensions.pendingRequestLabels || rendererOrderStateFacades.pendingRequestLabels,
+    placedOrderLookup: testingExtensions.placedOrderLookup || rendererOrderStateFacades.placedOrderLookup,
+    cardVisualState: testingExtensions.cardVisualState || rendererOrderStateFacades.cardVisualState,
+    ticketBinding: testingExtensions.ticketBinding || rendererOrderStateFacades.ticketBinding,
     positionsById,
     positionCardRenderers,
     setPositionSnapshot,

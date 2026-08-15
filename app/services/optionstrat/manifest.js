@@ -162,7 +162,10 @@ const rendererHandlers = [{
       render,
       toast,
       shakeCard,
-      legacyOrderStateApi,
+      pendingRequestLabels,
+      placedOrderLookup,
+      cardVisualState,
+      ticketBinding,
       setCardState,
       setLegacyOrderCardState,
       settingsRuntime,
@@ -182,7 +185,10 @@ const rendererHandlers = [{
       render,
       toast,
       shakeCard,
-      legacyOrderStateApi,
+      pendingRequestLabels,
+      placedOrderLookup,
+      cardVisualState,
+      ticketBinding,
       setCardState: setLegacyOrderCardState || setCardState,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
     });
@@ -216,7 +222,8 @@ const rendererHandlers = [{
         key,
         row,
         orderInfo,
-        legacyOrderStateApi: orderState,
+        placedOrderLookup: placedOrders,
+        ticketBinding: tickets,
         setCardState: setState,
         render: rerender,
         ipcRenderer: ipc,
@@ -252,9 +259,9 @@ const rendererHandlers = [{
           if (row) row.valuation = finalValuation;
           if (orderInfo) orderInfo.valuation = finalValuation;
         }
-        if (orderInfo?.ticket) orderState?.unbindTicket?.(orderInfo.ticket);
+        if (orderInfo?.ticket) tickets?.unbindTicket?.(orderInfo.ticket);
         optionStratRenderer.markRowClosed(key);
-        orderState?.deletePlacedOrder?.(key);
+        placedOrders?.deletePlacedOrder?.(key);
         optionStratRenderer.pendingOptionValuations.delete(key);
         setState?.(key, 'profit');
         rerender?.();
