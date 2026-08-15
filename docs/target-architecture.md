@@ -146,18 +146,22 @@ Canonical flow:
 
 ## Target Card Rendering
 
-The renderer should become a composite renderer:
+The renderer should become a composite renderer backed by a shell-owned card runtime. See
+[card-runtime.md](card-runtime.md) for the target infrastructure/interface subsystem that maps
+position snapshots, application read models, and transitional legacy rows into shell cards.
 
-- Card renderer registry selects by `card.type`.
-- Data renderers select by available `card.data` keys.
-- Action renderers select by available `card.actions`.
-- Service manifests register extension-owned card/action/removal handlers into renderer registries.
+- Card type registry selects by `card.type`, instrument type, or transitional legacy row match.
+- View renderers select by available `card.data` keys and service-registered view names.
+- Control renderers select by available `card.actions` and service-registered control names.
+- Shape composers arrange reusable views and controls into concrete card layouts.
+- Service manifests register extension-owned card types, views, controls, shapes, action handlers,
+  and removal/reconciliation handlers into renderer registries.
 - Controls do not mutate lifecycle state locally. They send commands.
 - Renderer state can cache view details, but aggregate snapshots are the source of lifecycle truth.
 
 Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
 
-Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind renderer runtime APIs where service handlers can use them through injected dependencies. They are still transitional compatibility state and should gradually move into application read models or infrastructure bridges.
+Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind renderer runtime APIs where service handlers can use them through injected dependencies. They are still transitional compatibility state. Generic facades for pending requests, placed orders, visual state, and ticket binding should move into the shell card runtime rather than remaining owned by `orderCards`, and durable lifecycle state should gradually move into application read models or infrastructure bridges.
 
 Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.
 
