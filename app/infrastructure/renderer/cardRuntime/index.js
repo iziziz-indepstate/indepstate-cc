@@ -42,7 +42,35 @@ function createCardRuntime(options = {}) {
   const cardShapes = createNamedRegistry();
   const legacyOrderCardInstrumentHandlers = {};
   const legacyOrderCardTypeHandlers = {};
-  let legacyOrderCardRenderer = null;
+  let legacyOrderCardAdapter = null;
+  const legacyInstrumentHandlerUnregisters = {};
+  const legacyCardTypeHandlerUnregisters = {};
+
+  function legacyRenderer() {
+    return legacyOrderCardAdapter?.renderer || legacyOrderCardAdapter;
+  }
+
+  function bridgeLegacyInstrumentHandler(instrumentType, handler) {
+    const renderer = legacyRenderer();
+    if (!renderer || typeof renderer.registerInstrumentHandler !== 'function') return undefined;
+    return renderer.registerInstrumentHandler(instrumentType, handler);
+  }
+
+  function bridgeLegacyCardTypeHandler(cardType, handler) {
+    const renderer = legacyRenderer();
+    if (!renderer || typeof renderer.registerCardTypeHandler !== 'function') return undefined;
+    return renderer.registerCardTypeHandler(cardType, handler);
+  }
+
+  function onceUnregister(unregister) {
+    if (typeof unregister !== 'function') return undefined;
+    let called = false;
+    return () => {
+      if (called) return;
+      called = true;
+      unregister();
+    };
+  }
 
   const runtime = {
     stateApi,
@@ -149,27 +177,71 @@ function createCardRuntime(options = {}) {
       return () => unregisterFrom(this.rendererLegacyGuards, guard);
     },
 
-    connectLegacyOrderCardRenderer(renderer = {}) {
-      legacyOrderCardRenderer = renderer;
+    connectLegacyOrderCardRenderer(adapter = {}) {
+      legacyOrderCardAdapter = adapter?.renderer ? adapter : { renderer: adapter };
       for (const [instrumentType, handler] of Object.entries(this.legacyOrderCardInstrumentHandlers)) {
-        legacyOrderCardRenderer.registerInstrumentHandler?.(instrumentType, handler);
+        if (typeof legacyInstrumentHandlerUnregisters[instrumentType] === 'function') {
+          legacyInstrumentHandlerUnregisters[instrumentType]();
+        }
+        legacyInstrumentHandlerUnregisters[instrumentType] = onceUnregister(
+          bridgeLegacyInstrumentHandler(instrumentType, handler)
+        );
       }
       for (const [cardType, handler] of Object.entries(this.legacyOrderCardTypeHandlers)) {
-        legacyOrderCardRenderer.registerCardTypeHandler?.(cardType, handler);
+        if (typeof legacyCardTypeHandlerUnregisters[cardType] === 'function') {
+          legacyCardTypeHandlerUnregisters[cardType]();
+        }
+        legacyCardTypeHandlerUnregisters[cardType] = onceUnregister(
+          bridgeLegacyCardTypeHandler(cardType, handler)
+        );
       }
       return () => {
-        if (legacyOrderCardRenderer === renderer) legacyOrderCardRenderer = null;
+        if (legacyOrderCardAdapter !== adapter && legacyOrderCardAdapter?.renderer !== adapter) return;
+        for (const unregister of Object.values(legacyInstrumentHandlerUnregisters)) {
+          if (typeof unregister === 'function') unregister();
+        }
+        for (const unregister of Object.values(legacyCardTypeHandlerUnregisters)) {
+          if (typeof unregister === 'function') unregister();
+        }
+        legacyOrderCardAdapter = null;
       };
+    },
+
+    legacyRows() {
+      try {
+        const rows = legacyOrderCardAdapter?.getRows?.();
+        return Array.isArray(rows) ? rows : [];
+      } catch (err) {
+        console.error('[cardRuntime] legacy row adapter failed', err?.message || err);
+        return [];
+      }
+    },
+
+    findLegacyRowByKey(key) {
+      const rowKey = legacyOrderCardAdapter?.rowKey;
+      if (typeof rowKey !== 'function') return undefined;
+      return this.legacyRows().find(row => rowKey(row) === key);
+    },
+
+    setLegacyRowCardState(key, state) {
+      return legacyOrderCardAdapter?.setCardState?.(key, state);
     },
 
     registerOrderCardInstrumentHandler(instrumentType, handler) {
       const key = String(instrumentType || '').trim();
       if (!key || !handler || typeof handler !== 'object') return false;
       this.legacyOrderCardInstrumentHandlers[key] = handler;
-      const unregisterAdapter = legacyOrderCardRenderer?.registerInstrumentHandler?.(key, handler);
+      if (typeof legacyInstrumentHandlerUnregisters[key] === 'function') {
+        legacyInstrumentHandlerUnregisters[key]();
+      }
+      const unregisterAdapter = onceUnregister(bridgeLegacyInstrumentHandler(key, handler));
+      legacyInstrumentHandlerUnregisters[key] = unregisterAdapter;
       return () => {
         if (this.legacyOrderCardInstrumentHandlers[key] === handler) delete this.legacyOrderCardInstrumentHandlers[key];
         if (typeof unregisterAdapter === 'function') unregisterAdapter();
+        if (legacyInstrumentHandlerUnregisters[key] === unregisterAdapter) {
+          delete legacyInstrumentHandlerUnregisters[key];
+        }
       };
     },
 
@@ -177,10 +249,17 @@ function createCardRuntime(options = {}) {
       const key = String(cardType || '').trim();
       if (!key || !handler || typeof handler !== 'object') return false;
       this.legacyOrderCardTypeHandlers[key] = handler;
-      const unregisterAdapter = legacyOrderCardRenderer?.registerCardTypeHandler?.(key, handler);
+      if (typeof legacyCardTypeHandlerUnregisters[key] === 'function') {
+        legacyCardTypeHandlerUnregisters[key]();
+      }
+      const unregisterAdapter = onceUnregister(bridgeLegacyCardTypeHandler(key, handler));
+      legacyCardTypeHandlerUnregisters[key] = unregisterAdapter;
       return () => {
         if (this.legacyOrderCardTypeHandlers[key] === handler) delete this.legacyOrderCardTypeHandlers[key];
         if (typeof unregisterAdapter === 'function') unregisterAdapter();
+        if (legacyCardTypeHandlerUnregisters[key] === unregisterAdapter) {
+          delete legacyCardTypeHandlerUnregisters[key];
+        }
       };
     },
 

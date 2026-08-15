@@ -640,7 +640,8 @@ function createLegacyOrderListRuntime({
       }
       if (!key) return;
       placedOrderByKey.delete(key);
-      orderCardHandlerForKey(key)?.onPositionOpened?.({ key, rec });
+      const row = state.rows.find(r => rowKey(r) === key);
+      orderCardHandlerForKey(key)?.onPositionOpened?.({ key, row, rec });
       setCardState(key, 'executing');
       render();
     });
@@ -650,7 +651,8 @@ function createLegacyOrderListRuntime({
       const ticket = String(rec.ticket);
       const key = ticketToKey.get(ticket);
       if (!key) return;
-      orderCardHandlerForKey(key)?.onPositionClosed?.({ key, rec });
+      const row = state.rows.find(r => rowKey(r) === key);
+      orderCardHandlerForKey(key)?.onPositionClosed?.({ key, row, rec });
       if (typeof rec.profit === 'number') {
         setCardState(key, rec.profit >= 0 ? 'profit' : 'loss');
       } else {

@@ -157,7 +157,6 @@ const rendererHandlers = [{
       ipcRenderer,
       el,
       state,
-      orderCardsState,
       rowKey,
       render,
       toast,
@@ -167,7 +166,6 @@ const rendererHandlers = [{
       cardVisualState,
       ticketBinding,
       setCardState,
-      setLegacyOrderCardState,
       settingsRuntime,
       positionKey,
       btn,
@@ -181,7 +179,8 @@ const rendererHandlers = [{
     const optionStratRenderer = createOptionStratRenderer({
       ipcRenderer,
       el,
-      state: orderCardsState || state,
+      state,
+      legacyRows: cardRuntime,
       rowKey,
       render,
       toast,
@@ -190,7 +189,6 @@ const rendererHandlers = [{
       placedOrderLookup,
       cardVisualState,
       ticketBinding,
-      setCardState: setLegacyOrderCardState || setCardState,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
     });
 
@@ -291,12 +289,25 @@ const rendererHandlers = [{
       }
     };
 
-    cardRuntime.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
     cardRuntime.registerCardType?.({
       type: 'option',
-      match: position => ['option', 'optionstrat'].includes(String(position?.card?.type || position?.source?.cardType || '').toLowerCase()),
+      aliases: ['optionstrat', 'OPT'],
+      match: card => {
+        const cardType = String(card?.card?.type || card?.source?.cardType || card?.cardType || card?.type || '').toLowerCase();
+        return cardType === 'option' || cardType === 'optionstrat' || String(card?.instrumentType || '').toUpperCase() === 'OPT';
+      },
+      view: 'option-legs-payoff-valuation',
+      controls: ['option-open', 'option-close-remove'],
       shape: 'option-position-card'
     });
+    cardRuntime.registerCardView?.('option-legs-payoff-valuation', optionStratRenderer.createOptionBody);
+    cardRuntime.registerCardControl?.('option-open', () => optionOrderCardHandler.buttons?.());
+    cardRuntime.registerCardControl?.('option-close-remove', () => ({
+      placedButton: optionOrderCardHandler.placedButton,
+      closePlacedOrder: optionOrderCardHandler.closePlacedOrder
+    }));
+    cardRuntime.registerCardShape?.('option-position-card', optionStratRenderer.createOptionPositionCard);
+    cardRuntime.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
     ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
       const cfg = res?.config || res || {};
       const ms = Number(cfg.valuationRefreshMs);

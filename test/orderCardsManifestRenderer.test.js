@@ -122,6 +122,7 @@ function run() {
   const rendererLayers = [];
   const rowProviders = [];
   const positionRenderers = {};
+  let connectedLegacyAdapter = null;
   const shellGetter = () => false;
   const loadConfig = () => ({});
   const settingsRuntime = { onApply: () => {} };
@@ -197,6 +198,11 @@ function run() {
     },
     registerPositionCardRenderer(cardType, renderer) {
       positionRenderers[cardType] = renderer;
+    },
+    cardRuntime: {
+      connectLegacyOrderCardRenderer(adapter) {
+        connectedLegacyAdapter = adapter;
+      }
     }
   });
 
@@ -225,6 +231,10 @@ function run() {
   assert.deepStrictEqual(restored, ['AAPL']);
   fakeShouldShowSpread = true;
   assert.strictEqual(calls[1][0], 'createOrderCardsRenderer');
+  assert.strictEqual(connectedLegacyAdapter.renderer, fakeRenderer);
+  assert.strictEqual(connectedLegacyAdapter.getRows(), calls[2]?.[1]?.state?.rows || fakeRuntime.state.rows);
+  assert.strictEqual(connectedLegacyAdapter.rowKey({ ticker: 'AAPL', event: 'up', time: 1, price: 2 }), 'AAPL|up|1|2');
+  assert.strictEqual(typeof connectedLegacyAdapter.setCardState, 'function');
   assert.strictEqual(calls[1][1].shouldShowBidAsk(), true);
   assert.strictEqual(calls[1][1].shouldShowSpread(), true);
   assert.deepStrictEqual(calls[1][1].getCardButtons(), [{ label: 'LIVE', action: 'BL', style: 'bl' }]);

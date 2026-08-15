@@ -7,12 +7,15 @@ async function run() {
   const handlers = new Map();
   let registeredInstrument = null;
   let registeredHandler = null;
+  let rendererDeps = null;
+  const runtimeCalls = [];
   let renderCount = 0;
 
   Module._load = function(request, parent, isMain) {
     if (request === './renderer' && String(parent?.filename || '').replace(/\\/g, '/').endsWith('app/services/optionstrat/manifest.js')) {
       return {
-        createOptionStratRenderer() {
+        createOptionStratRenderer(deps) {
+          rendererDeps = deps;
           const orderCardHandler = {
             createBody: () => ({ type: 'option' }),
             buttons: () => [{ label: 'OPEN', action: 'OPEN', style: 'bl' }],
@@ -67,22 +70,47 @@ async function run() {
     state: { rows: [] },
     rowKey: row => row.key || row.ticker,
     render: () => { renderCount += 1; },
-    legacyOrderStateApi: {
-      getCardState: () => undefined,
-      clearPendingRequest: () => {},
+    pendingRequestLabels: {
+      clearPendingRequest: () => {}
+    },
+    placedOrderLookup: {
       markPlacedOrder: () => {},
       getPlacedOrder: () => undefined,
-      bindTicket: () => {},
       listPlacedOrders: () => [],
-      deletePlacedOrder: () => {},
+      deletePlacedOrder: () => {}
+    },
+    cardVisualState: {
+      getCardState: () => undefined
+    },
+    ticketBinding: {
+      bindTicket: () => {},
       unbindTicket: () => {}
     },
     setCardState: () => {},
-    registerOrderCardInstrumentHandler(instrumentType, handler) {
-      registeredInstrument = instrumentType;
-      registeredHandler = handler;
+    cardRuntime: {
+      findLegacyRowByKey: () => undefined,
+      legacyRows: () => [],
+      registerOrderCardInstrumentHandler(instrumentType, handler) {
+        registeredInstrument = instrumentType;
+        registeredHandler = handler;
+        runtimeCalls.push(['registerOrderCardInstrumentHandler', instrumentType, handler]);
+      },
+      registerCardType(definition) {
+        runtimeCalls.push(['registerCardType', definition]);
+      },
+      registerCardView(name, renderer) {
+        runtimeCalls.push(['registerCardView', name, renderer]);
+      },
+      registerCardControl(name, factory) {
+        runtimeCalls.push(['registerCardControl', name, factory]);
+      },
+      registerCardShape(name, composer) {
+        runtimeCalls.push(['registerCardShape', name, composer]);
+      },
+      registerPositionCardRenderer(cardType, renderer) {
+        runtimeCalls.push(['registerPositionCardRenderer', cardType, renderer]);
+      }
     },
-    registerPositionCardRenderer() {},
     settingsRuntime: {
       onApply(name, fn) {
         handlers.set(name, fn);
@@ -91,6 +119,9 @@ async function run() {
   });
 
   await new Promise(resolve => setImmediate(resolve));
+  assert.strictEqual(rendererDeps.legacyRows.findLegacyRowByKey('missing'), undefined);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'orderCardsState'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'setLegacyOrderCardState'), false);
   assert.strictEqual(registeredInstrument, 'OPT');
   assert.strictEqual(typeof registeredHandler.createBody, 'function');
   assert.strictEqual(registeredHandler.title({ row: { ticker: 'SPY', name: 'LCS 755/756' } }), 'LCS 755/756');
@@ -115,6 +146,11 @@ async function run() {
   assert(rendererCalls.some(call => call[0] === 'setValuationRefreshMs' && call[1] === 7000));
   assert(rendererCalls.some(call => call[0] === 'setDisplayFields' && call[1].pl === true));
   assert(rendererCalls.some(call => call[0] === 'startValuationRefresh'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardType' && call[1].type === 'option'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'option-legs-payoff-valuation'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-open'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-close-remove'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'option-position-card'));
 
   registeredHandler.onCreateCard({ row: { ticker: 'SPY', instrumentType: 'OPT' } });
   assert(rendererCalls.some(call => call[0] === 'ensureOptionPayoff' && call[1].ticker === 'SPY'));

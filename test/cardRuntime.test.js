@@ -6,6 +6,12 @@ const {
 } = require('../app/infrastructure/renderer/cardRuntime');
 
 function run() {
+  function assertBridgeCall(call, kind, key, handler) {
+    assert.strictEqual(call?.[0], kind);
+    assert.strictEqual(call?.[1], key);
+    assert.strictEqual(call?.[2]?.id, handler.id);
+  }
+
   const uiState = new Map([['old', { expanded: true }]]);
   const shellState = { filter: '' };
   const runtime = createCardRuntime({ state: shellState, uiState });
@@ -55,6 +61,82 @@ function run() {
   assert.strictEqual(runtime.getCardView('identity'), undefined);
   assert.strictEqual(runtime.getCardControl('remove'), undefined);
   assert.strictEqual(runtime.getCardShape('trade-card'), undefined);
+
+  const bridgeCalls = [];
+  const legacyRows = [
+    { key: 'opt-1', instrumentType: 'OPT', ticker: 'SPY' },
+    { key: 'eq-1', instrumentType: 'EQ', ticker: 'AAPL' }
+  ];
+  const optHandlerBefore = { id: 'opt-before', createBody: () => ({}) };
+  const optHandlerAfter = { id: 'opt-after', createBody: () => ({}) };
+  const optHandlerLatest = { id: 'opt-latest', createBody: () => ({}) };
+  const cardTypeHandlerBefore = { id: 'card-before', createBody: () => ({ type: 'before' }) };
+  const cardTypeHandlerAfter = { id: 'card-after', createBody: () => ({ type: 'after' }) };
+  const cardTypeHandlerLatest = { id: 'card-latest', createBody: () => ({ type: 'latest' }) };
+  const unregisterOptBefore = runtime.registerOrderCardInstrumentHandler('OPT', optHandlerBefore);
+  const unregisterCardTypeBefore = runtime.registerOrderCardTypeHandler('option', cardTypeHandlerBefore);
+  const disconnectLegacy = runtime.connectLegacyOrderCardRenderer({
+    renderer: {
+      registerInstrumentHandler(instrumentType, handler) {
+        bridgeCalls.push(['registerInstrumentHandler', instrumentType, handler]);
+        return () => bridgeCalls.push(['unregisterInstrumentHandler', instrumentType, handler]);
+      },
+      registerCardTypeHandler(cardType, handler) {
+        bridgeCalls.push(['registerCardTypeHandler', cardType, handler]);
+        return () => bridgeCalls.push(['unregisterCardTypeHandler', cardType, handler]);
+      }
+    },
+    getRows: () => legacyRows,
+    rowKey: row => row.key,
+    setCardState: (key, stateName) => {
+      bridgeCalls.push(['setCardState', key, stateName]);
+      return true;
+    }
+  });
+  assert.strictEqual(bridgeCalls[0][0], 'registerInstrumentHandler');
+  assert.strictEqual(bridgeCalls[0][1], 'OPT');
+  assert.strictEqual(bridgeCalls[0][2], optHandlerBefore);
+  assert.strictEqual(bridgeCalls[1][0], 'registerCardTypeHandler');
+  assert.strictEqual(bridgeCalls[1][1], 'option');
+  assert.strictEqual(bridgeCalls[1][2], cardTypeHandlerBefore);
+  assert.strictEqual(runtime.legacyRows(), legacyRows);
+  assert.deepStrictEqual(runtime.findLegacyRowByKey('opt-1'), legacyRows[0]);
+  assert.strictEqual(runtime.findLegacyRowByKey('missing'), undefined);
+  assert.strictEqual(runtime.setLegacyRowCardState('opt-1', 'placed'), true);
+  assert.deepStrictEqual(bridgeCalls[2], ['setCardState', 'opt-1', 'placed']);
+  const unregisterOptAfter = runtime.registerOrderCardInstrumentHandler('OPT', optHandlerAfter);
+  assertBridgeCall(bridgeCalls[3], 'unregisterInstrumentHandler', 'OPT', optHandlerBefore);
+  assert.strictEqual(bridgeCalls[4][0], 'registerInstrumentHandler');
+  assert.strictEqual(bridgeCalls[4][1], 'OPT');
+  assert.strictEqual(bridgeCalls[4][2], optHandlerAfter);
+  runtime.registerOrderCardInstrumentHandler('OPT', optHandlerLatest);
+  assertBridgeCall(bridgeCalls[5], 'unregisterInstrumentHandler', 'OPT', optHandlerAfter);
+  assert.strictEqual(bridgeCalls[6][0], 'registerInstrumentHandler');
+  assert.strictEqual(bridgeCalls[6][1], 'OPT');
+  assert.strictEqual(bridgeCalls[6][2], optHandlerLatest);
+  unregisterOptBefore();
+  assert.strictEqual(bridgeCalls.length, 7);
+  unregisterOptAfter();
+  assert.strictEqual(bridgeCalls.length, 7);
+  assert.strictEqual(runtime.legacyOrderCardInstrumentHandlers.OPT, optHandlerLatest);
+  const unregisterCardTypeAfter = runtime.registerOrderCardTypeHandler('option', cardTypeHandlerAfter);
+  assertBridgeCall(bridgeCalls[7], 'unregisterCardTypeHandler', 'option', cardTypeHandlerBefore);
+  assert.strictEqual(bridgeCalls[8][0], 'registerCardTypeHandler');
+  assert.strictEqual(bridgeCalls[8][1], 'option');
+  assert.strictEqual(bridgeCalls[8][2], cardTypeHandlerAfter);
+  runtime.registerOrderCardTypeHandler('option', cardTypeHandlerLatest);
+  assertBridgeCall(bridgeCalls[9], 'unregisterCardTypeHandler', 'option', cardTypeHandlerAfter);
+  assert.strictEqual(bridgeCalls[10][0], 'registerCardTypeHandler');
+  assert.strictEqual(bridgeCalls[10][1], 'option');
+  assert.strictEqual(bridgeCalls[10][2], cardTypeHandlerLatest);
+  unregisterCardTypeBefore();
+  assert.strictEqual(bridgeCalls.length, 11);
+  unregisterCardTypeAfter();
+  assert.strictEqual(bridgeCalls.length, 11);
+  assert.strictEqual(runtime.legacyOrderCardTypeHandlers.option, cardTypeHandlerLatest);
+  disconnectLegacy();
+  assertBridgeCall(bridgeCalls[11], 'unregisterInstrumentHandler', 'OPT', optHandlerLatest);
+  assertBridgeCall(bridgeCalls[12], 'unregisterCardTypeHandler', 'option', cardTypeHandlerLatest);
 
   const legacyApi = {
     getCardState: key => (key === 'legacy' ? 'placed' : undefined),

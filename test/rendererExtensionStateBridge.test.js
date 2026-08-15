@@ -17,6 +17,9 @@ function run() {
     const source = read(file);
     assert(!source.includes('legacyOrderStateApi'), `${file} must use narrow renderer state facades`);
   }
+  const optionStratManifest = read('app/services/optionstrat/manifest.js');
+  assert(!optionStratManifest.includes('orderCardsState'), 'optionstrat manifest must use cardRuntime legacy row facade');
+  assert(!optionStratManifest.includes('setLegacyOrderCardState'), 'optionstrat manifest must not close over legacy row visual setter');
 
   const rendererSource = read('app/renderer.js');
   assert(!rendererSource.includes("services/orderCards/rendererStateBridge"), 'renderer must not import generic state from orderCards');

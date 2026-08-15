@@ -22,6 +22,7 @@ function createOptionStratRenderer({
   ipcRenderer,
   el,
   state,
+  legacyRows,
   rowKey,
   render,
   toast,
@@ -31,7 +32,6 @@ function createOptionStratRenderer({
   cardVisualState,
   ticketBinding,
   pendingOptionValuations = new Set(),
-  setCardState,
   getValuationRefreshMs = () => 5000,
   setTimeoutFn = setTimeout,
   now = () => Date.now()
@@ -53,6 +53,16 @@ function createOptionStratRenderer({
   const tickets = ticketBinding || {
     bindTicket: () => false
   };
+
+  function findLegacyRowByKey(key) {
+    if (typeof legacyRows?.findLegacyRowByKey === 'function') {
+      return legacyRows.findLegacyRowByKey(key);
+    }
+    const rows = typeof legacyRows?.legacyRows === 'function'
+      ? legacyRows.legacyRows()
+      : (Array.isArray(legacyRows) ? legacyRows : state?.rows);
+    return (Array.isArray(rows) ? rows : []).find(r => rowKey(r) === key);
+  }
 
   function setDisplayFields(fields) {
     displayFields = normalizeOptionStratDisplayFields(fields);
@@ -144,7 +154,7 @@ function createOptionStratRenderer({
   }
 
   function markRowOpened(key, timestamp = now()) {
-    const row = state.rows.find(r => rowKey(r) === key);
+    const row = findLegacyRowByKey(key);
     if (row && row.instrumentType === 'OPT' && !row.openedAt) row.openedAt = timestamp;
     const orderInfo = placedOrders.getPlacedOrder(key);
     if (orderInfo && !orderInfo.openedAt) orderInfo.openedAt = timestamp;
@@ -152,7 +162,7 @@ function createOptionStratRenderer({
   }
 
   function markRowClosed(key, timestamp = now()) {
-    const row = state.rows.find(r => rowKey(r) === key);
+    const row = findLegacyRowByKey(key);
     if (row && row.instrumentType === 'OPT') {
       if (!row.openedAt) row.openedAt = timestamp;
       row.closedAt = timestamp;
@@ -528,7 +538,7 @@ function createOptionStratRenderer({
       legs: row.legs
     }).then(result => {
       if (result?.status !== 'ok' || !result.payoff) return;
-      const current = state.rows.find(r => rowKey(r) === key);
+      const current = findLegacyRowByKey(key);
       if (!current) return;
       current.estimatedPayoff = result.estimatedPayoff || result.payoff;
       render();
@@ -548,7 +558,7 @@ function createOptionStratRenderer({
       symbol: orderInfo.symbol
     }).then(result => {
       if (result?.status !== 'ok' || !result.valuation) return result;
-      const current = state.rows.find(r => rowKey(r) === key);
+      const current = findLegacyRowByKey(key);
       if (current) {
         current.valuation = result.valuation;
         render();
@@ -581,7 +591,7 @@ function createOptionStratRenderer({
     if (!row || row.instrumentType !== 'OPT' || row.instantExecution !== true) return false;
     setTimeoutFn(() => {
       const key = rowKey(row);
-      const current = state.rows.find(r => rowKey(r) === key);
+      const current = findLegacyRowByKey(key);
       if (!current || visualState.getCardState(key)) return;
       place('OPEN', current, { valid: true, type: 'option' }, 'OPT', 'OPEN');
     }, 0);
@@ -620,9 +630,9 @@ function createOptionStratRenderer({
     };
   }
 
-  function afterPlaceOk({ row, result, requestId, key } = {}) {
+  function afterPlaceOk({ row, result, requestId, key, setCardState } = {}) {
     if (!result?.providerOrderId) {
-      setCardState(key, 'pending');
+      setCardState?.(key, 'pending');
       return;
     }
     const openedAt = now();
@@ -641,7 +651,7 @@ function createOptionStratRenderer({
     if (result.valuation || result.raw?.valuation) row.valuation = result.valuation || result.raw.valuation;
     row.openedAt = row.openedAt || openedAt;
     tickets.bindTicket(String(result.providerOrderId), key);
-    setCardState(key, 'placed');
+    setCardState?.(key, 'placed');
   }
 
   function createOrderCardHandler() {

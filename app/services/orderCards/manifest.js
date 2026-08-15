@@ -302,7 +302,12 @@ const rendererHandlers = [{
       getCardButtons: () => orderCardsRuntime.getCardButtons(),
       getButtonRows: () => orderCardsRuntime.getButtonRows()
     });
-    context.cardRuntime?.connectLegacyOrderCardRenderer?.(orderCardsRenderer);
+    context.cardRuntime?.connectLegacyOrderCardRenderer?.({
+      renderer: orderCardsRenderer,
+      getRows: () => state.rows,
+      rowKey,
+      setCardState: setLegacyCardState
+    });
     legacyOrderListRuntime = createLegacyOrderListRuntime({
       ipcRenderer,
       state,

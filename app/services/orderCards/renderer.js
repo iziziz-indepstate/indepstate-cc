@@ -926,7 +926,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       render();
     } else {
       if (handler && typeof handler.afterPlaceOk === 'function') {
-        await handler.afterPlaceOk({ row, validated: v, result: res, requestId, key, baseMeta, kind, instrumentType, btnLabel });
+        await handler.afterPlaceOk({ row, validated: v, result: res, requestId, key, baseMeta, kind, instrumentType, btnLabel, setCardState });
       } else {
         setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
       }
