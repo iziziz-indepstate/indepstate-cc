@@ -143,8 +143,6 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
             });
             context.registerTestingExtension?.('legacyOrderStateApi', runtime.legacyOrderStateApi);
             runtime.mount();
-            context.registerOrderCardInstrumentHandler = () => false;
-            context.registerOrderCardTypeHandler = () => false;
             context.createLegacyOrderCard = (row) => {
                 const card = document.createElement('div');
                 card.className = 'card';

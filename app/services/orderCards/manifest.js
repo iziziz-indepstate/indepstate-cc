@@ -350,18 +350,6 @@ const rendererHandlers = [{
     context.cardVisualState = orderStateFacades.cardVisualState;
     context.ticketBinding = orderStateFacades.ticketBinding;
     context.orderCardsState = state;
-    context.registerOrderCardInstrumentHandler = (...args) => {
-      if (context.cardRuntime?.registerOrderCardInstrumentHandler) {
-        return context.cardRuntime.registerOrderCardInstrumentHandler(...args);
-      }
-      return orderCardsRenderer.registerInstrumentHandler(...args);
-    };
-    context.registerOrderCardTypeHandler = (...args) => {
-      if (context.cardRuntime?.registerOrderCardTypeHandler) {
-        return context.cardRuntime.registerOrderCardTypeHandler(...args);
-      }
-      return orderCardsRenderer.registerCardTypeHandler(...args);
-    };
     context.orderCardHandlerFor = (...args) => orderCardsRenderer.handlerFor(...args);
     context.orderCardHandlerForKey = (...args) => orderCardsRenderer.handlerForKey(...args);
     context.setLegacyOrderCardState = setLegacyCardState;

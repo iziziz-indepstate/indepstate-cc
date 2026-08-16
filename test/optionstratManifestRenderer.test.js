@@ -91,9 +91,6 @@ async function run() {
     cardRuntime: {
       findLegacyRowByKey: () => undefined,
       legacyRows: () => [],
-      registerOrderCardInstrumentHandler(instrumentType, handler) {
-        runtimeCalls.push(['registerOrderCardInstrumentHandler', instrumentType, handler]);
-      },
       registerCardType(definition) {
         runtimeCalls.push(['registerCardType', definition]);
       },
@@ -121,7 +118,6 @@ async function run() {
   assert.strictEqual(rendererDeps.legacyRows.findLegacyRowByKey('missing'), undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'orderCardsState'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'setLegacyOrderCardState'), false);
-  assert.strictEqual(runtimeCalls.some(call => call[0] === 'registerOrderCardInstrumentHandler'), false);
   const cardTypeDefinition = runtimeCalls.find(call => call[0] === 'registerCardType')?.[1];
   assert.strictEqual(cardTypeDefinition.type, 'option');
   assert.deepStrictEqual(cardTypeDefinition.legacyInstrumentTypes, ['OPT']);

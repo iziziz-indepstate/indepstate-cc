@@ -840,8 +840,6 @@ loadRendererHandlers({
   registerPositionRemovalHandler(cardType, handler) {
     cardRuntime.registerPositionRemovalHandler(cardType, handler);
   },
-  registerOrderCardInstrumentHandler: (...args) => cardRuntime.registerOrderCardInstrumentHandler(...args),
-  registerOrderCardTypeHandler: (...args) => cardRuntime.registerOrderCardTypeHandler(...args),
   registerCardType: (...args) => cardRuntime.registerCardType(...args),
   resolveCardType: (...args) => cardRuntime.resolveCardType(...args),
   registerCardView: (...args) => cardRuntime.registerCardView(...args),
