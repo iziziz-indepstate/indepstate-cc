@@ -130,7 +130,7 @@ function run() {
   const render = () => {};
   let onConfigApplied = null;
 
-  manifest.rendererHandlers[0].register({
+  const rendererContext = {
     loadConfig,
     settingsRuntime,
     env,
@@ -204,7 +204,8 @@ function run() {
         connectedLegacyAdapter = adapter;
       }
     }
-  });
+  };
+  manifest.rendererHandlers[0].register(rendererContext);
 
   assert.strictEqual(calls[0][0], 'createOrderCardsRendererConfigRuntime');
   assert.strictEqual(calls[0][1].loadConfig, loadConfig);
@@ -235,6 +236,18 @@ function run() {
   assert.strictEqual(connectedLegacyAdapter.getRows(), calls[2]?.[1]?.state?.rows || fakeRuntime.state.rows);
   assert.strictEqual(connectedLegacyAdapter.rowKey({ ticker: 'AAPL', event: 'up', time: 1, price: 2 }), 'AAPL|up|1|2');
   assert.strictEqual(typeof connectedLegacyAdapter.setCardState, 'function');
+  for (const name of [
+    'orderCardsState',
+    'setLegacyOrderCardState',
+    'orderCardHandlerFor',
+    'orderCardHandlerForKey'
+  ]) {
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(rendererContext, name),
+      false,
+      `orderCards must not publish ${name} in renderer context`
+    );
+  }
   assert.strictEqual(calls[1][1].shouldShowBidAsk(), true);
   assert.strictEqual(calls[1][1].shouldShowSpread(), true);
   assert.deepStrictEqual(calls[1][1].getCardButtons(), [{ label: 'LIVE', action: 'BL', style: 'bl' }]);

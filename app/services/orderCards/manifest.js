@@ -349,10 +349,6 @@ const rendererHandlers = [{
     context.placedOrderLookup = orderStateFacades.placedOrderLookup;
     context.cardVisualState = orderStateFacades.cardVisualState;
     context.ticketBinding = orderStateFacades.ticketBinding;
-    context.orderCardsState = state;
-    context.orderCardHandlerFor = (...args) => orderCardsRenderer.handlerFor(...args);
-    context.orderCardHandlerForKey = (...args) => orderCardsRenderer.handlerForKey(...args);
-    context.setLegacyOrderCardState = setLegacyCardState;
     context.registerTestingExtension?.('legacyOrderStateApi', legacyOrderStateApi);
     context.registerTestingExtension?.('pendingRequestLabels', orderStateFacades.pendingRequestLabels);
     context.registerTestingExtension?.('placedOrderLookup', orderStateFacades.placedOrderLookup);

@@ -69,6 +69,8 @@ This is a registry/composition contract, not a base-class hierarchy. A service c
 
 When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runtime composes the transitional row handler from its registered `view`, `controls`, and `legacyRow` callbacks and connects it to the `orderCards` renderer automatically. The former public APIs `registerOrderCardInstrumentHandler` and `registerOrderCardTypeHandler` have been removed. Legacy row integration is available only through card type definitions registered with `registerCardType({ legacyInstrumentTypes, legacyCardTypes, view, controls, legacyRow })`.
 
+`orderCards` no longer publishes legacy row state or handler APIs such as `orderCardsState`, `setLegacyOrderCardState`, `orderCardHandlerFor`, or `orderCardHandlerForKey` in the renderer context. Its renderer connects the private row adapter to the shell only through `cardRuntime.connectLegacyOrderCardRenderer({ renderer, getRows, rowKey, setCardState })`. Modules that still need transitional row access use the shell-owned `cardRuntime.legacyRows`, `cardRuntime.findLegacyRowByKey`, and `cardRuntime.setLegacyRowCardState` facades together with card type definitions.
+
 ## Service-Owned Registration
 
 Each service owns the mappings that are specific to its aggregate, provider, strategy, or legacy adapter:
@@ -89,12 +91,12 @@ Legacy maps such as pending request labels, placed order lookup, card visual sta
 
 ## Migration Direction
 
-The current renderer still contains legacy order-card runtime behavior, and `orderCards` still exposes some generic-looking state bridges. That is transitional.
+The current renderer still contains legacy order-card runtime behavior, but that behavior is kept behind the shell card runtime facade. That is transitional.
 
 The target migration is:
 
-1. Move generic renderer state facades out of `orderCards` and into the shell card runtime.
-2. Keep `orderCards` as the adapter for regular/manual order cards and legacy rows.
+1. Keep generic renderer state and legacy row access behind the shell card runtime facades.
+2. Keep `orderCards` as the adapter for regular/manual order cards and legacy rows without exporting its private row state or handlers into renderer context.
 3. Register `optionstrat`, `levelOrder`, and later card types through card runtime registries.
 4. Promote stable registry contracts once multiple services use the same concepts.
 5. Delete legacy guards and row adapters when snapshot-backed read models fully replace them.
