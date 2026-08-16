@@ -226,6 +226,14 @@ true in the code and what remains.
   for card-creating commands.
 - The renderer dispatches snapshot cards through a manifest-populated registry keyed by
   `position.card.type`.
+- The renderer has a shell-owned card runtime with card type, view, control, and shape registries,
+  state facades, legacy row access, and a dependency-injected legacy row presentation adapter.
+- `orderCards` no longer owns generic card runtime infrastructure. It supplies regular order bodies,
+  legacy rows, private lookups, and regular renderer implementation while reusable card primitives
+  live under the shell card runtime.
+- Legacy order-card public APIs such as `registerOrderCardInstrumentHandler`,
+  `registerOrderCardTypeHandler`, `orderCardsState`, `setLegacyOrderCardState`, and
+  `orderCardHandlerFor*` have been removed from renderer context.
 - `OptionStrat` is isolated as an extension-owned service. Its adapter, renderer behavior, IPC
   handlers, execution payload policy, close controller, legacy guards, settings policy, lifecycle
   enrichment, action helpers, and execution defaults live under `app/services/optionstrat`.
@@ -258,5 +266,10 @@ true in the code and what remains.
 - `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
 - `test/positionsRenderer.test.js` covers renderer dispatch by `position.card.type`.
 - `test/orderCardsApplicationService.test.js` covers snapshot routing versus the legacy row path.
+- `test/cardRuntime.test.js`, `test/cardRuntimeLibrary.test.js`, and
+  `test/cardRuntimeLegacyRowPresentation.test.js` cover shell card runtime registries, reusable
+  card primitives, and legacy row presentation behavior.
+- `test/orderCardsManifestRenderer.test.js` covers `orderCards` renderer bootstrap, built-in card
+  runtime registrations, and the private legacy row adapter connection.
 
 For boot/event troubleshooting during development, set `ISCC_DEBUG_POSITION_EVENTS=1`. The trace logs renderer manifest loading, handler registration, position/order-card event routing, and related failures. Keep it dev-only; it is intended for diagnosing boot and event ordering issues, not normal user output.
