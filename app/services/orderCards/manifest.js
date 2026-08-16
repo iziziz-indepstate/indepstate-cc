@@ -5,6 +5,7 @@ const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('../../infrastructure/renderer/cardRuntime');
+const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
@@ -46,6 +47,36 @@ const rendererHandlers = [{
     const render = context.render || (() => {});
     const toast = context.toast || (() => {});
     const shakeCard = context.shakeCard || (() => {});
+    const cardRuntimeLibrary = createCardRuntimeLibrary({
+      el: context.el,
+      btn: context.btn,
+      document: context.document || (typeof document !== 'undefined' ? document : null),
+      createActionButton: context.createActionButton
+    });
+    context.cardRuntime?.registerCardShape?.(
+      'regular-order-legacy-card',
+      cardRuntimeLibrary.shapes.createLegacyCardShape
+    );
+    context.cardRuntime?.registerCardShape?.(
+      'regular-position-card',
+      cardRuntimeLibrary.shapes.createPositionCardShape
+    );
+    context.cardRuntime?.registerCardControl?.(
+      'standard-remove',
+      cardRuntimeLibrary.controls.createRemoveControl
+    );
+    context.cardRuntime?.registerCardControl?.(
+      'standard-retry',
+      cardRuntimeLibrary.controls.createRetryControl
+    );
+    context.cardRuntime?.registerCardControl?.(
+      'standard-action-buttons',
+      cardRuntimeLibrary.controls.createActionButtonsControl
+    );
+    context.cardRuntime?.registerCardView?.(
+      'position-data-grid',
+      cardRuntimeLibrary.views.createDataGridView
+    );
     let orderStateFacades = null;
     const legacyOrderStateApi = {};
     for (const method of [
@@ -300,7 +331,8 @@ const rendererHandlers = [{
       shouldShowBidAsk: () => orderCardsRuntime.shouldShowBidAsk(),
       shouldShowSpread: () => orderCardsRuntime.shouldShowSpread(),
       getCardButtons: () => orderCardsRuntime.getCardButtons(),
-      getButtonRows: () => orderCardsRuntime.getButtonRows()
+      getButtonRows: () => orderCardsRuntime.getButtonRows(),
+      cardRuntimeLibrary
     });
     context.cardRuntime?.connectLegacyOrderCardRenderer?.({
       renderer: orderCardsRenderer,

@@ -1,3 +1,5 @@
+const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
+
 function createOrderCardsRenderer({
   el,
   inputNumber,
@@ -34,6 +36,7 @@ function createOrderCardsRenderer({
   getCardButtons = () => [],
   getButtonRows = () => 1,
   getRows = () => [],
+  cardRuntimeLibrary,
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
@@ -42,6 +45,11 @@ function createOrderCardsRenderer({
     setPendingExecLabel: () => false,
     setPendingId: () => false
   };
+  const library = cardRuntimeLibrary || createCardRuntimeLibrary({
+    el,
+    btn,
+    document: typeof document !== 'undefined' ? document : null
+  });
 
 function registerInstrumentHandler(instrumentType, handler) {
   const key = String(instrumentType || '').trim();
@@ -718,111 +726,36 @@ function createLegacyOrderCard({ row = {}, index } = {}) {
 
   ensureInstrument(row.ticker, row.provider);
   cardHandler?.onCreateCard?.({ row, key, instrumentType });
-
-  const card = el('div', 'card');
-  card.setAttribute('data-rowkey', key);
-  card.setAttribute('data-ticker', row.ticker);
-  card.setAttribute('data-instrument-type', instrumentType);
-
-  const head = el('div', 'row');
-  const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
-  left.appendChild(el('div', null, titleFor(row, instrumentType), {style: 'font-weight:600;font-size:13px'}));
-  if (shouldShowBidAsk()) {
-    const $bidask = el('span', 'card__bidask');
-    $bidask.title = 'Bid / Ask';
-    $bidask.style.fontSize = '11px';
-    $bidask.style.color = '#6b7280';
-    $bidask.textContent = formatBidAskText(instrumentInfoFor(row.ticker, row), row) || '';
-    left.appendChild($bidask);
-  }
-  head.appendChild(left);
-
-  const right = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
-  const $status = el('span', 'card__status');
-  $status.style.display = 'none';
-  right.appendChild($status);
-
-  if (shouldShowSpread()) {
-    const $spread = el('span', 'card__spread');
-    $spread.title = 'Spread pts: current / avg10 / avg100';
-    $spread.style.fontSize = '11px';
-    $spread.style.color = '#6b7280';
-    $spread.textContent = formatSpreadTriple(row.ticker, row) || '';
-    right.appendChild($spread);
-  }
-
-  const $retry = document.createElement('button');
-  $retry.type = 'button';
-  $retry.className = 'retry-btn';
-  $retry.textContent = '0';
-  $retry.title = 'Stop retries';
-  $retry.style.display = 'none';
-  $retry.addEventListener('click', (e) => {
-    e.stopPropagation();
-    const cardEl = e.currentTarget.closest('.card');
-    const reqId = cardEl?.dataset.reqId;
-    if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId);
-  });
-  right.appendChild($retry);
-
-  const $close = document.createElement('button');
-  $close.type = 'button';
-  $close.textContent = '×';
-  $close.className = 'card__close';
-  Object.assign($close.style, {
-    border: 'none',
-    background: 'transparent',
-    width: '22px',
-    height: '22px',
-    lineHeight: '22px',
-    textAlign: 'center',
-    fontSize: '16px',
-    cursor: 'pointer',
-    borderRadius: '4px',
-    color: isUpEvent(row.event) ? '#2e7d32' : '#c62828',
-    marginLeft: '8px'
-  });
-  $close.title = 'Удалить карточку';
-  $close.addEventListener('click', (e) => {
-    e.stopPropagation();
-    removeRow?.(row);
-  });
-  right.appendChild($close);
-  head.appendChild(right);
-
-  const meta = el('div', 'meta');
   const body = createBody(row, key, instrumentType);
-  const btns = el('div', 'btns');
-  const mk = (label, cls, kind) => {
-    const b = btn(label, cls, async () => {
+  const cardButtons = buttons(row, instrumentType) || getCardButtons();
+  const card = library.shapes.createLegacyCardShape({
+    title: titleFor(row, instrumentType),
+    body,
+    actions: cardButtons,
+    onPlace: async (action) => {
       const v = body.validate();
       if (!v.valid) return;
-      await place(kind, row, v, instrumentType, label);
-    });
-    b.setAttribute('data-kind', kind);
-    return b;
-  };
-  const cardButtons = buttons(row, instrumentType) || getCardButtons();
-  const rows = Number(getButtonRows()) || 1;
-  const cols = Math.ceil(cardButtons.length / rows);
-  btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
-  for (const {label, action, style} of cardButtons) {
-    btns.appendChild(mk(label, (style || action).toLowerCase(), action));
-  }
-
-  card.appendChild(head);
-  card.appendChild(meta);
-  card.appendChild(body.line);
-  if (body.extraRow) card.appendChild(body.extraRow);
-  card.appendChild(btns);
-  const note = el('div', 'card__note');
-  card.appendChild(note);
-
-  body.setButtons(btns);
-  if (body.setNote) body.setNote(note);
-  body.validate();
-  card._validate = (commit = false) => body.validate(commit);
-
+      await place(action.action, row, v, instrumentType, action.label);
+    },
+    onRemove: () => removeRow?.(row),
+    onRetryStop: (event) => {
+      const cardEl = event.currentTarget.closest('.card');
+      const reqId = cardEl?.dataset.reqId;
+      if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId);
+    },
+    bidAskText: shouldShowBidAsk()
+      ? formatBidAskText(instrumentInfoFor(row.ticker, row), row) || ''
+      : undefined,
+    spreadText: shouldShowSpread() ? formatSpreadTriple(row.ticker, row) || '' : undefined,
+    status: '',
+    actionRows: getButtonRows(),
+    removeColor: isUpEvent(row.event) ? '#2e7d32' : '#c62828',
+    attributes: {
+      'data-rowkey': key,
+      'data-ticker': row.ticker,
+      'data-instrument-type': instrumentType
+    }
+  });
   return card;
 }
 
@@ -964,49 +897,6 @@ function regularRowFromPosition(position = {}, key) {
   };
 }
 
-function appendDataField(parent, key, label, value) {
-  const item = el('div', 'position-card__field');
-  item.dataset.field = key;
-  item.appendChild(el('span', 'position-card__field-label', label));
-  item.appendChild(el('span', 'position-card__field-value', formatPositionValue(value)));
-  parent.appendChild(item);
-}
-
-function formatPositionValue(value) {
-  if (value == null || value === '') return '-';
-  if (Array.isArray(value)) return value.length ? value.join(', ') : '-';
-  if (typeof value === 'object') {
-    if (value.status && value.value != null) return `${value.status}: ${value.value}`;
-    if (value.status) return value.status;
-    return JSON.stringify(value);
-  }
-  return String(value);
-}
-
-function createSnapshotDataGrid(position = {}) {
-  const data = position.card?.data || {};
-  const grid = el('div', 'position-card__data');
-  Object.assign(grid.style, {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(2,minmax(0,1fr))',
-    gap: '6px',
-    fontSize: '11px'
-  });
-  [
-    { key: 'price', label: 'Price', value: data.price },
-    { key: 'qty', label: 'Qty', value: data.qty ?? position.qty },
-    { key: 'sl', label: 'SL', value: data.sl },
-    { key: 'tp', label: 'TP', value: data.tp },
-    { key: 'riskUsd', label: 'Risk $', value: data.riskUsd ?? data.risk },
-    { key: 'provider', label: 'Provider', value: data.provider || position.provider },
-    { key: 'primaryTicket', label: 'Ticket', value: position.primaryTicket || data.primaryTicket },
-    { key: 'tickets', label: 'Tickets', value: position.tickets || data.tickets },
-    { key: 'pnl', label: 'PnL', value: position.pnlSnapshot || data.pnl },
-    { key: 'state', label: 'State', value: position.state || data.state }
-  ].forEach(field => appendDataField(grid, field.key, field.label, field.value));
-  return grid;
-}
-
 function normalizeRegularAction(action = {}) {
   if (typeof action === 'string') return { label: action, action, style: action };
   const id = action.id || action.action || action.label;
@@ -1065,111 +955,64 @@ function createRegularPositionCard({
 } = {}) {
   const row = regularRowFromPosition(position, key);
   const resolvedInstrumentType = instrumentType || row.instrumentType || detectInstrumentType(row.ticker);
-  const card = el('div', 'card position-card');
   const compact = isCompactRegularPosition(position);
-  if (compact) card.classList.add('card--mini');
-  card.setAttribute('data-rowkey', key);
-  card.setAttribute('data-position-id', position.id);
-  card.setAttribute('data-card-type', 'regular');
-  card.setAttribute('data-ticker', row.ticker || '');
-  card.setAttribute('data-instrument-type', resolvedInstrumentType || '');
-
-  const head = el('div', 'row');
-  const left = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
-  left.appendChild(el('div', null, title || row.ticker || position.id || 'Position', { style: 'font-weight:600;font-size:13px' }));
-  head.appendChild(left);
-
-  const right = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
   const statusText = regularPositionStatus(position);
-  const status = el('span', `card__status card__status--${statusText || 'draft'}`, statusText);
-  status.style.display = statusText ? 'inline-block' : 'none';
-  if (compact && statusText !== 'pending-exec') status.textContent = '';
-  right.appendChild(status);
-
-  const close = document.createElement('button');
-  close.type = 'button';
-  close.textContent = '×';
-  close.className = 'card__close';
-  Object.assign(close.style, {
-    border: 'none',
-    background: 'transparent',
-    width: '22px',
-    height: '22px',
-    lineHeight: '22px',
-    textAlign: 'center',
-    fontSize: '16px',
-    cursor: 'pointer',
-    borderRadius: '4px',
-    color: '#6b7280',
-    marginLeft: '8px'
-  });
-  close.title = 'Remove card';
-  close.addEventListener('click', (event) => {
-    event.stopPropagation();
-    requestRemove?.(position);
-  });
-  if (!compact) right.appendChild(close);
-  head.appendChild(right);
-  card.appendChild(head);
-  if (!compact) card.appendChild(el('div', 'meta', ''));
-
   let body = null;
   if (isEditableRegularPosition(position)) {
     ensureInstrument(row.ticker, row.provider);
     body = createBody(row, key, resolvedInstrumentType);
-    card.appendChild(body.line);
-    if (body.extraRow) card.appendChild(body.extraRow);
   }
 
   const actions = defaultRegularActions(position);
-  card._positionActions = actions;
-  const btns = el('div', 'btns position-card__actions');
-  const rows = Number(getButtonRows()) || 1;
-  btns.style.gridTemplateColumns = `repeat(${Math.max(1, Math.ceil(actions.length / rows))},1fr)`;
-  for (const action of actions) {
+  const onAction = async (action) => {
     const label = action.label || action.action;
     const kind = action.action || label;
-    const onClick = async () => {
-      if (action.command === 'position.remove') {
-        await requestRemove?.(position);
-        return;
+    if (action.command === 'position.remove') {
+      await requestRemove?.(position);
+      return;
+    }
+    if (action.command && !['position.open', 'position.openPending'].includes(action.command)) {
+      const result = await dispatchPositionAction?.(position, action);
+      if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+        toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
+        shakeCard?.(key);
       }
-      if (action.command && !['position.open', 'position.openPending'].includes(action.command)) {
-        const result = await dispatchPositionAction?.(position, action);
-        if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
-          toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
-          shakeCard?.(key);
-        }
-        return;
+      return;
+    }
+    if (!body) {
+      const result = await dispatchPositionAction?.(position, action);
+      if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+        toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
+        shakeCard?.(key);
       }
-      if (!body) {
-        const result = await dispatchPositionAction?.(position, action);
-        if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
-          toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
-          shakeCard?.(key);
-        }
-        return;
-      }
-      const validated = body.validate();
-      if (!validated.valid) return;
-      await place(kind, row, validated, resolvedInstrumentType, label);
-    };
-    const button = typeof createActionButton === 'function'
-      ? createActionButton({ label, kind, className: String(action.style || kind).toLowerCase(), onClick })
-      : (typeof btn === 'function' ? btn(label, String(action.style || kind).toLowerCase(), onClick) : null);
-    if (!button) continue;
-    button.dataset.kind = kind;
-    btns.appendChild(button);
-  }
-  if (!compact && actions.length) card.appendChild(btns);
-  const note = el('div', 'card__note');
-  if (!compact) card.appendChild(note);
-  if (body) {
-    body.setButtons(btns);
-    if (body.setNote) body.setNote(note);
-    body.validate();
-    card._validate = (commit = false) => body.validate(commit);
-  }
+      return;
+    }
+    const validated = body.validate();
+    if (!validated.valid) return;
+    await place(kind, row, validated, resolvedInstrumentType, label);
+  };
+  const card = library.shapes.createPositionCardShape({
+    title: title || row.ticker || position.id || 'Position',
+    status: {
+      text: statusText,
+      className: statusText ? '' : 'card__status--draft'
+    },
+    body,
+    actions,
+    onAction,
+    onRemove: () => requestRemove?.(position),
+    compact,
+    actionRows: getButtonRows(),
+    createActionButton,
+    attributes: {
+      'data-rowkey': key,
+      'data-position-id': position.id,
+      'data-card-type': 'regular',
+      'data-ticker': row.ticker || '',
+      'data-instrument-type': resolvedInstrumentType || ''
+    }
+  });
+  card._positionActions = actions;
   return card;
 }
 

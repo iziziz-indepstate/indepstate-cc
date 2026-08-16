@@ -2,6 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const { createOrderCardsRenderer } = require('../app/services/orderCards/renderer');
+const { createCardRuntimeLibrary } = require('../app/infrastructure/renderer/cardRuntime/library');
 let JSDOM;
 try { ({ JSDOM } = require('jsdom')); } catch (_) {}
 
@@ -84,14 +85,37 @@ async function run() {
     const calls = [];
     const states = [];
     const uiState = new Map();
+    const domEl = (tag, className, text, attrs) => {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text != null) node.textContent = text;
+      if (attrs) Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+      return node;
+    };
+    const domBtn = (text, className, onClick) => {
+      const button = document.createElement('button');
+      button.className = `btn ${className}`;
+      button.textContent = text;
+      button.addEventListener('click', onClick);
+      return button;
+    };
+    const shapeCalls = [];
+    const baseLibrary = createCardRuntimeLibrary({ el: domEl, btn: domBtn, document });
+    const cardRuntimeLibrary = {
+      ...baseLibrary,
+      shapes: {
+        createLegacyCardShape(options) {
+          shapeCalls.push(['legacy', options]);
+          return baseLibrary.shapes.createLegacyCardShape(options);
+        },
+        createPositionCardShape(options) {
+          shapeCalls.push(['position', options]);
+          return baseLibrary.shapes.createPositionCardShape(options);
+        }
+      }
+    };
     const domRenderer = createRenderer({
-      el: (tag, className, text, attrs) => {
-        const node = document.createElement(tag);
-        if (className) node.className = className;
-        if (text != null) node.textContent = text;
-        if (attrs) Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
-        return node;
-      },
+      el: domEl,
       inputNumber: (ph, cls) => {
         const input = document.createElement('input');
         input.type = 'number';
@@ -110,13 +134,8 @@ async function run() {
       setCardState: (key, state) => states.push({ key, state }),
       now: () => 10,
       random: () => 0.5,
-      btn: (text, className, onClick) => {
-        const button = document.createElement('button');
-        button.className = `btn ${className}`;
-        button.textContent = text;
-        button.addEventListener('click', onClick);
-        return button;
-      },
+      btn: domBtn,
+      cardRuntimeLibrary,
       getCardButtons: () => [{ label: 'BL', action: 'BL', style: 'bl' }]
     });
     const legacyRow = {
@@ -138,6 +157,8 @@ async function run() {
     assert.deepStrictEqual(Array.from(legacyCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL']);
     assert(legacyCard.querySelector('input.qty'));
     assert(legacyCard.querySelector('.card__note'));
+    assert.strictEqual(shapeCalls[0][0], 'legacy');
+    assert.strictEqual(shapeCalls[0][1].attributes['data-rowkey'], 'AAPL|up|1|100');
 
     const customBody = {
       type: 'custom',
@@ -194,6 +215,9 @@ async function run() {
     assert.strictEqual(card.querySelector('.card__status').style.display, 'none');
     assert.strictEqual(card.querySelector('input.qty').value, '1');
     assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL']);
+    assert.strictEqual(shapeCalls.some(([type, options]) => (
+      type === 'position' && options.attributes['data-card-type'] === 'regular'
+    )), true);
     card.querySelector('button.btn').click();
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.strictEqual(calls[0].ch, 'queue-place-order');

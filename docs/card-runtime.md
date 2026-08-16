@@ -67,6 +67,41 @@ cardRuntime.registerCardShape('trade-card', composer);
 
 This is a registry/composition contract, not a base-class hierarchy. A service can reuse library views, controls, and shapes, or register specialized ones when its card semantics require them.
 
+## Built-In Card Library
+
+The shell-owned library in `app/infrastructure/renderer/cardRuntime/library.js` provides the shared DOM composition used by regular cards:
+
+```js
+const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
+
+const library = createCardRuntimeLibrary({
+  el,
+  btn,
+  document,
+  formatValue,
+  createActionButton
+});
+```
+
+Its public surface is grouped by responsibility:
+
+- `views.createHeaderView`, `views.createStatusView`, and `views.createDataGridView` create standard card fragments and position field grids.
+- `controls.createRemoveControl`, `controls.createRetryControl`, and `controls.createActionButtonsControl` preserve the standard close, retry, and `data-kind` action-button contracts.
+- `shapes.createLegacyCardShape` and `shapes.createPositionCardShape` compose the regular legacy-order and position shells from injected bodies, actions, callbacks, status, compact mode, and attributes.
+
+During renderer bootstrap, `orderCards` registers these reusable entries in `cardRuntime`:
+
+| Registry | Name |
+| --- | --- |
+| Shape | `regular-order-legacy-card` |
+| Shape | `regular-position-card` |
+| Control | `standard-remove` |
+| Control | `standard-retry` |
+| Control | `standard-action-buttons` |
+| View | `position-data-grid` |
+
+Other renderer modules can resolve them through `getCardShape`, `getCardControl`, and `getCardView`. The library only owns generic DOM composition. `orderCards` continues to own the EQ/FX/CX input bodies, sizing and validation, placement, regular action semantics, and legacy row handler lookup. Specialized modules such as `optionstrat` and `levelOrder` may adopt the named library pieces independently.
+
 When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runtime composes the transitional row handler from its registered `view`, `controls`, and `legacyRow` callbacks and connects it to the `orderCards` renderer automatically. The former public APIs `registerOrderCardInstrumentHandler` and `registerOrderCardTypeHandler` have been removed. Legacy row integration is available only through card type definitions registered with `registerCardType({ legacyInstrumentTypes, legacyCardTypes, view, controls, legacyRow })`.
 
 `orderCards` no longer publishes legacy row state or handler APIs such as `orderCardsState`, `setLegacyOrderCardState`, `orderCardHandlerFor`, or `orderCardHandlerForKey` in the renderer context. Its renderer connects the private row adapter to the shell only through `cardRuntime.connectLegacyOrderCardRenderer({ renderer, getRows, rowKey, setCardState })`. Modules that still need transitional row access use the shell-owned `cardRuntime.legacyRows`, `cardRuntime.findLegacyRowByKey`, and `cardRuntime.setLegacyRowCardState` facades together with card type definitions.

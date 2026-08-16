@@ -119,6 +119,7 @@ function run() {
   let registeredInstrumentDisplayPolicy = null;
   let registeredCardStateHook = null;
   const testingExtensions = {};
+  const runtimeCalls = [];
   const rendererLayers = [];
   const rowProviders = [];
   const positionRenderers = {};
@@ -200,6 +201,15 @@ function run() {
       positionRenderers[cardType] = renderer;
     },
     cardRuntime: {
+      registerCardView(name, renderer) {
+        runtimeCalls.push(['registerCardView', name, renderer]);
+      },
+      registerCardControl(name, factory) {
+        runtimeCalls.push(['registerCardControl', name, factory]);
+      },
+      registerCardShape(name, composer) {
+        runtimeCalls.push(['registerCardShape', name, composer]);
+      },
       connectLegacyOrderCardRenderer(adapter) {
         connectedLegacyAdapter = adapter;
       }
@@ -232,6 +242,15 @@ function run() {
   assert.deepStrictEqual(restored, ['AAPL']);
   fakeShouldShowSpread = true;
   assert.strictEqual(calls[1][0], 'createOrderCardsRenderer');
+  assert.strictEqual(typeof calls[1][1].cardRuntimeLibrary.shapes.createLegacyCardShape, 'function');
+  assert.strictEqual(typeof calls[1][1].cardRuntimeLibrary.shapes.createPositionCardShape, 'function');
+  for (const name of ['regular-order-legacy-card', 'regular-position-card']) {
+    assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === name));
+  }
+  for (const name of ['standard-remove', 'standard-retry', 'standard-action-buttons']) {
+    assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === name));
+  }
+  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'position-data-grid'));
   assert.strictEqual(connectedLegacyAdapter.renderer, fakeRenderer);
   assert.strictEqual(connectedLegacyAdapter.getRows(), calls[2]?.[1]?.state?.rows || fakeRuntime.state.rows);
   assert.strictEqual(connectedLegacyAdapter.rowKey({ ticker: 'AAPL', event: 'up', time: 1, price: 2 }), 'AAPL|up|1|2');
