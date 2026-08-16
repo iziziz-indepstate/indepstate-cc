@@ -5,10 +5,11 @@ function createCardRuntimeLibrary({
   formatValue = defaultFormatValue,
   createActionButton
 } = {}) {
+  const documentCreateElement = document?.createElement?.bind(document);
   const createElement = (tag, className, text, attrs) => {
     if (typeof el === 'function') return el(tag, className, text, attrs);
-    if (!document?.createElement) throw new Error('card runtime library requires el or document');
-    const node = document.createElement(tag);
+    if (!documentCreateElement) throw new Error('card runtime library requires el or document');
+    const node = documentCreateElement(tag);
     if (className) node.className = className;
     if (text != null) node.textContent = text;
     if (attrs) Object.entries(attrs).forEach(([name, value]) => node.setAttribute(name, value));
@@ -71,7 +72,7 @@ function createCardRuntimeLibrary({
     title = 'Remove card',
     color = '#6b7280'
   } = {}) {
-    const control = document.createElement('button');
+    const control = createElement('button');
     control.type = 'button';
     control.textContent = '×';
     control.className = 'card__close';
@@ -97,7 +98,7 @@ function createCardRuntimeLibrary({
   }
 
   function createRetryControl({ onRetryStop, text = '0', title = 'Stop retries' } = {}) {
-    const control = document.createElement('button');
+    const control = createElement('button');
     control.type = 'button';
     control.className = 'retry-btn';
     control.textContent = text;

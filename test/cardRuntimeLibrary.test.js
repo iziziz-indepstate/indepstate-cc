@@ -94,6 +94,35 @@ function run() {
   assert.strictEqual(grid.querySelector('[data-field="price"] .position-card__field-value').textContent, '100');
   assert.strictEqual(grid.querySelector('[data-field="pnl"] .position-card__field-value').textContent, 'reported: 5');
 
+  const injectedTags = [];
+  const injectedEl = (tag, className, text, attrs) => {
+    injectedTags.push(tag);
+    return el(tag, className, text, attrs);
+  };
+  const injectedLibrary = createCardRuntimeLibrary({ el: injectedEl });
+  const controlCalls = [];
+  const removeControl = injectedLibrary.controls.createRemoveControl({
+    onRemove: event => controlCalls.push(['remove', event])
+  });
+  const retryControl = injectedLibrary.controls.createRetryControl({
+    onRetryStop: event => controlCalls.push(['retry', event])
+  });
+
+  const removeEvent = new dom.window.MouseEvent('click', { bubbles: true });
+  const retryEvent = new dom.window.MouseEvent('click', { bubbles: true });
+  let stopPropagationCalls = 0;
+  removeEvent.stopPropagation = () => { stopPropagationCalls += 1; };
+  retryEvent.stopPropagation = () => { stopPropagationCalls += 1; };
+  removeControl.dispatchEvent(removeEvent);
+  retryControl.dispatchEvent(retryEvent);
+
+  assert.deepStrictEqual(injectedTags, ['button', 'button']);
+  assert.strictEqual(controlCalls.length, 2);
+  assert.deepStrictEqual(controlCalls.map(([name]) => name), ['remove', 'retry']);
+  assert.strictEqual(controlCalls[0][1], removeEvent);
+  assert.strictEqual(controlCalls[1][1], retryEvent);
+  assert.strictEqual(stopPropagationCalls, 2);
+
   console.log('cardRuntimeLibrary tests passed');
 }
 
