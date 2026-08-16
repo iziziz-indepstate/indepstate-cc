@@ -161,7 +161,7 @@ position snapshots, application read models, and transitional legacy rows into s
 
 Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
 
-Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind renderer runtime APIs where service handlers can use them through injected dependencies. They are still transitional compatibility state. Generic facades for pending requests, placed orders, visual state, and ticket binding should move into the shell card runtime rather than remaining owned by `orderCards`, and durable lifecycle state should gradually move into application read models or infrastructure bridges.
+Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind shell card runtime facades for pending requests, placed orders, visual state, and ticket binding. The shell runtime also owns the dependency-injected legacy row presentation/reconciliation adapter; `orderCards` only supplies legacy rows, private lookups, and its regular renderer implementation. These APIs remain transitional compatibility infrastructure, and durable lifecycle state should continue moving into application read models or infrastructure bridges.
 
 Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.
 
@@ -242,8 +242,9 @@ true in the code and what remains.
 
 ### Remaining
 
-- Replace remaining legacy renderer state maps with position/read-model state so compatibility guards
-  can be removed instead of kept as permanent APIs.
+- Remove the remaining row-backed path after position/read-model snapshots replace it completely; then
+  delete the transitional state facades, presentation adapter, and compatibility guards instead of
+  keeping them as permanent APIs.
 - Continue moving order-card and position workflows from `app/main.js` and `app/renderer.js` into
   application/infrastructure/interface modules.
 - Promote mature registries into clearer typed contracts once more modules use them.

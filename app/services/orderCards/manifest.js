@@ -6,6 +6,7 @@ const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRunti
 const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
 const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('../../infrastructure/renderer/cardRuntime');
 const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
+const { createLegacyRowPresentationAdapter } = require('../../infrastructure/renderer/cardRuntime/legacyRowPresentation');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
@@ -77,7 +78,6 @@ const rendererHandlers = [{
       'position-data-grid',
       cardRuntimeLibrary.views.createDataGridView
     );
-    let orderStateFacades = null;
     const legacyOrderStateApi = {};
     for (const method of [
       'getCardState',
@@ -106,196 +106,40 @@ const rendererHandlers = [{
       legacyOrderStateApi[method] = (...args) => legacyOrderListRuntime?.legacyOrderStateApi?.[method]?.(...args);
     }
 
+    const rendererStateCompat = createLegacyOrderStateCompatApi({
+      pendingRequestLabels: context.pendingRequestLabels,
+      placedOrderLookup: context.placedOrderLookup,
+      cardVisualState: context.cardVisualState,
+      ticketBinding: context.ticketBinding
+    });
+    const orderStateFacades = createOrderStateFacades(legacyOrderStateApi, rendererStateCompat);
+
+    function legacyRowByKey(key) {
+      return state.rows.find(row => rowKey(row) === key);
+    }
+
     function legacyCardHandlerForKey(key) {
-      const row = state.rows.find(r => rowKey(r) === key) || {};
+      const row = legacyRowByKey(key) || {};
       return orderCardsRenderer?.handlerFor?.(row, row.instrumentType) || null;
     }
 
+    const legacyPresentation = createLegacyRowPresentationAdapter({
+      rowByKey: legacyRowByKey,
+      cardByKey,
+      rowKey,
+      stateApi: legacyOrderStateApi,
+      stateFacades: orderStateFacades,
+      handlerForKey: legacyCardHandlerForKey,
+      ipcRenderer,
+      render,
+      toast,
+      shakeCard,
+      notifyCardRestored: context.notifyCardRestored,
+      updateSpreadForTicker: context.updateSpreadForTicker
+    });
+
     function setLegacyCardState(key, stateName) {
-      const legacyOrderStateApi = legacyOrderListRuntime?.legacyOrderStateApi;
-      if (stateName) legacyOrderStateApi?.setCardState?.(key, stateName);
-      else legacyOrderStateApi?.clearCardState?.(key);
-
-      const card = cardByKey(key);
-      if (!card) return;
-      const cardHandler = legacyCardHandlerForKey(key);
-      const status = card.querySelector('.card__status');
-      const close = card.querySelector('.card__close');
-      const retryBtn = card.querySelector('.retry-btn');
-      const spreadEl = card.querySelector('.card__spread');
-      const btnsWrap = card.querySelector('.btns');
-      if (!status) return;
-
-      const inputs = card.querySelectorAll('input');
-      const buttons = card.querySelectorAll('button.btn');
-
-      if (stateName) {
-        status.style.display = 'inline-block';
-        status.className = `card__status card__status--${stateName}`;
-        if (stateName === 'pending-exec') {
-          const lbl = legacyOrderStateApi?.getPendingExecLabel?.(key);
-          status.textContent = lbl ? `pe (${lbl})` : 'pe';
-        } else {
-          legacyOrderStateApi?.clearPendingExecLabel?.(key);
-          status.textContent = '';
-        }
-        card.classList.toggle('card--pending', stateName === 'pending' || stateName === 'pending-exec');
-        if (close) close.style.display = 'none';
-        if (spreadEl) spreadEl.style.display = 'none';
-        inputs.forEach(inp => { inp.disabled = true; });
-        buttons.forEach(btn => { btn.disabled = true; });
-        if (btnsWrap) btnsWrap.style.display = stateName === 'pending-exec' ? 'none' : '';
-
-        const closePlacedOrder = async () => {
-          const orderInfo = legacyOrderStateApi?.getPlacedOrder?.(key);
-          const currentRow = state.rows.find(r => rowKey(r) === key);
-          if (typeof cardHandler?.closePlacedOrder === 'function') {
-            const handled = await cardHandler.closePlacedOrder({
-              key,
-              row: currentRow,
-              orderInfo,
-              pendingRequestLabels: orderStateFacades?.pendingRequestLabels,
-              placedOrderLookup: orderStateFacades?.placedOrderLookup,
-              cardVisualState: orderStateFacades?.cardVisualState,
-              ticketBinding: orderStateFacades?.ticketBinding,
-              setCardState: setLegacyCardState,
-              render,
-              ipcRenderer,
-              toast,
-              shakeCard
-            });
-            if (handled) return;
-          }
-          if (orderInfo && orderInfo.ticket && orderInfo.provider) {
-            await ipcRenderer?.invoke?.('execution:cancel-order', {
-              provider: orderInfo.provider,
-              ticket: orderInfo.ticket,
-              symbol: orderInfo.symbol,
-              name: orderInfo.name || currentRow?.name
-            }).catch(() => null);
-          }
-          legacyOrderStateApi?.clearExecutionStateByKey?.(key);
-          setLegacyCardState(key, null);
-          render();
-        };
-
-        if (stateName === 'placed') {
-          status.style.cursor = 'pointer';
-          status.title = cardHandler?.placedStatusTitle || 'Return to ready to send';
-          status.onclick = closePlacedOrder;
-          if (cardHandler?.placedButton && btnsWrap) {
-            const closeBtn = btnsWrap.querySelector('button.btn');
-            if (closeBtn) {
-              const replacement = closeBtn.cloneNode(true);
-              replacement.textContent = cardHandler.placedButton.label || closeBtn.textContent;
-              for (const cls of cardHandler.placedButton.removeClasses || []) replacement.classList.remove(cls);
-              for (const cls of cardHandler.placedButton.addClasses || []) replacement.classList.add(cls);
-              replacement.disabled = false;
-              replacement.title = cardHandler.placedButton.title || status.title;
-              replacement.addEventListener('click', closePlacedOrder);
-              closeBtn.replaceWith(replacement);
-            }
-          }
-        } else if (stateName === 'pending-exec') {
-          status.style.cursor = 'pointer';
-          status.title = 'Cancel pe';
-          status.onclick = () => {
-            const reqId = card.dataset.reqId;
-            const pendingId = card.dataset.pendingId || (reqId ? legacyOrderStateApi?.getPendingId?.(reqId) : null);
-            if (pendingId) ipcRenderer?.invoke?.('pending:cancel', pendingId).catch(() => {});
-            if (reqId) {
-              legacyOrderStateApi?.clearPendingRequest?.(reqId);
-              delete card.dataset.reqId;
-            }
-            delete card.dataset.pendingId;
-            setLegacyCardState(key, null);
-            render();
-          };
-        } else {
-          status.style.cursor = '';
-          status.title = '';
-          status.onclick = null;
-          card.style.cursor = '';
-          card.title = '';
-          card.onclick = null;
-        }
-
-        const keepFullCard = stateName === 'pending'
-          || stateName === 'pending-exec'
-          || !!cardHandler?.shouldKeepFullCardOnState?.({ state: stateName, key, card });
-        if (keepFullCard) {
-          card.classList.remove('card--mini');
-          if (card._removedParts) {
-            for (const {node, next} of card._removedParts) {
-              if (next && next.parentNode === card) card.insertBefore(node, next);
-              else card.appendChild(node);
-            }
-            card._removedParts = null;
-          }
-          card.querySelectorAll('input').forEach(inp => { inp.disabled = true; });
-          card.querySelectorAll('button.btn').forEach(btn => {
-            btn.disabled = !cardHandler?.shouldEnableButtonOnState?.({ state: stateName, key, card });
-          });
-          if (btnsWrap && cardHandler?.shouldHideButtonsOnState?.({ state: stateName, key, card })) btnsWrap.style.display = 'none';
-          if (retryBtn) {
-            if (stateName === 'pending') {
-              retryBtn.style.display = 'inline-block';
-              const rid = card.dataset.reqId;
-              const retryCount = rid ? legacyOrderStateApi?.getRetryCount?.(rid) : undefined;
-              if (retryCount != null) retryBtn.textContent = String(retryCount);
-            } else {
-              retryBtn.style.display = 'none';
-            }
-          }
-        } else {
-          card.classList.add('card--mini');
-          if (!card._removedParts) {
-            card._removedParts = [];
-            ['.meta', '.quad-line', '.extraRow', '.btns', '.card__note'].forEach(sel => {
-              const n = card.querySelector(sel);
-              if (n) {
-                card._removedParts.push({node: n, next: n.nextSibling});
-                n.remove();
-              }
-            });
-          }
-          if (retryBtn) retryBtn.style.display = 'none';
-        }
-        return;
-      }
-
-      card.classList.remove('card--mini');
-      status.style.display = 'none';
-      status.textContent = '';
-      legacyOrderStateApi?.clearPendingExecLabel?.(key);
-      status.style.cursor = '';
-      status.title = '';
-      status.onclick = null;
-      card.style.cursor = '';
-      card.title = '';
-      card.onclick = null;
-      card.classList.remove('card--pending');
-      if (spreadEl) spreadEl.style.display = '';
-      context.notifyCardRestored?.({ card, updateSpreadForTicker: context.updateSpreadForTicker });
-      if (close) close.style.display = '';
-      inputs.forEach(inp => { inp.disabled = false; });
-      buttons.forEach(btn => { btn.disabled = false; });
-      if (btnsWrap) btnsWrap.style.display = '';
-      if (cardHandler?.resetButtons && btnsWrap) {
-        const openBtn = btnsWrap.querySelector('button.btn');
-        if (openBtn) cardHandler.resetButtons(openBtn);
-      }
-      if (retryBtn) retryBtn.style.display = 'none';
-      if (card._removedParts) {
-        for (const {node, next} of card._removedParts) {
-          if (next && next.parentNode === card) card.insertBefore(node, next);
-          else card.appendChild(node);
-        }
-        card._removedParts = null;
-        card.querySelectorAll('input').forEach(inp => { inp.disabled = false; });
-        card.querySelectorAll('button.btn').forEach(btn => { btn.disabled = false; });
-      }
-      legacyOrderStateApi?.deletePlacedOrder?.(key);
+      return legacyPresentation.setCardState(key, stateName);
     }
 
     orderCardsRenderer = createOrderCardsRenderer({
@@ -370,13 +214,6 @@ const rendererHandlers = [{
     });
     legacyOrderListRuntime?.setClosedCardEventStrategy?.(orderCardsRuntime.getClosedCardEventStrategy?.() || 'ignore');
 
-    const rendererStateCompat = createLegacyOrderStateCompatApi({
-      pendingRequestLabels: context.pendingRequestLabels,
-      placedOrderLookup: context.placedOrderLookup,
-      cardVisualState: context.cardVisualState,
-      ticketBinding: context.ticketBinding
-    });
-    orderStateFacades = createOrderStateFacades(legacyOrderStateApi, rendererStateCompat);
     context.pendingRequestLabels = orderStateFacades.pendingRequestLabels;
     context.placedOrderLookup = orderStateFacades.placedOrderLookup;
     context.cardVisualState = orderStateFacades.cardVisualState;

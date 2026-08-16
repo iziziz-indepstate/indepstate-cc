@@ -35,6 +35,7 @@ The renderer shell owns the generic runtime surface:
 - **View registry**: reusable visual fragments such as status badges, identity headers, order detail fields, option legs, payoff summaries, valuation fields, and position data grids.
 - **Shape registry**: reusable card composers that arrange views and controls into concrete layouts.
 - **Renderer state facades**: compatibility stores for pending requests, placed orders, visual state, and ticket bindings.
+- **Legacy row presentation adapter**: transitional status, pending/placed/profit/loss, compact-card, retry, cancel/close, restore, and handler-hook reconciliation for row-backed cards.
 - **Lifecycle slots**: shared hooks for render, validate, act, reconcile, restore, and remove behavior.
 
 These concepts should be exposed through narrow registration APIs and injected dependencies rather than by importing a specific card module.
@@ -100,17 +101,17 @@ During renderer bootstrap, `orderCards` registers these reusable entries in `car
 | Control | `standard-action-buttons` |
 | View | `position-data-grid` |
 
-Other renderer modules can resolve them through `getCardShape`, `getCardControl`, and `getCardView`. The library only owns generic DOM composition. `orderCards` continues to own the EQ/FX/CX input bodies, sizing and validation, placement, regular action semantics, and legacy row handler lookup. Specialized modules such as `optionstrat` and `levelOrder` may adopt the named library pieces independently.
+Other renderer modules can resolve them through `getCardShape`, `getCardControl`, and `getCardView`. The library only owns generic DOM composition. `orderCards` continues to own the EQ/FX/CX input bodies, sizing and validation, placement, regular action semantics, legacy row ingestion, and private handler lookup. Specialized modules such as `optionstrat` and `levelOrder` may adopt the named library pieces independently.
 
 When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runtime composes the transitional row handler from its registered `view`, `controls`, and `legacyRow` callbacks and connects it to the `orderCards` renderer automatically. The former public APIs `registerOrderCardInstrumentHandler` and `registerOrderCardTypeHandler` have been removed. Legacy row integration is available only through card type definitions registered with `registerCardType({ legacyInstrumentTypes, legacyCardTypes, view, controls, legacyRow })`.
 
-`orderCards` no longer publishes legacy row state or handler APIs such as `orderCardsState`, `setLegacyOrderCardState`, `orderCardHandlerFor`, or `orderCardHandlerForKey` in the renderer context. Its renderer connects the private row adapter to the shell only through `cardRuntime.connectLegacyOrderCardRenderer({ renderer, getRows, rowKey, setCardState })`. Modules that still need transitional row access use the shell-owned `cardRuntime.legacyRows`, `cardRuntime.findLegacyRowByKey`, and `cardRuntime.setLegacyRowCardState` facades together with card type definitions.
+`orderCards` no longer publishes legacy row state or handler APIs such as `orderCardsState`, `setLegacyOrderCardState`, `orderCardHandlerFor`, or `orderCardHandlerForKey` in the renderer context. It injects private row/card lookup, handler lookup, state facades, IPC, and shell callbacks into `cardRuntime/legacyRowPresentation.js`. The resulting shell-owned `setCardState` callback is shared by the regular renderer, `legacyOrderListRuntime`, and `cardRuntime.connectLegacyOrderCardRenderer({ renderer, getRows, rowKey, setCardState })`. Modules that still need transitional row access use the shell-owned `cardRuntime.legacyRows`, `cardRuntime.findLegacyRowByKey`, and `cardRuntime.setLegacyRowCardState` facades together with card type definitions.
 
 ## Service-Owned Registration
 
 Each service owns the mappings that are specific to its aggregate, provider, strategy, or legacy adapter:
 
-- `orderCards` registers regular/manual order cards, standard order controls, and the legacy row adapter while row-backed cards still exist.
+- `orderCards` registers regular/manual order cards and standard order controls, supplies legacy rows and the regular renderer implementation, and injects its private lookups into the shell-owned legacy row presentation adapter while row-backed cards still exist.
 - `optionstrat` registers option card shapes, option legs views, payoff and valuation views, OptionStrat open/close controls, and option-specific reconciliation.
 - `levelOrder` registers level-order controls, level input views, level-order position card views, and LB/LS action behavior.
 
@@ -126,12 +127,12 @@ Legacy maps such as pending request labels, placed order lookup, card visual sta
 
 ## Migration Direction
 
-The current renderer still contains legacy order-card runtime behavior, but that behavior is kept behind the shell card runtime facade. That is transitional.
+The current renderer still contains a row-backed legacy order-card path. Its generic presentation and reconciliation behavior now lives in the shell card runtime, while `orderCards` supplies rows and the regular renderer implementation. That path remains transitional.
 
 The target migration is:
 
-1. Keep generic renderer state and legacy row access behind the shell card runtime facades.
-2. Keep `orderCards` as the adapter for regular/manual order cards and legacy rows without exporting its private row state or handlers into renderer context.
+1. Keep generic renderer state, legacy row presentation, and legacy row access behind the shell card runtime facades.
+2. Keep `orderCards` as the source for regular/manual order cards and legacy rows without exporting its private row state or handlers into renderer context.
 3. Register `optionstrat`, `levelOrder`, and later card types through card runtime registries.
 4. Promote stable registry contracts once multiple services use the same concepts.
-5. Delete legacy guards and row adapters when snapshot-backed read models fully replace them.
+5. Delete the remaining row-backed path, legacy guards, and transitional presentation adapter when snapshot-backed read models fully replace them.

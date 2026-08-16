@@ -80,6 +80,12 @@ function run() {
     instrumentTypeHandlers: {},
     cardTypeHandlers: {}
   };
+  const fakeLegacyPresentation = {
+    setCardState(...args) {
+      calls.push(['legacyPresentationSetCardState', args]);
+      return 'presented';
+    }
+  };
 
   Module._load = function(request, parent, isMain) {
     const parentPath = String(parent?.filename || '').replace(/\\/g, '/');
@@ -105,6 +111,17 @@ function run() {
           calls.push(['createOrderCardsRendererConfigRuntime', deps]);
           onConfigApplied = deps.onConfigApplied;
           return fakeOrderCardsRuntime;
+        }
+      };
+    }
+    if (
+      parentPath.endsWith('app/services/orderCards/manifest.js')
+      && request === '../../infrastructure/renderer/cardRuntime/legacyRowPresentation'
+    ) {
+      return {
+        createLegacyRowPresentationAdapter(deps) {
+          calls.push(['createLegacyRowPresentationAdapter', deps]);
+          return fakeLegacyPresentation;
         }
       };
     }
@@ -217,12 +234,16 @@ function run() {
   };
   manifest.rendererHandlers[0].register(rendererContext);
 
-  assert.strictEqual(calls[0][0], 'createOrderCardsRendererConfigRuntime');
-  assert.strictEqual(calls[0][1].loadConfig, loadConfig);
-  assert.strictEqual(calls[0][1].settingsRuntime, settingsRuntime);
-  assert.strictEqual(calls[0][1].env, env);
-  assert.strictEqual(calls[0][1].render, render);
-  assert.strictEqual(typeof calls[0][1].onConfigApplied, 'function');
+  const configRuntimeCall = calls.find(call => call[0] === 'createOrderCardsRendererConfigRuntime');
+  const presentationCall = calls.find(call => call[0] === 'createLegacyRowPresentationAdapter');
+  const rendererCall = calls.find(call => call[0] === 'createOrderCardsRenderer');
+  const listRuntimeCall = calls.find(call => call[0] === 'createLegacyOrderListRuntime');
+
+  assert.strictEqual(configRuntimeCall[1].loadConfig, loadConfig);
+  assert.strictEqual(configRuntimeCall[1].settingsRuntime, settingsRuntime);
+  assert.strictEqual(configRuntimeCall[1].env, env);
+  assert.strictEqual(configRuntimeCall[1].render, render);
+  assert.strictEqual(typeof configRuntimeCall[1].onConfigApplied, 'function');
   assert.strictEqual(typeof registeredInstrumentDisplayPolicy.getInstrumentRefreshMs, 'function');
   assert.strictEqual(registeredInstrumentDisplayPolicy.getInstrumentRefreshMs(), 777);
   assert.strictEqual(registeredInstrumentDisplayPolicy.shouldShowBidAsk(), true);
@@ -241,9 +262,8 @@ function run() {
   });
   assert.deepStrictEqual(restored, ['AAPL']);
   fakeShouldShowSpread = true;
-  assert.strictEqual(calls[1][0], 'createOrderCardsRenderer');
-  assert.strictEqual(typeof calls[1][1].cardRuntimeLibrary.shapes.createLegacyCardShape, 'function');
-  assert.strictEqual(typeof calls[1][1].cardRuntimeLibrary.shapes.createPositionCardShape, 'function');
+  assert.strictEqual(typeof rendererCall[1].cardRuntimeLibrary.shapes.createLegacyCardShape, 'function');
+  assert.strictEqual(typeof rendererCall[1].cardRuntimeLibrary.shapes.createPositionCardShape, 'function');
   for (const name of ['regular-order-legacy-card', 'regular-position-card']) {
     assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === name));
   }
@@ -252,9 +272,19 @@ function run() {
   }
   assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'position-data-grid'));
   assert.strictEqual(connectedLegacyAdapter.renderer, fakeRenderer);
-  assert.strictEqual(connectedLegacyAdapter.getRows(), calls[2]?.[1]?.state?.rows || fakeRuntime.state.rows);
+  assert.strictEqual(connectedLegacyAdapter.getRows(), listRuntimeCall[1].state.rows);
   assert.strictEqual(connectedLegacyAdapter.rowKey({ ticker: 'AAPL', event: 'up', time: 1, price: 2 }), 'AAPL|up|1|2');
   assert.strictEqual(typeof connectedLegacyAdapter.setCardState, 'function');
+  assert.strictEqual(rendererCall[1].setCardState, connectedLegacyAdapter.setCardState);
+  assert.strictEqual(listRuntimeCall[1].setCardState, connectedLegacyAdapter.setCardState);
+  assert.strictEqual(presentationCall[1].stateApi, rendererCall[1].legacyOrderStateApi);
+  assert.strictEqual(typeof presentationCall[1].rowByKey, 'function');
+  assert.strictEqual(typeof presentationCall[1].handlerForKey, 'function');
+  assert.strictEqual(connectedLegacyAdapter.setCardState('AAPL|up|1|2', 'pending'), 'presented');
+  assert.deepStrictEqual(calls.find(call => call[0] === 'legacyPresentationSetCardState')[1], [
+    'AAPL|up|1|2',
+    'pending'
+  ]);
   for (const name of [
     'orderCardsState',
     'setLegacyOrderCardState',
@@ -267,14 +297,13 @@ function run() {
       `orderCards must not publish ${name} in renderer context`
     );
   }
-  assert.strictEqual(calls[1][1].shouldShowBidAsk(), true);
-  assert.strictEqual(calls[1][1].shouldShowSpread(), true);
-  assert.deepStrictEqual(calls[1][1].getCardButtons(), [{ label: 'LIVE', action: 'BL', style: 'bl' }]);
-  assert.strictEqual(calls[1][1].getButtonRows(), 2);
-  assert.strictEqual(calls[2][0], 'createLegacyOrderListRuntime');
-  assert.strictEqual(typeof calls[2][1].matchesExistingOrderRow, 'function');
-  assert.strictEqual(typeof calls[2][1].orderCardHandlerForRow, 'function');
-  assert.strictEqual(typeof calls[2][1].scheduleOrderCardInstantExecution, 'function');
+  assert.strictEqual(rendererCall[1].shouldShowBidAsk(), true);
+  assert.strictEqual(rendererCall[1].shouldShowSpread(), true);
+  assert.deepStrictEqual(rendererCall[1].getCardButtons(), [{ label: 'LIVE', action: 'BL', style: 'bl' }]);
+  assert.strictEqual(rendererCall[1].getButtonRows(), 2);
+  assert.strictEqual(typeof listRuntimeCall[1].matchesExistingOrderRow, 'function');
+  assert.strictEqual(typeof listRuntimeCall[1].orderCardHandlerForRow, 'function');
+  assert.strictEqual(typeof listRuntimeCall[1].scheduleOrderCardInstantExecution, 'function');
   assert.strictEqual(fakeRuntime.closedCardEventStrategy, 'ignore');
   fakeClosedCardEventStrategy = 'remove';
   onConfigApplied(fakeOrderCardsRuntime);
@@ -286,7 +315,7 @@ function run() {
     index: 0
   });
   assert.strictEqual(calls.some(call => call[0] === 'legacyMount'), true);
-  assert.strictEqual(rowProviders[0](), calls[2][1].state.rows);
+  assert.strictEqual(rowProviders[0](), listRuntimeCall[1].state.rows);
   assert.strictEqual(testingExtensions.legacyOrderStateApi.getCardState('x'), undefined);
   assert.strictEqual(testingExtensions.orderCardInstrumentHandlers, fakeRenderer.instrumentTypeHandlers);
   assert.strictEqual(testingExtensions.orderCardTypeHandlers, fakeRenderer.cardTypeHandlers);

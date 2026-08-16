@@ -1,5 +1,6 @@
 const { createCardStateApi } = require('./cardStateApi');
 const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('./stateFacades');
+const { createLegacyRowPresentationAdapter } = require('./legacyRowPresentation');
 
 function unregisterFrom(list, item) {
   const index = list.indexOf(item);
@@ -388,5 +389,6 @@ module.exports = {
   createCardRuntime,
   createCardStateApi,
   createOrderStateFacades,
-  createLegacyOrderStateCompatApi
+  createLegacyOrderStateCompatApi,
+  createLegacyRowPresentationAdapter
 };
