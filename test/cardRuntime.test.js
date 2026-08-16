@@ -138,6 +138,98 @@ function run() {
   assertBridgeCall(bridgeCalls[11], 'unregisterInstrumentHandler', 'OPT', optHandlerLatest);
   assertBridgeCall(bridgeCalls[12], 'unregisterCardTypeHandler', 'option', cardTypeHandlerLatest);
 
+  const compositionCalls = [];
+  const compositionRuntime = createCardRuntime();
+  const composedView = (row, key) => {
+    compositionCalls.push(['view', row, key]);
+    return { row, key };
+  };
+  const preparePlace = () => 'prepared';
+  const afterPlaceOk = () => 'placed';
+  const scheduleInstantExecution = () => 'scheduled';
+  const closePlacedOrder = () => 'closed';
+  const resetButtons = () => 'reset';
+  compositionRuntime.registerCardView('option-view', composedView);
+  compositionRuntime.registerCardControl('option-open', () => ({
+    buttons: row => [{ label: `OPEN ${row.ticker}` }],
+    preparePlace,
+    afterPlaceOk,
+    scheduleInstantExecution
+  }));
+  compositionRuntime.registerCardControl('option-close', () => ({
+    placedStatusTitle: 'Close option',
+    placedButton: { label: 'CLOSE' },
+    closePlacedOrder,
+    shouldKeepFullCardOnState: ({ state }) => state === 'placed',
+    shouldEnableButtonOnState: ({ state }) => state === 'placed',
+    shouldHideButtonsOnState: ({ state }) => state === 'profit',
+    resetButtons
+  }));
+  const onCreateCard = () => 'created';
+  const unregisterComposedBeforeConnect = compositionRuntime.registerCardType({
+    type: 'option',
+    view: 'option-view',
+    controls: ['option-open', 'option-close'],
+    legacyInstrumentTypes: ['OPT'],
+    legacyCardTypes: ['option', 'optionstrat'],
+    legacyRow: {
+      title: ({ row }) => row.name,
+      onCreateCard
+    }
+  });
+  const disconnectComposition = compositionRuntime.connectLegacyOrderCardRenderer({
+    registerInstrumentHandler(instrumentType, handler) {
+      compositionCalls.push(['registerInstrumentHandler', instrumentType, handler]);
+      return () => compositionCalls.push(['unregisterInstrumentHandler', instrumentType, handler]);
+    },
+    registerCardTypeHandler(cardType, handler) {
+      compositionCalls.push(['registerCardTypeHandler', cardType, handler]);
+      return () => compositionCalls.push(['unregisterCardTypeHandler', cardType, handler]);
+    }
+  });
+  assert.strictEqual(compositionCalls[0][0], 'registerInstrumentHandler');
+  assert.strictEqual(compositionCalls[0][1], 'OPT');
+  assert.strictEqual(compositionCalls[1][0], 'registerCardTypeHandler');
+  assert.strictEqual(compositionCalls[1][1], 'option');
+  assert.strictEqual(compositionCalls[2][1], 'optionstrat');
+  const composedHandler = compositionCalls[0][2];
+  const composedRow = { ticker: 'SPY', name: 'Option spread' };
+  assert.deepStrictEqual(composedHandler.createBody(composedRow, 'opt-1'), { row: composedRow, key: 'opt-1' });
+  assert.deepStrictEqual(compositionCalls[3], ['view', composedRow, 'opt-1']);
+  assert.deepStrictEqual(composedHandler.buttons(composedRow), [{ label: 'OPEN SPY' }]);
+  assert.strictEqual(composedHandler.title({ row: composedRow }), 'Option spread');
+  assert.strictEqual(composedHandler.onCreateCard, onCreateCard);
+  assert.strictEqual(composedHandler.preparePlace, preparePlace);
+  assert.strictEqual(composedHandler.afterPlaceOk, afterPlaceOk);
+  assert.strictEqual(composedHandler.scheduleInstantExecution, scheduleInstantExecution);
+  assert.strictEqual(composedHandler.placedStatusTitle, 'Close option');
+  assert.deepStrictEqual(composedHandler.placedButton, { label: 'CLOSE' });
+  assert.strictEqual(composedHandler.closePlacedOrder, closePlacedOrder);
+  assert.strictEqual(composedHandler.shouldKeepFullCardOnState({ state: 'placed' }), true);
+  assert.strictEqual(composedHandler.shouldEnableButtonOnState({ state: 'ready' }), false);
+  assert.strictEqual(composedHandler.shouldHideButtonsOnState({ state: 'profit' }), true);
+  assert.strictEqual(composedHandler.resetButtons, resetButtons);
+  unregisterComposedBeforeConnect();
+  const unregisterCount = compositionCalls.length;
+  assert.strictEqual(compositionCalls.slice(-3).every(call => call[0].startsWith('unregister')), true);
+  unregisterComposedBeforeConnect();
+  assert.strictEqual(compositionCalls.length, unregisterCount);
+
+  const unregisterComposedAfterConnect = compositionRuntime.registerCardType({
+    type: 'crypto',
+    legacyInstrumentTypes: ['CX'],
+    legacyCardTypes: ['crypto']
+  });
+  assert.strictEqual(compositionCalls[unregisterCount][0], 'registerInstrumentHandler');
+  assert.strictEqual(compositionCalls[unregisterCount][1], 'CX');
+  assert.strictEqual(compositionCalls[unregisterCount + 1][0], 'registerCardTypeHandler');
+  assert.strictEqual(compositionCalls[unregisterCount + 1][1], 'crypto');
+  unregisterComposedAfterConnect();
+  const afterConnectedUnregisterCount = compositionCalls.length;
+  unregisterComposedAfterConnect();
+  assert.strictEqual(compositionCalls.length, afterConnectedUnregisterCount);
+  disconnectComposition();
+
   const legacyApi = {
     getCardState: key => (key === 'legacy' ? 'placed' : undefined),
     listPlacedOrders: () => [{ key: 'legacy', orderInfo: { ticket: 'l1' }, state: 'placed' }]

@@ -48,6 +48,12 @@ cardRuntime.registerCardType({
   shape: 'trade-card',
   views: ['identity', 'optionLegs', 'payoff', 'valuation', 'status'],
   controls: ['openOption', 'closeOption', 'remove'],
+  legacyInstrumentTypes: ['OPT'],
+  legacyCardTypes: ['option', 'optionstrat'],
+  legacyRow: {
+    title: ({ row }) => row.name || row.ticker,
+    matchesExistingRow: ({ incomingRow, existingRow, rowKey }) => rowKey(incomingRow) === rowKey(existingRow)
+  },
   actions: {
     open: context => context.commands.send('position.open', context.payload),
     close: context => context.commands.send('position.close', context.payload)
@@ -60,6 +66,8 @@ cardRuntime.registerCardShape('trade-card', composer);
 ```
 
 This is a registry/composition contract, not a base-class hierarchy. A service can reuse library views, controls, and shapes, or register specialized ones when its card semantics require them.
+
+When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runtime composes the transitional row handler from its registered `view`, `controls`, and `legacyRow` callbacks and connects it to the `orderCards` renderer automatically. Services should not call `registerOrderCardInstrumentHandler` or `registerOrderCardTypeHandler`; those methods are deprecated internal compatibility bridges for unmigrated services and tests.
 
 ## Service-Owned Registration
 

@@ -5,8 +5,6 @@ async function run() {
   const originalLoad = Module._load;
   const rendererCalls = [];
   const handlers = new Map();
-  let registeredInstrument = null;
-  let registeredHandler = null;
   let rendererDeps = null;
   const runtimeCalls = [];
   let renderCount = 0;
@@ -19,6 +17,8 @@ async function run() {
           const orderCardHandler = {
             createBody: () => ({ type: 'option' }),
             buttons: () => [{ label: 'OPEN', action: 'OPEN', style: 'bl' }],
+            preparePlace: () => ({ request: true }),
+            afterPlaceOk: () => true,
             scheduleInstantExecution: () => true
           };
           return {
@@ -27,6 +27,7 @@ async function run() {
               rendererCalls.push(['createOrderCardHandler']);
               return orderCardHandler;
             },
+            createOptionBody: orderCardHandler.createBody,
             ensureOptionPayoff(row) {
               rendererCalls.push(['ensureOptionPayoff', row]);
             },
@@ -91,8 +92,6 @@ async function run() {
       findLegacyRowByKey: () => undefined,
       legacyRows: () => [],
       registerOrderCardInstrumentHandler(instrumentType, handler) {
-        registeredInstrument = instrumentType;
-        registeredHandler = handler;
         runtimeCalls.push(['registerOrderCardInstrumentHandler', instrumentType, handler]);
       },
       registerCardType(definition) {
@@ -122,25 +121,29 @@ async function run() {
   assert.strictEqual(rendererDeps.legacyRows.findLegacyRowByKey('missing'), undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'orderCardsState'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'setLegacyOrderCardState'), false);
-  assert.strictEqual(registeredInstrument, 'OPT');
-  assert.strictEqual(typeof registeredHandler.createBody, 'function');
-  assert.strictEqual(registeredHandler.title({ row: { ticker: 'SPY', name: 'LCS 755/756' } }), 'LCS 755/756');
-  assert.strictEqual(registeredHandler.title({ row: { ticker: 'SPY' } }), 'SPY');
-  assert.strictEqual(registeredHandler.matchesExistingRow({
+  assert.strictEqual(runtimeCalls.some(call => call[0] === 'registerOrderCardInstrumentHandler'), false);
+  const cardTypeDefinition = runtimeCalls.find(call => call[0] === 'registerCardType')?.[1];
+  assert.strictEqual(cardTypeDefinition.type, 'option');
+  assert.deepStrictEqual(cardTypeDefinition.legacyInstrumentTypes, ['OPT']);
+  assert.deepStrictEqual(cardTypeDefinition.legacyCardTypes, ['option', 'optionstrat']);
+  const legacyRow = cardTypeDefinition.legacyRow;
+  assert.strictEqual(legacyRow.title({ row: { ticker: 'SPY', name: 'LCS 755/756' } }), 'LCS 755/756');
+  assert.strictEqual(legacyRow.title({ row: { ticker: 'SPY' } }), 'SPY');
+  assert.strictEqual(legacyRow.matchesExistingRow({
     incomingRow: { ticker: 'SPY', event: 'optionstrat', time: 1, price: 2 },
     existingRow: { ticker: 'SPY', event: 'optionstrat', time: 1, price: 2 },
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`
   }), true);
-  assert.strictEqual(registeredHandler.matchesExistingRow({
+  assert.strictEqual(legacyRow.matchesExistingRow({
     incomingRow: { ticker: 'SPY', event: 'optionstrat', time: 1, price: 2 },
     existingRow: { ticker: 'SPY', event: 'optionstrat', time: 2, price: 2 },
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`
   }), false);
-  assert.strictEqual(registeredHandler.shouldScheduleInstantExecution({ row: { instantExecution: true } }), true);
-  assert.strictEqual(registeredHandler.shouldScheduleInstantExecution({ row: { instantExecution: false } }), false);
+  assert.strictEqual(legacyRow.shouldScheduleInstantExecution({ row: { instantExecution: true } }), true);
+  assert.strictEqual(legacyRow.shouldScheduleInstantExecution({ row: { instantExecution: false } }), false);
   const openedRow = {};
-  registeredHandler.onExecutionResultOk({ row: openedRow, openedAt: 123 });
-  registeredHandler.onExecutionResultOk({ row: openedRow, openedAt: 456 });
+  legacyRow.onExecutionResultOk({ row: openedRow, openedAt: 123 });
+  legacyRow.onExecutionResultOk({ row: openedRow, openedAt: 456 });
   assert.strictEqual(openedRow.openedAt, 123);
   assert(rendererCalls.some(call => call[0] === 'createOrderCardHandler'));
   assert(rendererCalls.some(call => call[0] === 'setValuationRefreshMs' && call[1] === 7000));
@@ -152,7 +155,20 @@ async function run() {
   assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-close-remove'));
   assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'option-position-card'));
 
-  registeredHandler.onCreateCard({ row: { ticker: 'SPY', instrumentType: 'OPT' } });
+  const openControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-open')[2]();
+  assert.deepStrictEqual(openControl.buttons({ ticker: 'SPY' }), [{ label: 'OPEN', action: 'OPEN', style: 'bl' }]);
+  assert.strictEqual(typeof openControl.preparePlace, 'function');
+  assert.strictEqual(typeof openControl.afterPlaceOk, 'function');
+  assert.strictEqual(typeof openControl.scheduleInstantExecution, 'function');
+  const closeControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-close-remove')[2]();
+  assert.strictEqual(closeControl.placedButton.label, 'CLOSE');
+  assert.strictEqual(typeof closeControl.closePlacedOrder, 'function');
+  assert.strictEqual(typeof closeControl.shouldKeepFullCardOnState, 'function');
+  assert.strictEqual(typeof closeControl.shouldEnableButtonOnState, 'function');
+  assert.strictEqual(typeof closeControl.shouldHideButtonsOnState, 'function');
+  assert.strictEqual(typeof closeControl.resetButtons, 'function');
+
+  legacyRow.onCreateCard({ row: { ticker: 'SPY', instrumentType: 'OPT' } });
   assert(rendererCalls.some(call => call[0] === 'ensureOptionPayoff' && call[1].ticker === 'SPY'));
 
   handlers.get('optionstrat')({

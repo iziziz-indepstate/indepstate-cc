@@ -289,6 +289,23 @@ const rendererHandlers = [{
       }
     };
 
+    cardRuntime.registerCardView?.('option-legs-payoff-valuation', optionStratRenderer.createOptionBody);
+    cardRuntime.registerCardControl?.('option-open', () => ({
+      buttons: row => optionOrderCardHandler.buttons?.(row),
+      preparePlace: optionOrderCardHandler.preparePlace,
+      afterPlaceOk: optionOrderCardHandler.afterPlaceOk,
+      scheduleInstantExecution: optionOrderCardHandler.scheduleInstantExecution
+    }));
+    cardRuntime.registerCardControl?.('option-close-remove', () => ({
+      placedStatusTitle: optionOrderCardHandler.placedStatusTitle,
+      placedButton: optionOrderCardHandler.placedButton,
+      closePlacedOrder: optionOrderCardHandler.closePlacedOrder,
+      shouldKeepFullCardOnState: optionOrderCardHandler.shouldKeepFullCardOnState,
+      shouldEnableButtonOnState: optionOrderCardHandler.shouldEnableButtonOnState,
+      shouldHideButtonsOnState: optionOrderCardHandler.shouldHideButtonsOnState,
+      resetButtons: optionOrderCardHandler.resetButtons
+    }));
+    cardRuntime.registerCardShape?.('option-position-card', optionStratRenderer.createOptionPositionCard);
     cardRuntime.registerCardType?.({
       type: 'option',
       aliases: ['optionstrat', 'OPT'],
@@ -298,16 +315,19 @@ const rendererHandlers = [{
       },
       view: 'option-legs-payoff-valuation',
       controls: ['option-open', 'option-close-remove'],
-      shape: 'option-position-card'
+      shape: 'option-position-card',
+      legacyInstrumentTypes: ['OPT'],
+      legacyCardTypes: ['option', 'optionstrat'],
+      legacyRow: {
+        title: optionOrderCardHandler.title,
+        matchesExistingRow: optionOrderCardHandler.matchesExistingRow,
+        shouldScheduleInstantExecution: optionOrderCardHandler.shouldScheduleInstantExecution,
+        onExecutionResultOk: optionOrderCardHandler.onExecutionResultOk,
+        onCreateCard: optionOrderCardHandler.onCreateCard,
+        onPositionOpened: optionOrderCardHandler.onPositionOpened,
+        onPositionClosed: optionOrderCardHandler.onPositionClosed
+      }
     });
-    cardRuntime.registerCardView?.('option-legs-payoff-valuation', optionStratRenderer.createOptionBody);
-    cardRuntime.registerCardControl?.('option-open', () => optionOrderCardHandler.buttons?.());
-    cardRuntime.registerCardControl?.('option-close-remove', () => ({
-      placedButton: optionOrderCardHandler.placedButton,
-      closePlacedOrder: optionOrderCardHandler.closePlacedOrder
-    }));
-    cardRuntime.registerCardShape?.('option-position-card', optionStratRenderer.createOptionPositionCard);
-    cardRuntime.registerOrderCardInstrumentHandler?.('OPT', optionOrderCardHandler);
     ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
       const cfg = res?.config || res || {};
       const ms = Number(cfg.valuationRefreshMs);
