@@ -80,7 +80,7 @@ The stable snapshot definition fields are:
 - `shape` for final DOM composition;
 - optional `onRemovePosition(position, context)` for renderer cleanup.
 
-The shape receives `position`, `key`, `title`, `body`/`view`, snapshot `actions`, resolved `controls`, `requestRemove`, `dispatchPositionAction`, and injected renderer dependencies. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined`; the shell then uses the transitional `positionCardRenderers` fallback. The helper composes presentation only and does not store or infer lifecycle state.
+The shape receives `position`, `key`, `title`, `body`/`view`, snapshot `actions`, resolved `controls`, `requestRemove`, `createActionsFromSnapshot`, and injected renderer dependencies. The shell may build `createActionsFromSnapshot` from its generic `dispatchPositionAction` helper, but shapes should depend on the composed callback name. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined`; the shell then uses the transitional `positionCardRenderers` fallback. The helper composes presentation only and does not store or infer lifecycle state.
 
 ## Built-In Card Library
 
