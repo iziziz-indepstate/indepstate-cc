@@ -162,10 +162,7 @@ const rendererPositionHandlers = [{
       setCardState,
       toast,
       shakeCard,
-      render,
-      btn,
-      dispatchPositionAction,
-      requestRemovePosition
+      render
     } = context;
     const cardRuntime = context.cardRuntime || context;
 
@@ -206,38 +203,34 @@ const rendererPositionHandlers = [{
       render
     });
 
-    cardRuntime.registerPositionActionHandler?.(
-      'levelOrder',
-      levelOrderRenderer.createSnapshotActionHandler({
-        placePositionAction: placeLevelOrderPositionAction
+    const handleLevelOrderSnapshotAction = levelOrderRenderer.createSnapshotActionHandler({
+      placePositionAction: placeLevelOrderPositionAction
+    });
+
+    cardRuntime.registerCardView?.(
+      'level-order-body',
+      levelOrderRenderer.createLevelOrderPositionView
+    );
+    cardRuntime.registerCardControl?.(
+      'level-order-actions',
+      composition => levelOrderRenderer.createLevelOrderActionsControl({
+        ...composition,
+        handleAction: handleLevelOrderSnapshotAction
       })
+    );
+    cardRuntime.registerCardShape?.(
+      'level-order-position-card',
+      levelOrderRenderer.createLevelOrderPositionCard
     );
 
     cardRuntime.registerCardType?.({
       type: 'levelOrder',
       match: position => String(position?.card?.type || position?.source?.cardType || '') === 'levelOrder',
-      shape: 'level-order-position-card'
+      view: 'level-order-body',
+      controls: ['level-order-actions'],
+      shape: 'level-order-position-card',
+      onRemovePosition: levelOrderRenderer.onPositionRemoved
     });
-
-    cardRuntime.registerPositionCardRenderer?.('levelOrder', (position) => {
-      return levelOrderRenderer.createLevelOrderPositionCard({
-        position,
-        key: positionKey(position),
-        title: positionCardTitle(position),
-        createActionButton: ({ label, kind, className, onClick }) => {
-          const button = btn(label, className, onClick);
-          button.dataset.kind = kind;
-          return button;
-        },
-        createActionsFromSnapshot: (snapshot, action, validated) => dispatchPositionAction(snapshot, action, validated),
-        requestRemove: (snapshot) => requestRemovePosition(snapshot)
-      });
-    });
-
-    cardRuntime.registerPositionRemovalHandler?.(
-      'levelOrder',
-      position => levelOrderRenderer.onPositionRemoved(position)
-    );
   }
 }];
 

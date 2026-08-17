@@ -68,6 +68,20 @@ cardRuntime.registerCardShape('trade-card', composer);
 
 This is a registry/composition contract, not a base-class hierarchy. A service can reuse library views, controls, and shapes, or register specialized ones when its card semantics require them.
 
+### Snapshot Card Composition
+
+`cardRuntime.createPositionCard(position, context)` is the shell-facing snapshot composition helper. It resolves the card definition with `resolveCardType(position, { kind: 'position' })`, resolves the named `view`, every named entry in `controls`, and the named `shape`, then calls the shape with the composed parts.
+
+The stable snapshot definition fields are:
+
+- `type` and/or `match` for selection;
+- `view` for the service-owned body renderer;
+- `controls` for service-owned or shared controls;
+- `shape` for final DOM composition;
+- optional `onRemovePosition(position, context)` for renderer cleanup.
+
+The shape receives `position`, `key`, `title`, `body`/`view`, snapshot `actions`, resolved `controls`, `requestRemove`, `dispatchPositionAction`, and injected renderer dependencies. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined`; the shell then uses the transitional `positionCardRenderers` fallback. The helper composes presentation only and does not store or infer lifecycle state.
+
 ## Built-In Card Library
 
 The shell-owned library in `app/infrastructure/renderer/cardRuntime/library.js` provides the shared DOM composition used by regular cards:
@@ -114,6 +128,8 @@ Each service owns the mappings that are specific to its aggregate, provider, str
 - `orderCards` registers regular/manual order cards and standard order controls, supplies legacy rows and the regular renderer implementation, and injects its private lookups into the shell-owned legacy row presentation adapter while row-backed cards still exist.
 - `optionstrat` registers option card shapes, option legs views, payoff and valuation views, OptionStrat open/close controls, and option-specific reconciliation.
 - `levelOrder` registers level-order controls, level input views, level-order position card views, and LB/LS action behavior.
+
+The legacy `registerPositionCardRenderer`, `registerPositionActionHandler`, and `registerPositionRemovalHandler` methods remain transitional compatibility APIs for card types that have not completed this migration. New snapshot implementations should use the card type/view/control/shape registries and `onRemovePosition`.
 
 Service manifests should populate the runtime registries during renderer bootstrap. Service-specific card bodies, validation UI, action payload mapping, and removal/reconciliation behavior should stay in the owning service.
 

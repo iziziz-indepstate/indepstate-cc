@@ -12,9 +12,12 @@ and load them lazily inside main hooks such as `registerMainApplicationServices(
 The `context` object passed to `handler.register(context)` exposes shell-owned dependencies and
 registration functions. Common extension points are:
 
-- `registerPositionCardRenderer(cardType, renderer)` selects a card renderer by `position.card.type`.
-- `registerPositionActionHandler(cardType, handler)` handles actions from snapshot-backed cards.
-- `registerPositionRemovalHandler(cardType, handler)` handles cleanup when a snapshot disappears.
+- `cardRuntime.registerCardType(definition)` selects a runtime-composed snapshot or legacy row type.
+- `cardRuntime.registerCardView(name, renderer)` registers a snapshot body/view.
+- `cardRuntime.registerCardControl(name, factory)` registers action or shared controls.
+- `cardRuntime.registerCardShape(name, composer)` registers the final card layout.
+- `registerPositionCardRenderer`, `registerPositionActionHandler`, and `registerPositionRemovalHandler`
+  are transitional compatibility APIs for card types that have not migrated to runtime composition.
 - `registerInstrumentDisplayPolicy(policy)` contributes shared bid/ask/spread display policy.
 - `registerCardStateHook(hook)` contributes card-state refresh behavior.
 - `registerRendererLayer(layer)` adds a shell render pass. The layer receives `{ grid }` and may
@@ -64,9 +67,17 @@ Level-order cards are registered by `app/services/levelOrder/manifest.js`:
 const rendererPositionHandlers = [{
   cardType: 'levelOrder',
   register(context = {}) {
-    context.registerPositionActionHandler?.('levelOrder', actionHandler);
-    context.registerPositionCardRenderer?.('levelOrder', positionRenderer);
-    context.registerPositionRemovalHandler?.('levelOrder', removalHandler);
+    const runtime = context.cardRuntime;
+    runtime.registerCardView?.('level-order-body', positionView);
+    runtime.registerCardControl?.('level-order-actions', actionControlFactory);
+    runtime.registerCardShape?.('level-order-position-card', positionShape);
+    runtime.registerCardType?.({
+      type: 'levelOrder',
+      view: 'level-order-body',
+      controls: ['level-order-actions'],
+      shape: 'level-order-position-card',
+      onRemovePosition: removalHandler
+    });
   }
 }];
 ```

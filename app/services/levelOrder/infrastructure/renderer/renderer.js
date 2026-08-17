@@ -1,4 +1,5 @@
 const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('../../domain/strategy');
+const { createCardRuntimeLibrary } = require('../../../../infrastructure/renderer/cardRuntime/library');
 
 function isLevelOrderChildPosition(position = {}) {
   const meta = position.source?.meta || position.executionIntent?.meta || position.card?.data?.meta || {};
@@ -25,6 +26,11 @@ function createLevelOrderRenderer({
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
+  const cardLibrary = createCardRuntimeLibrary({
+    el,
+    document: typeof document !== 'undefined' ? document : null
+  });
+
   function createLevelOrderBody(row, key, $pointSize) {
     const defaults = resolveLevelOrderDefaults(getConfig?.() || {}, row.ticker);
     const defaultRisk = orderCalc.defaultRiskUsd({
@@ -143,6 +149,11 @@ function createLevelOrderRenderer({
         const buttonReason = action => commonReason || (!quoteOk(action) ? quoteByAction[action]?.reason : '');
         if (this._btns) this._btns.querySelectorAll('button').forEach(b => {
           const action = String(b.dataset.kind || '').toUpperCase();
+          if (action !== 'LB' && action !== 'LS') {
+            b.disabled = false;
+            b.removeAttribute('title');
+            return;
+          }
           const buttonValid = commonValid && quoteOk(action);
           b.disabled = !buttonValid;
           const title = buttonReason(action);
@@ -230,27 +241,9 @@ function createLevelOrderRenderer({
     return false;
   }
 
-  function createLevelOrderPositionCard({
-    position,
-    key,
-    title,
-    createActionButton,
-    createActionsFromSnapshot,
-    requestRemove
-  } = {}) {
+  function createLevelOrderPositionView({ position = {}, key } = {}) {
     const row = positionRow(position);
     trackPositionInstrument(position);
-    const card = el('div', 'card position-card');
-    card.setAttribute('data-rowkey', key);
-    card.setAttribute('data-position-id', position.id);
-    card.setAttribute('data-card-type', 'levelOrder');
-    card.setAttribute('data-ticker', row.ticker || '');
-    card.setAttribute('data-instrument-type', row.instrumentType || '');
-
-    const head = el('div', 'row');
-    const left = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
-    left.appendChild(el('div', null, title || row.ticker || position.id || 'Position', { style: 'font-weight:600;font-size:13px' }));
-
     const $levelPointSize = inputNumber('Pt', 'point-size');
     $levelPointSize.title = 'Point price override';
     Object.assign($levelPointSize.style, {
@@ -260,43 +253,18 @@ function createLevelOrderRenderer({
       fontSize: '11px',
       borderRadius: '5px'
     });
-    left.appendChild($levelPointSize);
-    head.appendChild(left);
-
-    const right = el('div', null, null, { style: 'display:flex;align-items:center;gap:6px' });
-    const status = el('span', 'card__status');
-    status.style.display = 'none';
-    right.appendChild(status);
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.textContent = String.fromCharCode(215);
-    close.className = 'card__close';
-    Object.assign(close.style, {
-      border: 'none',
-      background: 'transparent',
-      width: '22px',
-      height: '22px',
-      lineHeight: '22px',
-      textAlign: 'center',
-      fontSize: '16px',
-      cursor: 'pointer',
-      borderRadius: '4px',
-      color: '#c62828',
-      marginLeft: '8px'
-    });
-    close.title = 'Remove card';
-    close.addEventListener('click', async (event) => {
-      event.stopPropagation();
-      if (typeof requestRemove !== 'function') return;
-      close.disabled = true;
-      await requestRemove(position).catch(() => {
-        close.disabled = false;
-      });
-    });
-    right.appendChild(close);
-    head.appendChild(right);
-
     const body = createLevelOrderBody(row, key, $levelPointSize);
+    body.pointSizeInput = $levelPointSize;
+    body.positionRow = row;
+    return body;
+  }
+
+  function createLevelOrderActionsControl({
+    position = {},
+    body,
+    createActionButton,
+    handleAction
+  } = {}) {
     const btns = el('div', 'btns position-card__actions');
     const actions = Array.isArray(position.card?.actions) ? position.card.actions : [];
     const cols = Math.max(1, actions.length);
@@ -309,25 +277,90 @@ function createLevelOrderRenderer({
         kind,
         className: (action.style || kind || 'action').toLowerCase(),
         onClick: async () => {
-          const validated = body.validate(kind);
-          if (!validated.valid) return;
-          return createActionsFromSnapshot(position, action, validated);
+          let validated = {};
+          if (isLevelOrderPlacementAction(action)) {
+            validated = body.validate(kind);
+            if (!validated.valid) return { status: 'rejected', reason: 'Invalid level order' };
+          }
+          if (typeof handleAction !== 'function') {
+            return { status: 'unsupported', reason: `Unsupported position action ${action.command || kind}` };
+          }
+          const data = position.card?.data || {};
+          return handleAction(position, action, {
+            ...(action.payload || {}),
+            ticker: data.ticker || position.ticker || data.symbol || position.symbol,
+            symbol: data.symbol || position.symbol || data.ticker || position.ticker,
+            provider: data.provider || position.provider,
+            instrumentType: position.instrumentType || data.instrumentType,
+            action: action.id || action.label,
+            positionId: position.id,
+            ...validated
+          });
         }
       });
-      btns.appendChild(button);
+      if (button) btns.appendChild(button);
     }
+    btns._positionActions = actions;
+    return btns;
+  }
+
+  function createLevelOrderPositionCard({
+    position = {},
+    key,
+    title,
+    body,
+    view,
+    controls = [],
+    actions = [],
+    requestRemove
+  } = {}) {
+    const resolvedBody = body || view;
+    const row = resolvedBody?.positionRow || positionRow(position);
+    const card = el('div', 'card position-card');
+    card.setAttribute('data-rowkey', key);
+    card.setAttribute('data-position-id', position.id);
+    card.setAttribute('data-card-type', 'levelOrder');
+    card.setAttribute('data-ticker', row.ticker || '');
+    card.setAttribute('data-instrument-type', row.instrumentType || '');
+
+    let close;
+    close = cardLibrary.controls.createRemoveControl({
+      color: '#c62828',
+      onRemove: async () => {
+        if (typeof requestRemove !== 'function') return;
+        close.disabled = true;
+        await requestRemove(position).catch(() => {
+          close.disabled = false;
+        });
+      }
+    });
+    const head = cardLibrary.views.createHeaderView({
+      title: title || row.ticker || position.id || 'Position',
+      status: cardLibrary.views.createStatusView(),
+      removeControl: close
+    });
+    if (resolvedBody?.pointSizeInput) {
+      head.firstElementChild?.appendChild(resolvedBody.pointSizeInput);
+    }
+
+    const btns = controls.find(control => control?.nodeType)
+      || controls.find(control => control?.element?.nodeType)?.element
+      || el('div', 'btns position-card__actions');
 
     card.appendChild(head);
     card.appendChild(el('div', 'meta'));
-    card.appendChild(body.line);
+    if (resolvedBody?.line) card.appendChild(resolvedBody.line);
     card.appendChild(btns);
     const note = el('div', 'card__note');
     card.appendChild(note);
 
-    body.setButtons(btns);
-    if (body.setNote) body.setNote(note);
-    body.validate();
-    card._validate = () => body.validate();
+    resolvedBody?.setButtons?.(btns);
+    resolvedBody?.setNote?.(note);
+    resolvedBody?.validate?.();
+    if (typeof resolvedBody?.validate === 'function') {
+      card._validate = () => resolvedBody.validate();
+    }
+    card._positionActions = actions;
     return card;
   }
 
@@ -469,6 +502,8 @@ function createLevelOrderRenderer({
 
   return {
     createLevelOrderBody,
+    createLevelOrderPositionView,
+    createLevelOrderActionsControl,
     renderPositionCard,
     createLevelOrderPositionCard,
     dispatchPositionAction,

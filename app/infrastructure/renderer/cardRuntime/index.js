@@ -261,6 +261,8 @@ function createCardRuntime(options = {}) {
       return () => unregisterFrom(this.positionRemovedHooks, hook);
     },
 
+    // Transitional snapshot-card compatibility APIs. New card types should use
+    // registerCardType/registerCardView/registerCardControl/registerCardShape.
     registerPositionCardRenderer(cardType, renderer) {
       if (!cardType || typeof renderer !== 'function') return false;
       this.positionCardRenderers[cardType] = renderer;
@@ -379,6 +381,59 @@ function createCardRuntime(options = {}) {
 
     getCardShape(name) {
       return cardShapes.get(name);
+    },
+
+    createPositionCard(position = {}, context = {}) {
+      const resolutionContext = { ...context, kind: 'position' };
+      const definition = this.resolveCardType(position, resolutionContext);
+      if (!definition?.shape || !definition?.view) return undefined;
+      if (!Array.isArray(definition.controls) || definition.controls.length === 0) return undefined;
+
+      const shape = this.getCardShape(definition.shape);
+      const viewRenderer = this.getCardView(definition.view);
+      const controlFactories = definition.controls.map(name => this.getCardControl(name));
+      if (typeof shape !== 'function' || typeof viewRenderer !== 'function') return undefined;
+      if (controlFactories.some(factory => !factory)) return undefined;
+
+      const componentContext = {
+        ...context,
+        kind: 'position',
+        position,
+        definition,
+        runtime: this
+      };
+      const body = viewRenderer(componentContext);
+      if (!body) return undefined;
+      const controls = controlFactories.map(factory => (
+        typeof factory === 'function'
+          ? factory({ ...componentContext, body, view: body })
+          : factory
+      ));
+      if (controls.some(control => !control)) return undefined;
+
+      const actions = Array.isArray(position.card?.actions) ? position.card.actions : [];
+      const requestRemove = context.requestRemove || context.requestRemovePosition;
+      return shape({
+        ...componentContext,
+        body,
+        view: body,
+        controls,
+        actions,
+        requestRemove,
+        createActionsFromSnapshot: context.createActionsFromSnapshot || context.dispatchPositionAction,
+        rendererDependencies: context.rendererDependencies || context
+      });
+    },
+
+    cleanupPositionCard(position = {}, context = {}) {
+      const definition = this.resolveCardType(position, { ...context, kind: 'position' });
+      if (typeof definition?.onRemovePosition !== 'function') return false;
+      return definition.onRemovePosition(position, {
+        ...context,
+        kind: 'position',
+        definition,
+        runtime: this
+      });
     }
   };
 

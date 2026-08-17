@@ -56,6 +56,94 @@ function run() {
   assert.strictEqual(runtime.getCardControl('remove'), undefined);
   assert.strictEqual(runtime.getCardShape('trade-card'), undefined);
 
+  const snapshotRuntime = createCardRuntime();
+  const snapshotCalls = [];
+  const snapshotBody = { type: 'snapshot-body' };
+  const snapshotControl = { type: 'snapshot-control' };
+  const snapshotCard = { type: 'snapshot-card' };
+  const removedSnapshots = [];
+  snapshotRuntime.registerCardView('snapshot-view', context => {
+    snapshotCalls.push(['view', context]);
+    return snapshotBody;
+  });
+  snapshotRuntime.registerCardControl('snapshot-actions', context => {
+    snapshotCalls.push(['control', context]);
+    return snapshotControl;
+  });
+  snapshotRuntime.registerCardShape('snapshot-shape', context => {
+    snapshotCalls.push(['shape', context]);
+    return snapshotCard;
+  });
+  snapshotRuntime.registerCardType({
+    type: 'snapshot',
+    view: 'snapshot-view',
+    controls: ['snapshot-actions'],
+    shape: 'snapshot-shape',
+    onRemovePosition(position, context) {
+      removedSnapshots.push([position, context]);
+      return true;
+    }
+  });
+  const snapshot = {
+    id: 'position-1',
+    card: {
+      type: 'snapshot',
+      actions: [{ id: 'OPEN', command: 'position.open' }]
+    }
+  };
+  const requestRemove = () => true;
+  const dispatchPositionAction = () => true;
+  assert.strictEqual(snapshotRuntime.createPositionCard(snapshot, {
+    key: 'position|position-1',
+    title: 'Snapshot title',
+    requestRemove,
+    dispatchPositionAction,
+    rendererDependencies: { el: 'renderer-el' }
+  }), snapshotCard);
+  assert.deepStrictEqual(snapshotCalls.map(call => call[0]), ['view', 'control', 'shape']);
+  assert.strictEqual(snapshotCalls[0][1].kind, 'position');
+  assert.strictEqual(snapshotCalls[0][1].position, snapshot);
+  assert.strictEqual(snapshotCalls[1][1].body, snapshotBody);
+  assert.strictEqual(snapshotCalls[2][1].view, snapshotBody);
+  assert.deepStrictEqual(snapshotCalls[2][1].controls, [snapshotControl]);
+  assert.strictEqual(snapshotCalls[2][1].actions, snapshot.card.actions);
+  assert.strictEqual(snapshotCalls[2][1].requestRemove, requestRemove);
+  assert.strictEqual(snapshotCalls[2][1].createActionsFromSnapshot, dispatchPositionAction);
+  assert.deepStrictEqual(snapshotCalls[2][1].rendererDependencies, { el: 'renderer-el' });
+  assert.strictEqual(snapshotRuntime.cleanupPositionCard(snapshot, { reason: 'removed' }), true);
+  assert.strictEqual(removedSnapshots.length, 1);
+  assert.strictEqual(removedSnapshots[0][0], snapshot);
+  assert.strictEqual(removedSnapshots[0][1].kind, 'position');
+  assert.strictEqual(removedSnapshots[0][1].reason, 'removed');
+
+  const incompleteRuntime = createCardRuntime();
+  incompleteRuntime.registerCardType({
+    type: 'missing-shape',
+    view: 'registered-view',
+    controls: ['registered-control'],
+    shape: 'missing-shape'
+  });
+  incompleteRuntime.registerCardType({
+    type: 'missing-view',
+    view: 'missing-view',
+    controls: ['registered-control'],
+    shape: 'registered-shape'
+  });
+  incompleteRuntime.registerCardType({
+    type: 'missing-control',
+    view: 'registered-view',
+    controls: ['missing-control'],
+    shape: 'registered-shape'
+  });
+  incompleteRuntime.registerCardView('registered-view', () => ({}));
+  incompleteRuntime.registerCardControl('registered-control', () => ({}));
+  incompleteRuntime.registerCardShape('registered-shape', () => ({}));
+  assert.strictEqual(incompleteRuntime.createPositionCard({ card: { type: 'missing-shape' } }), undefined);
+  assert.strictEqual(incompleteRuntime.createPositionCard({ card: { type: 'missing-view' } }), undefined);
+  assert.strictEqual(incompleteRuntime.createPositionCard({ card: { type: 'missing-control' } }), undefined);
+  assert.strictEqual(incompleteRuntime.createPositionCard({ card: { type: 'unregistered' } }), undefined);
+  assert.strictEqual(incompleteRuntime.cleanupPositionCard({ card: { type: 'unregistered' } }), false);
+
   const compositionCalls = [];
   const compositionRuntime = createCardRuntime();
   assert.strictEqual(Object.prototype.hasOwnProperty.call(compositionRuntime, 'registerOrderCardInstrumentHandler'), false);

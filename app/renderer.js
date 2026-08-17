@@ -308,6 +308,11 @@ function notifyPositionSnapshot(position = {}) {
 
 function notifyPositionRemoved(positionOrEvent = {}) {
   let removed = false;
+  try {
+    removed = cardRuntime.cleanupPositionCard(positionOrEvent) === true || removed;
+  } catch (err) {
+    console.error('[cardRuntime] position cleanup failed', err?.message || err);
+  }
   for (const hook of cardRuntime.positionRemovedHooks) {
     try {
       removed = hook(positionOrEvent) === true || removed;
@@ -902,6 +907,7 @@ async function requestRemovePosition(position = {}) {
     || ['archived', 'cancelled'].includes(result.position?.state);
   if (removed) {
     removePositionSnapshot(position.id);
+    notifyPositionRemoved(position);
     render();
   }
   return result;
@@ -1010,7 +1016,31 @@ function createPositionActions(position = {}) {
 }
 
 function createPositionSnapshotCard(position = {}) {
-  return positionsRenderer.createPositionSnapshotCard(position);
+  const key = positionKey(position);
+  const title = positionCardTitle(position);
+  const runtimeCard = cardRuntime.createPositionCard(position, {
+    key,
+    title,
+    el,
+    btn,
+    createPositionDataGrid,
+    createActionButton: ({ label, kind, className, onClick }) => {
+      const button = btn(label, className, onClick);
+      button.dataset.kind = kind;
+      return button;
+    },
+    dispatchPositionAction,
+    requestRemove: requestRemovePosition,
+    requestRemovePosition,
+    rendererDependencies: {
+      el,
+      btn,
+      createPositionDataGrid,
+      positionKey,
+      positionCardTitle
+    }
+  });
+  return runtimeCard || positionsRenderer.createPositionSnapshotCard(position);
 }
 
 function removePositionSnapshotsForRow(row = {}) {
@@ -1021,6 +1051,7 @@ function removePositionSnapshotsForRow(row = {}) {
     cardStateApi.clearCardState(key);
     cardStateApi.clearPendingExecLabel(key);
     removePositionSnapshot(position.id);
+    notifyPositionRemoved(position);
     ipcRenderer.invoke('positions:remove', {
       positionId: position.id,
       reason: 'renderer.remove-extension-row'

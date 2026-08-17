@@ -83,9 +83,14 @@ function createPositionsRenderer({
 
     ipcRenderer.on('positions:changed', (_evt, payload = {}) => {
       if (payload.event?.type === 'position.removed' || payload.event?.type === 'position.archived') {
+        const removedId = payload.position?.id || payload.event?.positionId;
+        const storedPosition = removedId ? positionsById.get(String(removedId)) : undefined;
         const removedSnapshot = removePositionSnapshot(payload.position || payload.event?.positionId);
+        const removedPosition = payload.position?.card?.type || payload.position?.source?.cardType
+          ? payload.position
+          : storedPosition || payload.position || payload.event;
         const removedFallback = typeof onPositionRemoved === 'function'
-          ? onPositionRemoved(payload.position || payload.event)
+          ? onPositionRemoved(removedPosition)
           : false;
         debugPositionEvents('renderer.positions:changed:receive', {
           eventType: payload.event?.type || '',

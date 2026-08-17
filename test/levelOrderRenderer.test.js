@@ -120,6 +120,17 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 20));
 
   assert.strictEqual(t.orderCardsRows.some(row => row.cardType === 'levelOrder'), false);
+  assert.strictEqual(t.positionCardRenderers.levelOrder, undefined);
+  assert.strictEqual(t.cardRuntime.positionActionHandlers.levelOrder, undefined);
+  assert.strictEqual(t.cardRuntime.positionRemovalHandlers.levelOrder, undefined);
+  assert.strictEqual(typeof t.cardRuntime.getCardView('level-order-body'), 'function');
+  assert.strictEqual(typeof t.cardRuntime.getCardControl('level-order-actions'), 'function');
+  assert.strictEqual(typeof t.cardRuntime.getCardShape('level-order-position-card'), 'function');
+  const levelOrderDefinition = t.cardRuntime.resolveCardType(initialPosition, { kind: 'position' });
+  assert.strictEqual(levelOrderDefinition.view, 'level-order-body');
+  assert.deepStrictEqual(levelOrderDefinition.controls, ['level-order-actions']);
+  assert.strictEqual(levelOrderDefinition.shape, 'level-order-position-card');
+  assert.strictEqual(typeof levelOrderDefinition.onRemovePosition, 'function');
   const key = 'position|pos-level-1';
   let card = t.cardByKey(key);
   assert(card);
@@ -130,6 +141,7 @@ async function run() {
   assert.strictEqual(card.querySelector('input.sl').value, '4');
   assert.strictEqual(card.querySelector('input.qty').value, '3');
   assert.strictEqual(card.querySelector('input.tp').value, '12');
+  assert.strictEqual(card.querySelector('input.point-size').value, '0.5');
   assert.strictEqual(document.querySelector('.card[data-ticker="LEGACY"]'), null);
 
   assert(calls.find(c => c.ch === 'instrument:get' && c.payload.symbol === 'TST'));
@@ -153,6 +165,7 @@ async function run() {
 
   const parentRequestId = call.payload.requestId;
   assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
+  assert.strictEqual(t.cardStateApi.getPendingExecLabel(key), 'LB');
 
   handlers['execution:pending'](null, {
     reqId: `${parentRequestId}_1`,
@@ -218,6 +231,11 @@ async function run() {
   assert.strictEqual(t.cardStateApi.getCardState(key), undefined);
   card = t.cardByKey(key);
   assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['close']);
+  assert.strictEqual(card.querySelector('button.btn[data-kind="close"]').disabled, false);
+  card.querySelector('button.btn[data-kind="close"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(calls.some(c => c.ch === 'execution:close-level-order-positions'));
+  assert(calls.some(c => c.ch === 'positions:remove' && c.payload.reason === 'renderer.levelOrder.close'));
 
   const activeSnapshot = levelOrderSnapshot('pos-level-1', {
     ...placedSnapshot,
@@ -242,6 +260,10 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 0));
   card = t.cardByKey(key);
   assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['archive']);
+  assert.strictEqual(card.querySelector('button.btn[data-kind="archive"]').disabled, false);
+  card.querySelector('button.btn[data-kind="archive"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert(calls.some(c => c.ch === 'positions:remove' && c.payload.reason === 'renderer.levelOrder.archive'));
 
   Module._load = originalLoad;
   console.log('levelOrderRenderer tests passed');
