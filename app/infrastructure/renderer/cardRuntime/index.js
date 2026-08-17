@@ -199,9 +199,6 @@ function createCardRuntime(options = {}) {
     rendererRowProviders: [],
     positionSnapshotHooks: [],
     positionRemovedHooks: [],
-    positionActionHandlers: {},
-    positionCardRenderers: {},
-    positionRemovalHandlers: {},
     rendererLegacyGuards: [],
     cardTypeDefinitions,
     cardViews: cardViews.values,
@@ -259,32 +256,6 @@ function createCardRuntime(options = {}) {
       if (typeof hook !== 'function') return false;
       this.positionRemovedHooks.push(hook);
       return () => unregisterFrom(this.positionRemovedHooks, hook);
-    },
-
-    // Transitional snapshot-card compatibility APIs. New card types should use
-    // registerCardType/registerCardView/registerCardControl/registerCardShape.
-    registerPositionCardRenderer(cardType, renderer) {
-      if (!cardType || typeof renderer !== 'function') return false;
-      this.positionCardRenderers[cardType] = renderer;
-      return () => {
-        if (this.positionCardRenderers[cardType] === renderer) delete this.positionCardRenderers[cardType];
-      };
-    },
-
-    registerPositionActionHandler(cardType, handler) {
-      if (!cardType || typeof handler !== 'function') return false;
-      this.positionActionHandlers[cardType] = handler;
-      return () => {
-        if (this.positionActionHandlers[cardType] === handler) delete this.positionActionHandlers[cardType];
-      };
-    },
-
-    registerPositionRemovalHandler(cardType, handler) {
-      if (!cardType || typeof handler !== 'function') return false;
-      this.positionRemovalHandlers[cardType] = handler;
-      return () => {
-        if (this.positionRemovalHandlers[cardType] === handler) delete this.positionRemovalHandlers[cardType];
-      };
     },
 
     registerRendererLegacyGuard(guard = {}) {
@@ -395,12 +366,16 @@ function createCardRuntime(options = {}) {
       if (typeof shape !== 'function' || typeof viewRenderer !== 'function') return undefined;
       if (controlFactories.some(factory => !factory)) return undefined;
 
+      const requestRemove = context.requestRemove || context.requestRemovePosition;
+      const createActionsFromSnapshot = context.createActionsFromSnapshot || context.dispatchPositionAction;
       const componentContext = {
         ...context,
         kind: 'position',
         position,
         definition,
-        runtime: this
+        runtime: this,
+        requestRemove,
+        createActionsFromSnapshot
       };
       const body = viewRenderer(componentContext);
       if (!body) return undefined;
@@ -412,7 +387,6 @@ function createCardRuntime(options = {}) {
       if (controls.some(control => !control)) return undefined;
 
       const actions = Array.isArray(position.card?.actions) ? position.card.actions : [];
-      const requestRemove = context.requestRemove || context.requestRemovePosition;
       return shape({
         ...componentContext,
         body,
@@ -420,7 +394,7 @@ function createCardRuntime(options = {}) {
         controls,
         actions,
         requestRemove,
-        createActionsFromSnapshot: context.createActionsFromSnapshot || context.dispatchPositionAction,
+        createActionsFromSnapshot,
         rendererDependencies: context.rendererDependencies || context
       });
     },

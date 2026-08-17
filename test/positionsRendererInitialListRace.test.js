@@ -21,15 +21,7 @@ async function run() {
 
   const renderer = createPositionsRenderer({
     ipcRenderer,
-    el: () => ({ appendChild() {}, setAttribute() {} }),
-    createPositionDataGrid: () => ({}),
-    createPositionActions: () => ({}),
-    positionKey: position => `position|${position.id}`,
-    positionCardTitle: position => position.ticker,
-    render: () => { renderCount += 1; },
-    positionCardRenderers: {
-      regular: () => ({ classList: { contains: () => true } })
-    }
+    render: () => { renderCount += 1; }
   });
 
   renderer.mount();

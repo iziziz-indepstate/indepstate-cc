@@ -47,21 +47,11 @@ cardRuntime.registerCardType({
   type: 'option',
   match: snapshotOrRow => snapshotOrRow.card?.type === 'option',
   shape: 'trade-card',
-  views: ['identity', 'optionLegs', 'payoff', 'valuation', 'status'],
+  view: 'optionSnapshot',
   controls: ['openOption', 'closeOption', 'remove'],
-  legacyInstrumentTypes: ['OPT'],
-  legacyCardTypes: ['option', 'optionstrat'],
-  legacyRow: {
-    title: ({ row }) => row.name || row.ticker,
-    matchesExistingRow: ({ incomingRow, existingRow, rowKey }) => rowKey(incomingRow) === rowKey(existingRow)
-  },
-  actions: {
-    open: context => context.commands.send('position.open', context.payload),
-    close: context => context.commands.send('position.close', context.payload)
-  }
 });
 
-cardRuntime.registerCardView('optionLegs', renderer);
+cardRuntime.registerCardView('optionSnapshot', renderer);
 cardRuntime.registerCardControl('closeOption', factory);
 cardRuntime.registerCardShape('trade-card', composer);
 ```
@@ -80,7 +70,7 @@ The stable snapshot definition fields are:
 - `shape` for final DOM composition;
 - optional `onRemovePosition(position, context)` for renderer cleanup.
 
-The shape receives `position`, `key`, `title`, `body`/`view`, snapshot `actions`, resolved `controls`, `requestRemove`, `createActionsFromSnapshot`, and injected renderer dependencies. The shell may build `createActionsFromSnapshot` from its generic `dispatchPositionAction` helper, but shapes should depend on the composed callback name. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined`; the shell then uses the transitional `positionCardRenderers` fallback. The helper composes presentation only and does not store or infer lifecycle state.
+The view, controls, and shape receive a normalized composition context containing `position`, `key`, `title`, `requestRemove`, `createActionsFromSnapshot`, and injected renderer dependencies. The shape additionally receives `body`/`view`, snapshot `actions`, and resolved `controls`. The shell may build `createActionsFromSnapshot` from its generic `dispatchPositionAction` helper, but components should depend on the composed callback name. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined` and the shell does not render that snapshot. The helper composes presentation only and does not store or infer lifecycle state.
 
 ## Built-In Card Library
 
@@ -113,7 +103,9 @@ During renderer bootstrap, `orderCards` registers these reusable entries in `car
 | Control | `standard-remove` |
 | Control | `standard-retry` |
 | Control | `standard-action-buttons` |
+| Control | `regular-position-actions` |
 | View | `position-data-grid` |
+| View | `regular-position-view` |
 
 Other renderer modules can resolve them through `getCardShape`, `getCardControl`, and `getCardView`. The library only owns generic DOM composition. `orderCards` continues to own the EQ/FX/CX input bodies, sizing and validation, placement, regular action semantics, legacy row ingestion, and private handler lookup. Specialized modules such as `optionstrat` and `levelOrder` may adopt the named library pieces independently.
 
@@ -126,10 +118,10 @@ When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runt
 Each service owns the mappings that are specific to its aggregate, provider, strategy, or legacy adapter:
 
 - `orderCards` registers regular/manual order cards and standard order controls, supplies legacy rows and the regular renderer implementation, and injects its private lookups into the shell-owned legacy row presentation adapter while row-backed cards still exist.
-- `optionstrat` registers option card shapes, option legs views, payoff and valuation views, OptionStrat open/close controls, and option-specific reconciliation.
+- `optionstrat` registers separate legacy-row and snapshot views/controls, snapshot definitions for both `option` and `optionstrat`, option card shapes, payoff and valuation rendering, and option-specific reconciliation.
 - `levelOrder` registers level-order controls, level input views, level-order position card views, and LB/LS action behavior.
 
-The legacy `registerPositionCardRenderer`, `registerPositionActionHandler`, and `registerPositionRemovalHandler` methods remain transitional compatibility APIs for card types that have not completed this migration. New snapshot implementations should use the card type/view/control/shape registries and `onRemovePosition`.
+Snapshot cards are registered only through `registerCardType`, `registerCardView`, `registerCardControl`, and `registerCardShape`. Service-owned renderer cleanup belongs in the definition's `onRemovePosition` hook and is invoked through `cardRuntime.cleanupPositionCard(position)`.
 
 Service manifests should populate the runtime registries during renderer bootstrap. Service-specific card bodies, validation UI, action payload mapping, and removal/reconciliation behavior should stay in the owning service.
 
@@ -149,6 +141,6 @@ The target migration is:
 
 1. Keep generic renderer state, legacy row presentation, and legacy row access behind the shell card runtime facades.
 2. Keep `orderCards` as the source for regular/manual order cards and legacy rows without exporting its private row state or handlers into renderer context.
-3. Register `optionstrat`, `levelOrder`, and later card types through card runtime registries.
+3. Register `regular`, `optionstrat`, `levelOrder`, and later snapshot card types only through card runtime registries.
 4. Promote stable registry contracts once multiple services use the same concepts.
 5. Delete the remaining row-backed path, legacy guards, and transitional presentation adapter when snapshot-backed read models fully replace them.

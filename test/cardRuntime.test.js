@@ -9,6 +9,20 @@ function run() {
   const uiState = new Map([['old', { expanded: true }]]);
   const shellState = { filter: '' };
   const runtime = createCardRuntime({ state: shellState, uiState });
+  for (const name of [
+    'registerPositionCardRenderer',
+    'registerPositionActionHandler',
+    'registerPositionRemovalHandler',
+    'positionCardRenderers',
+    'positionActionHandlers',
+    'positionRemovalHandlers'
+  ]) {
+    assert.strictEqual(
+      Object.prototype.hasOwnProperty.call(runtime, name),
+      false,
+      `card runtime must not expose ${name}`
+    );
+  }
 
   runtime.stateApi.setCardState('old', 'pending');
   runtime.stateApi.setPendingExecLabel('old', 'bar-close');
@@ -104,6 +118,8 @@ function run() {
   assert.strictEqual(snapshotCalls[0][1].kind, 'position');
   assert.strictEqual(snapshotCalls[0][1].position, snapshot);
   assert.strictEqual(snapshotCalls[1][1].body, snapshotBody);
+  assert.strictEqual(snapshotCalls[1][1].requestRemove, requestRemove);
+  assert.strictEqual(snapshotCalls[1][1].createActionsFromSnapshot, dispatchPositionAction);
   assert.strictEqual(snapshotCalls[2][1].view, snapshotBody);
   assert.deepStrictEqual(snapshotCalls[2][1].controls, [snapshotControl]);
   assert.strictEqual(snapshotCalls[2][1].actions, snapshot.card.actions);

@@ -120,9 +120,9 @@ async function run() {
   await new Promise(resolve => setTimeout(resolve, 20));
 
   assert.strictEqual(t.orderCardsRows.some(row => row.cardType === 'levelOrder'), false);
-  assert.strictEqual(t.positionCardRenderers.levelOrder, undefined);
-  assert.strictEqual(t.cardRuntime.positionActionHandlers.levelOrder, undefined);
-  assert.strictEqual(t.cardRuntime.positionRemovalHandlers.levelOrder, undefined);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(t, 'positionCardRenderers'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(t.cardRuntime, 'positionActionHandlers'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(t.cardRuntime, 'positionRemovalHandlers'), false);
   assert.strictEqual(typeof t.cardRuntime.getCardView('level-order-body'), 'function');
   assert.strictEqual(typeof t.cardRuntime.getCardControl('level-order-actions'), 'function');
   assert.strictEqual(typeof t.cardRuntime.getCardShape('level-order-position-card'), 'function');

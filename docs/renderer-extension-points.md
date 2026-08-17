@@ -16,8 +16,8 @@ registration functions. Common extension points are:
 - `cardRuntime.registerCardView(name, renderer)` registers a snapshot body/view.
 - `cardRuntime.registerCardControl(name, factory)` registers action or shared controls.
 - `cardRuntime.registerCardShape(name, composer)` registers the final card layout.
-- `registerPositionCardRenderer`, `registerPositionActionHandler`, and `registerPositionRemovalHandler`
-  are transitional compatibility APIs for card types that have not migrated to runtime composition.
+- `cardRuntime.cleanupPositionCard(position)` invokes the matched definition's optional
+  `onRemovePosition(position, context)` cleanup hook.
 - `registerInstrumentDisplayPolicy(policy)` contributes shared bid/ask/spread display policy.
 - `registerCardStateHook(hook)` contributes card-state refresh behavior.
 - `registerRendererLayer(layer)` adds a shell render pass. The layer receives `{ grid }` and may
@@ -54,8 +54,15 @@ const rendererHandlers = [{
     context.registerPositionRemovedHook?.((position) => {
       return removeRowsOwnedByPosition(position);
     });
-    context.registerPositionCardRenderer?.('regular', (position) => {
-      return createRegularPositionCard({ position });
+    const runtime = context.cardRuntime;
+    runtime.registerCardView?.('regular-position-view', createRegularPositionView);
+    runtime.registerCardControl?.('regular-position-actions', createRegularPositionActionsControl);
+    runtime.registerCardShape?.('regular-position-card', createRegularPositionCard);
+    runtime.registerCardType?.({
+      type: 'regular',
+      view: 'regular-position-view',
+      controls: ['regular-position-actions'],
+      shape: 'regular-position-card'
     });
   }
 }];
@@ -85,11 +92,20 @@ const rendererPositionHandlers = [{
 Option strategy cards register their supported card types from `app/services/optionstrat/manifest.js`:
 
 ```js
-const rendererPositionHandlers = [{
+const rendererHandlers = [{
   cardType: 'option',
   register(context = {}) {
+    const runtime = context.cardRuntime;
+    runtime.registerCardView?.('option-snapshot-payoff-valuation', optionSnapshotView);
+    runtime.registerCardControl?.('option-snapshot-actions', optionSnapshotActions);
+    runtime.registerCardShape?.('option-snapshot-position-card', optionSnapshotShape);
     for (const cardType of ['option', 'optionstrat']) {
-      context.registerPositionCardRenderer?.(cardType, renderOptionPosition);
+      runtime.registerCardType?.({
+        type: cardType,
+        view: 'option-snapshot-payoff-valuation',
+        controls: ['option-snapshot-actions'],
+        shape: 'option-snapshot-position-card'
+      });
     }
   }
 }];
@@ -101,6 +117,7 @@ const rendererPositionHandlers = [{
 - Do not add module-specific card logic directly to the renderer shell.
 - Do not keep main-only top-level imports in a manifest that the renderer can load.
 - Prefer service-local renderer modules for module UI and action mapping.
+- Register every snapshot card through a card type plus named view, controls, and shape.
 - Use `rendererLegacyGuards` only as transitional compatibility glue.
 
 ## Troubleshooting

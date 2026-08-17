@@ -115,9 +115,8 @@ Implemented renderer extension points:
 - `rendererPositionHandlers` for position/card UI behavior.
 - `rendererLegacyGuards` for transitional filters between snapshot-backed positions and legacy rows/events.
 - `registerCardType`, `registerCardView`, `registerCardControl`, and `registerCardShape` for runtime-composed position cards.
-- `createPositionCard(position, context)` to resolve and compose a snapshot card with a legacy renderer fallback in the shell.
+- `createPositionCard(position, context)` to resolve and compose a snapshot card exclusively from its registered type, view, controls, and shape.
 - `onRemovePosition` on a card type definition for service-owned renderer cleanup.
-- `registerPositionCardRenderer`, `registerPositionActionHandler`, and `registerPositionRemovalHandler` remain transitional compatibility APIs for unmigrated card types.
 - `registerInstrumentDisplayPolicy(policy)` to contribute shared instrument refresh/display behavior.
 - `registerCardStateHook(hook)` to run shared card-state refresh hooks from a service-local runtime.
 

@@ -166,11 +166,7 @@ const rendererHandlers = [{
       cardVisualState,
       ticketBinding,
       setCardState,
-      settingsRuntime,
-      positionKey,
-      btn,
-      dispatchPositionAction,
-      requestRemovePosition
+      settingsRuntime
     } = context;
 
     if (!ipcRenderer || !el || !state || !rowKey) return;
@@ -289,14 +285,14 @@ const rendererHandlers = [{
       }
     };
 
-    cardRuntime.registerCardView?.('option-legs-payoff-valuation', optionStratRenderer.createOptionBody);
-    cardRuntime.registerCardControl?.('option-open', () => ({
+    cardRuntime.registerCardView?.('option-legacy-row-view', optionStratRenderer.createOptionBody);
+    cardRuntime.registerCardControl?.('option-legacy-open', () => ({
       buttons: row => optionOrderCardHandler.buttons?.(row),
       preparePlace: optionOrderCardHandler.preparePlace,
       afterPlaceOk: optionOrderCardHandler.afterPlaceOk,
       scheduleInstantExecution: optionOrderCardHandler.scheduleInstantExecution
     }));
-    cardRuntime.registerCardControl?.('option-close-remove', () => ({
+    cardRuntime.registerCardControl?.('option-legacy-close-remove', () => ({
       placedStatusTitle: optionOrderCardHandler.placedStatusTitle,
       placedButton: optionOrderCardHandler.placedButton,
       closePlacedOrder: optionOrderCardHandler.closePlacedOrder,
@@ -305,17 +301,10 @@ const rendererHandlers = [{
       shouldHideButtonsOnState: optionOrderCardHandler.shouldHideButtonsOnState,
       resetButtons: optionOrderCardHandler.resetButtons
     }));
-    cardRuntime.registerCardShape?.('option-position-card', optionStratRenderer.createOptionPositionCard);
     cardRuntime.registerCardType?.({
-      type: 'option',
-      aliases: ['optionstrat', 'OPT'],
-      match: card => {
-        const cardType = String(card?.card?.type || card?.source?.cardType || card?.cardType || card?.type || '').toLowerCase();
-        return cardType === 'option' || cardType === 'optionstrat' || String(card?.instrumentType || '').toUpperCase() === 'OPT';
-      },
-      view: 'option-legs-payoff-valuation',
-      controls: ['option-open', 'option-close-remove'],
-      shape: 'option-position-card',
+      type: 'option-legacy-row',
+      view: 'option-legacy-row-view',
+      controls: ['option-legacy-open', 'option-legacy-close-remove'],
       legacyInstrumentTypes: ['OPT'],
       legacyCardTypes: ['option', 'optionstrat'],
       legacyRow: {
@@ -328,6 +317,33 @@ const rendererHandlers = [{
         onPositionClosed: optionOrderCardHandler.onPositionClosed
       }
     });
+    cardRuntime.registerCardView?.(
+      'option-snapshot-payoff-valuation',
+      optionStratRenderer.createOptionPositionView
+    );
+    cardRuntime.registerCardControl?.(
+      'option-snapshot-actions',
+      optionStratRenderer.createOptionSnapshotActionsControl
+    );
+    cardRuntime.registerCardShape?.(
+      'option-snapshot-position-card',
+      optionStratRenderer.createOptionPositionCard
+    );
+    const snapshotDefinition = type => ({
+      type,
+      match: (card, runtimeContext = {}) => {
+        if (runtimeContext.kind && runtimeContext.kind !== 'position') return false;
+        const cardType = String(card?.card?.type || card?.source?.cardType || card?.cardType || card?.type || '').toLowerCase();
+        if (type === 'optionstrat') return cardType === 'optionstrat';
+        return cardType === 'option'
+          || (!cardType && String(card?.instrumentType || '').toUpperCase() === 'OPT');
+      },
+      view: 'option-snapshot-payoff-valuation',
+      controls: ['option-snapshot-actions'],
+      shape: 'option-snapshot-position-card'
+    });
+    cardRuntime.registerCardType?.(snapshotDefinition('option'));
+    cardRuntime.registerCardType?.(snapshotDefinition('optionstrat'));
     ipcRenderer.invoke('settings:get', 'optionstrat').then((res) => {
       const cfg = res?.config || res || {};
       const ms = Number(cfg.valuationRefreshMs);
@@ -346,21 +362,6 @@ const rendererHandlers = [{
     });
     optionStratRenderer.startValuationRefresh();
 
-    const register = cardType => cardRuntime.registerPositionCardRenderer?.(cardType, (position) => {
-      return optionStratRenderer.createOptionPositionCard({
-        position,
-        key: positionKey(position),
-        createActionButton: ({ label, kind, className, onClick }) => {
-          const button = btn(label, className, onClick);
-          button.dataset.kind = kind;
-          return button;
-        },
-        createActionsFromSnapshot: (snapshot, action, validated) => dispatchPositionAction(snapshot, action, validated),
-        requestRemove: (snapshot) => requestRemovePosition(snapshot)
-      });
-    });
-    register('option');
-    register('optionstrat');
   }
 }];
 

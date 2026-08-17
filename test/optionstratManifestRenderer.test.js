@@ -28,6 +28,8 @@ async function run() {
               return orderCardHandler;
             },
             createOptionBody: orderCardHandler.createBody,
+            createOptionPositionView: context => ({ type: 'option-snapshot-view', context }),
+            createOptionSnapshotActionsControl: context => ({ type: 'option-snapshot-actions', context }),
             ensureOptionPayoff(row) {
               rendererCalls.push(['ensureOptionPayoff', row]);
             },
@@ -103,9 +105,6 @@ async function run() {
       registerCardShape(name, composer) {
         runtimeCalls.push(['registerCardShape', name, composer]);
       },
-      registerPositionCardRenderer(cardType, renderer) {
-        runtimeCalls.push(['registerPositionCardRenderer', cardType, renderer]);
-      }
     },
     settingsRuntime: {
       onApply(name, fn) {
@@ -118,11 +117,11 @@ async function run() {
   assert.strictEqual(rendererDeps.legacyRows.findLegacyRowByKey('missing'), undefined);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'orderCardsState'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererDeps, 'setLegacyOrderCardState'), false);
-  const cardTypeDefinition = runtimeCalls.find(call => call[0] === 'registerCardType')?.[1];
-  assert.strictEqual(cardTypeDefinition.type, 'option');
-  assert.deepStrictEqual(cardTypeDefinition.legacyInstrumentTypes, ['OPT']);
-  assert.deepStrictEqual(cardTypeDefinition.legacyCardTypes, ['option', 'optionstrat']);
-  const legacyRow = cardTypeDefinition.legacyRow;
+  const legacyDefinition = runtimeCalls.find(call => call[0] === 'registerCardType' && call[1].type === 'option-legacy-row')?.[1];
+  assert(legacyDefinition);
+  assert.deepStrictEqual(legacyDefinition.legacyInstrumentTypes, ['OPT']);
+  assert.deepStrictEqual(legacyDefinition.legacyCardTypes, ['option', 'optionstrat']);
+  const legacyRow = legacyDefinition.legacyRow;
   assert.strictEqual(legacyRow.title({ row: { ticker: 'SPY', name: 'LCS 755/756' } }), 'LCS 755/756');
   assert.strictEqual(legacyRow.title({ row: { ticker: 'SPY' } }), 'SPY');
   assert.strictEqual(legacyRow.matchesExistingRow({
@@ -145,18 +144,29 @@ async function run() {
   assert(rendererCalls.some(call => call[0] === 'setValuationRefreshMs' && call[1] === 7000));
   assert(rendererCalls.some(call => call[0] === 'setDisplayFields' && call[1].pl === true));
   assert(rendererCalls.some(call => call[0] === 'startValuationRefresh'));
-  assert(runtimeCalls.some(call => call[0] === 'registerCardType' && call[1].type === 'option'));
-  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'option-legs-payoff-valuation'));
-  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-open'));
-  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-close-remove'));
-  assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'option-position-card'));
+  const optionDefinition = runtimeCalls.find(call => call[0] === 'registerCardType' && call[1].type === 'option')?.[1];
+  const optionStratDefinition = runtimeCalls.find(call => call[0] === 'registerCardType' && call[1].type === 'optionstrat')?.[1];
+  for (const definition of [optionDefinition, optionStratDefinition]) {
+    assert(definition);
+    assert.strictEqual(definition.view, 'option-snapshot-payoff-valuation');
+    assert.deepStrictEqual(definition.controls, ['option-snapshot-actions']);
+    assert.strictEqual(definition.shape, 'option-snapshot-position-card');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(definition, 'legacyRow'), false);
+  }
+  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'option-legacy-row-view'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'option-snapshot-payoff-valuation'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-legacy-open'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-legacy-close-remove'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'option-snapshot-actions'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'option-snapshot-position-card'));
+  assert.strictEqual(runtimeCalls.some(call => call[0] === 'registerPositionCardRenderer'), false);
 
-  const openControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-open')[2]();
+  const openControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-legacy-open')[2]();
   assert.deepStrictEqual(openControl.buttons({ ticker: 'SPY' }), [{ label: 'OPEN', action: 'OPEN', style: 'bl' }]);
   assert.strictEqual(typeof openControl.preparePlace, 'function');
   assert.strictEqual(typeof openControl.afterPlaceOk, 'function');
   assert.strictEqual(typeof openControl.scheduleInstantExecution, 'function');
-  const closeControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-close-remove')[2]();
+  const closeControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'option-legacy-close-remove')[2]();
   assert.strictEqual(closeControl.placedButton.label, 'CLOSE');
   assert.strictEqual(typeof closeControl.closePlacedOrder, 'function');
   assert.strictEqual(typeof closeControl.shouldKeepFullCardOnState, 'function');

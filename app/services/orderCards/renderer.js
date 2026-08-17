@@ -944,25 +944,45 @@ function isCompactRegularPosition(position = {}) {
   return !!status && !['rejected', 'cancelled', 'failed'].includes(status);
 }
 
-function createRegularPositionCard({
+function createRegularPositionView({
   position = {},
   key,
-  title,
-  instrumentType,
-  createActionButton,
-  dispatchPositionAction,
-  requestRemove
+  instrumentType
 } = {}) {
   const row = regularRowFromPosition(position, key);
   const resolvedInstrumentType = instrumentType || row.instrumentType || detectInstrumentType(row.ticker);
   const compact = isCompactRegularPosition(position);
   const statusText = regularPositionStatus(position);
-  let body = null;
+  let positionBody = null;
   if (isEditableRegularPosition(position)) {
     ensureInstrument(row.ticker, row.provider);
-    body = createBody(row, key, resolvedInstrumentType);
+    positionBody = createBody(row, key, resolvedInstrumentType);
   }
+  return {
+    type: 'regular-position-view',
+    positionBody,
+    positionRow: row,
+    instrumentType: resolvedInstrumentType,
+    compact,
+    statusText
+  };
+}
 
+function createRegularPositionActionsControl({
+  position = {},
+  key,
+  title,
+  body,
+  view,
+  dispatchPositionAction,
+  createActionsFromSnapshot,
+  requestRemove
+} = {}) {
+  const positionView = body || view || createRegularPositionView({ position, key });
+  const positionBody = positionView.positionBody;
+  const row = positionView.positionRow;
+  const resolvedInstrumentType = positionView.instrumentType;
+  const dispatch = createActionsFromSnapshot || dispatchPositionAction;
   const actions = defaultRegularActions(position);
   const onAction = async (action) => {
     const label = action.label || action.action;
@@ -972,47 +992,82 @@ function createRegularPositionCard({
       return;
     }
     if (action.command && !['position.open', 'position.openPending'].includes(action.command)) {
-      const result = await dispatchPositionAction?.(position, action);
+      const result = await dispatch?.(position, action);
       if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
         toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
         shakeCard?.(key);
       }
       return;
     }
-    if (!body) {
-      const result = await dispatchPositionAction?.(position, action);
+    if (!positionBody) {
+      const result = await dispatch?.(position, action);
       if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
         toast?.(`x ${title || row.ticker || position.id || 'Position'}: ${result?.reason || 'Action failed'}`);
         shakeCard?.(key);
       }
       return;
     }
-    const validated = body.validate();
+    const validated = positionBody.validate();
     if (!validated.valid) return;
     await place(kind, row, validated, resolvedInstrumentType, label);
   };
+  return {
+    type: 'regular-position-actions',
+    actions,
+    onAction,
+    actionRows: getButtonRows()
+  };
+}
+
+function createRegularPositionCard({
+  position = {},
+  key,
+  title,
+  instrumentType,
+  body,
+  view,
+  controls = [],
+  createActionButton,
+  dispatchPositionAction,
+  createActionsFromSnapshot,
+  requestRemove
+} = {}) {
+  const positionView = body?.positionRow || view?.positionRow
+    ? (body || view)
+    : createRegularPositionView({ position, key, instrumentType });
+  const control = controls.find(candidate => candidate?.type === 'regular-position-actions')
+    || createRegularPositionActionsControl({
+      position,
+      key,
+      title,
+      body: positionView,
+      dispatchPositionAction,
+      createActionsFromSnapshot,
+      requestRemove
+    });
+  const row = positionView.positionRow;
   const card = library.shapes.createPositionCardShape({
     title: title || row.ticker || position.id || 'Position',
     status: {
-      text: statusText,
-      className: statusText ? '' : 'card__status--draft'
+      text: positionView.statusText,
+      className: positionView.statusText ? '' : 'card__status--draft'
     },
-    body,
-    actions,
-    onAction,
+    body: positionView.positionBody,
+    actions: control.actions,
+    onAction: control.onAction,
     onRemove: () => requestRemove?.(position),
-    compact,
-    actionRows: getButtonRows(),
+    compact: positionView.compact,
+    actionRows: control.actionRows,
     createActionButton,
     attributes: {
       'data-rowkey': key,
       'data-position-id': position.id,
       'data-card-type': 'regular',
       'data-ticker': row.ticker || '',
-      'data-instrument-type': resolvedInstrumentType || ''
+      'data-instrument-type': positionView.instrumentType || ''
     }
   });
-  card._positionActions = actions;
+  card._positionActions = control.actions;
   return card;
 }
 
@@ -1032,6 +1087,8 @@ function createRegularPositionCard({
     scheduleInstantExecution,
     place,
     regularRowFromPosition,
+    createRegularPositionView,
+    createRegularPositionActionsControl,
     createRegularPositionCard,
     instrumentTypeHandlers,
     cardTypeHandlers

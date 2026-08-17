@@ -288,6 +288,13 @@ function createOptionStratRenderer({
     };
   }
 
+  function createOptionPositionView({ position = {} } = {}) {
+    const row = optionSnapshotRow(position);
+    const body = createOptionBody(row);
+    body.positionRow = row;
+    return body;
+  }
+
   function firstText(...values) {
     for (const value of values) {
       if (value == null) continue;
@@ -413,14 +420,70 @@ function createOptionStratRenderer({
     });
   }
 
+  function createOptionSnapshotActionsControl({
+    position = {},
+    key,
+    body,
+    view,
+    createActionButton,
+    createActionsFromSnapshot,
+    dispatchPositionAction,
+    requestRemove
+  } = {}) {
+    const resolvedBody = body || view || createOptionPositionView({ position });
+    const row = resolvedBody.positionRow || optionSnapshotRow(position);
+    const cardKey = key || `position|${position.id || row.ticket || row.ticker}`;
+    const btns = el('div', 'btns position-card__actions');
+    const actions = (Array.isArray(position.card?.actions) ? position.card.actions : [])
+      .filter(action => canRenderOptionSnapshotAction(position, action));
+    btns.style.gridTemplateColumns = `repeat(${Math.max(1, actions.length)},1fr)`;
+    for (const action of actions) {
+      const label = action.label || action.id;
+      const kind = action.id || label;
+      const onClick = async () => {
+        const validated = resolvedBody.validate();
+        if (!validated.valid) return { status: 'rejected', reason: 'Invalid option snapshot' };
+        if (action.command === 'position.close') {
+          const result = await closeOptionSnapshot(position, action);
+          if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
+            toast?.(`x ${row.name || row.ticker || row.symbol}: ${result?.reason || 'Close failed'}`);
+            shakeCard?.(cardKey);
+          }
+          return result;
+        }
+        if (action.command === 'position.remove' && typeof requestRemove === 'function') {
+          const result = await requestRemove(position);
+          return result?.ok === false ? { status: 'error', reason: result.reason } : { status: 'ok' };
+        }
+        const dispatch = createActionsFromSnapshot || dispatchPositionAction;
+        if (typeof dispatch === 'function') {
+          return dispatch(position, action, validated);
+        }
+        return { status: 'unsupported', reason: `Unsupported position action ${action.command || kind}` };
+      };
+      const button = typeof createActionButton === 'function'
+        ? createActionButton({ label, kind, className: (action.style || kind || 'action').toLowerCase(), onClick })
+        : null;
+      if (button) btns.appendChild(button);
+    }
+
+    btns._positionActions = actions;
+    return btns;
+  }
+
   function createOptionPositionCard({
     position = {},
     key,
+    body,
+    view,
+    controls = [],
     createActionButton,
     createActionsFromSnapshot,
+    dispatchPositionAction,
     requestRemove
   } = {}) {
-    const row = optionSnapshotRow(position);
+    const resolvedBody = body || view || createOptionPositionView({ position });
+    const row = resolvedBody.positionRow || optionSnapshotRow(position);
     const cardKey = key || `position|${position.id || row.ticket || row.ticker}`;
     const cardType = position.card?.type || 'option';
     const card = el('div', 'card position-card');
@@ -471,50 +534,29 @@ function createOptionStratRenderer({
     right.appendChild(close);
     head.appendChild(right);
 
-    const body = createOptionBody(row);
-    const btns = el('div', 'btns position-card__actions');
-    const actions = (Array.isArray(position.card?.actions) ? position.card.actions : [])
-      .filter(action => canRenderOptionSnapshotAction(position, action));
-    btns.style.gridTemplateColumns = `repeat(${Math.max(1, actions.length)},1fr)`;
-    for (const action of actions) {
-      const label = action.label || action.id;
-      const kind = action.id || label;
-      const onClick = async () => {
-        const validated = body.validate();
-        if (!validated.valid) return { status: 'rejected', reason: 'Invalid option snapshot' };
-        if (action.command === 'position.close') {
-          const result = await closeOptionSnapshot(position, action);
-          if (!result || result.status === 'error' || result.status === 'rejected' || result.status === 'unsupported') {
-            toast?.(`x ${row.name || row.ticker || row.symbol}: ${result?.reason || 'Close failed'}`);
-            shakeCard?.(cardKey);
-          }
-          return result;
-        }
-        if (action.command === 'position.remove' && typeof requestRemove === 'function') {
-          const result = await requestRemove(position);
-          return result?.ok === false ? { status: 'error', reason: result.reason } : { status: 'ok' };
-        }
-        if (typeof createActionsFromSnapshot === 'function') {
-          return createActionsFromSnapshot(position, action, validated);
-        }
-        return { status: 'unsupported', reason: `Unsupported position action ${action.command || kind}` };
-      };
-      const button = typeof createActionButton === 'function'
-        ? createActionButton({ label, kind, className: (action.style || kind || 'action').toLowerCase(), onClick })
-        : null;
-      if (button) btns.appendChild(button);
-    }
+    const btns = controls.find(control => control?.nodeType)
+      || controls.find(control => control?.element?.nodeType)?.element
+      || createOptionSnapshotActionsControl({
+        position,
+        key: cardKey,
+        body: resolvedBody,
+        createActionButton,
+        createActionsFromSnapshot,
+        dispatchPositionAction,
+        requestRemove
+      });
 
     card.appendChild(head);
     card.appendChild(el('div', 'meta'));
-    card.appendChild(body.line);
+    card.appendChild(resolvedBody.line);
     card.appendChild(btns);
     const note = el('div', 'card__note');
     card.appendChild(note);
-    body.setButtons(btns);
-    if (body.setNote) body.setNote(note);
-    body.validate();
-    card._validate = () => body.validate();
+    resolvedBody.setButtons(btns);
+    if (resolvedBody.setNote) resolvedBody.setNote(note);
+    resolvedBody.validate();
+    card._validate = () => resolvedBody.validate();
+    card._positionActions = btns._positionActions || [];
     return card;
   }
 
@@ -672,7 +714,9 @@ function createOptionStratRenderer({
     setDisplayFields,
     setValuationRefreshMs,
     createOptionBody,
+    createOptionPositionView,
     optionSnapshotRow,
+    createOptionSnapshotActionsControl,
     createOptionPositionCard,
     closeOptionSnapshot,
     ensureOptionPayoff,

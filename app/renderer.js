@@ -601,6 +601,14 @@ function render() {
     } else {
       card = createPositionSnapshotCard(position);
     }
+    if (!card) {
+      if (debugPositions) {
+        const summary = { reason: 'runtime composition unavailable', ...positionDebugSummary(position) };
+        skippedPositions.push(summary);
+        debugPositionEvents('renderer.render:position-skipped', summary, 'warn');
+      }
+      continue;
+    }
     $grid.appendChild(card);
     renderedPositionCount += 1;
     const reqId = cardStateApi.findPendingRequestIdByKey(key);
@@ -709,9 +717,6 @@ const updateSpreadForTicker = (...args) => instrumentInfoRenderer.updateSpreadFo
 const revalidateCardsForTicker = (...args) => instrumentInfoRenderer.revalidateCardsForTicker(...args);
 instrumentInfoRenderer.startPeriodicRefresh();
 
-const positionActionHandlers = cardRuntime.positionActionHandlers;
-const positionCardRenderers = cardRuntime.positionCardRenderers;
-const positionRemovalHandlers = cardRuntime.positionRemovalHandlers;
 const pendingOrdersRenderer = createPendingOrdersRenderer();
 
 function registerRendererLegacyGuard(guard = {}) {
@@ -815,7 +820,6 @@ loadRendererHandlers({
   findKeyByTicker,
   cardStateOrder: {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7},
   isTerminalCardState: stateName => new Set(['closed', 'profit', 'loss']).has(stateName),
-  positionRemovalHandlerFor: cardType => positionRemovalHandlers[cardType],
   positionMatchesLegacyRow,
   isRegularPositionSnapshot,
   shouldFilterLegacyRow,
@@ -836,15 +840,6 @@ loadRendererHandlers({
   registerPositionSnapshotHook,
   registerPositionRemovedHook,
   registerTestingExtension,
-  registerPositionCardRenderer(cardType, renderer) {
-    cardRuntime.registerPositionCardRenderer(cardType, renderer);
-  },
-  registerPositionActionHandler(cardType, handler) {
-    cardRuntime.registerPositionActionHandler(cardType, handler);
-  },
-  registerPositionRemovalHandler(cardType, handler) {
-    cardRuntime.registerPositionRemovalHandler(cardType, handler);
-  },
   registerCardType: (...args) => cardRuntime.registerCardType(...args),
   resolveCardType: (...args) => cardRuntime.resolveCardType(...args),
   registerCardView: (...args) => cardRuntime.registerCardView(...args),
@@ -870,13 +865,7 @@ for (const { dir, manifest } of loadRendererServiceManifests()) {
 
 positionsRenderer = createPositionsRenderer({
   ipcRenderer,
-  el,
-  createPositionDataGrid,
-  createPositionActions,
-  positionKey,
-  positionCardTitle,
   render,
-  positionCardRenderers,
   onPositionRemoved: removeLegacyRowsForPosition,
   onPositionSnapshot(position = {}) {
     notifyPositionSnapshot(position);
@@ -886,9 +875,6 @@ positionsRenderer = createPositionsRenderer({
     cardStateApi.clearPendingExecLabel(key);
   }
 });
-if (!positionCardRenderers.regular) {
-  positionCardRenderers.regular = position => positionsRenderer.renderRegularPositionCard(position);
-}
 positionsById = positionsRenderer.positionsById;
 const setPositionSnapshot = (...args) => positionsRenderer.setPositionSnapshot(...args);
 const removePositionSnapshot = (...args) => positionsRenderer.removePositionSnapshot(...args);
@@ -933,9 +919,6 @@ async function dispatchPositionAction(position = {}, action = {}, inputPayload =
     ...legacyPayloadForPositionAction(position, action),
     ...inputPayload
   };
-
-  const serviceResult = positionActionHandlers[position.card?.type]?.(position, action, base);
-  if (serviceResult !== undefined) return serviceResult;
 
   const command = action.command || '';
   if (command === 'position.open') {
@@ -992,29 +975,6 @@ async function closeRegularPosition(position = {}, base = {}) {
   return { status: 'unsupported', reason: `Unsupported close state ${state || 'unknown'}` };
 }
 
-function createPositionActions(position = {}) {
-  const actions = Array.isArray(position.card?.actions) ? position.card.actions : [];
-  const btns = el('div', 'btns position-card__actions');
-  const cols = Math.max(1, actions.length);
-  btns.style.gridTemplateColumns = `repeat(${cols},1fr)`;
-  for (const action of actions) {
-    const label = action.label || action.id;
-    const kind = action.id || label;
-    const b = btn(label, (action.style || kind || 'action').toLowerCase(), async () => {
-      const res = await dispatchPositionAction(position, action).catch(err => ({ status: 'error', reason: err?.message || String(err) }));
-      if (!res || res.status === 'error' || res.status === 'rejected' || res.status === 'unsupported') {
-        toast(`x ${positionCardTitle(position)}: ${res?.reason || 'Action failed'}`);
-        shakeCard(positionKey(position));
-        return;
-      }
-      toast(`... ${positionCardTitle(position)}: ${label}`);
-    });
-    b.dataset.kind = kind;
-    btns.appendChild(b);
-  }
-  return btns;
-}
-
 function createPositionSnapshotCard(position = {}) {
   const key = positionKey(position);
   const title = positionCardTitle(position);
@@ -1040,7 +1000,7 @@ function createPositionSnapshotCard(position = {}) {
       positionCardTitle
     }
   });
-  return runtimeCard || positionsRenderer.createPositionSnapshotCard(position);
+  return runtimeCard;
 }
 
 function removePositionSnapshotsForRow(row = {}) {
@@ -1099,7 +1059,6 @@ if (typeof module !== 'undefined') {
     cardVisualState: testingExtensions.cardVisualState || rendererOrderStateFacades.cardVisualState,
     ticketBinding: testingExtensions.ticketBinding || rendererOrderStateFacades.ticketBinding,
     positionsById,
-    positionCardRenderers,
     setPositionSnapshot,
     createPositionSnapshotCard,
     dispatchPositionAction,

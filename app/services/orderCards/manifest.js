@@ -58,10 +58,6 @@ const rendererHandlers = [{
       'regular-order-legacy-card',
       cardRuntimeLibrary.shapes.createLegacyCardShape
     );
-    context.cardRuntime?.registerCardShape?.(
-      'regular-position-card',
-      cardRuntimeLibrary.shapes.createPositionCardShape
-    );
     context.cardRuntime?.registerCardControl?.(
       'standard-remove',
       cardRuntimeLibrary.controls.createRemoveControl
@@ -194,7 +190,6 @@ const rendererHandlers = [{
       cardByKey,
       setCardState: setLegacyCardState,
       removePositionSnapshotsForLegacyRow: context.removePositionSnapshotsForRow,
-      positionRemovalHandlerFor: context.positionRemovalHandlerFor,
       positionMatchesLegacyRow: context.positionMatchesLegacyRow,
       isRegularPositionSnapshot: context.isRegularPositionSnapshot,
       shouldFilterLegacyRow: context.shouldFilterLegacyRow,
@@ -260,27 +255,28 @@ const rendererHandlers = [{
 
     legacyOrderListRuntime.mount?.({ place: (...args) => orderCardsRenderer.place(...args) });
 
-    const {
-      positionKey,
-      positionCardTitle,
-      btn,
-      dispatchPositionAction,
-      requestRemovePosition
-    } = context;
-    if (!orderCardsRenderer?.createRegularPositionCard) return;
-    context.registerPositionCardRenderer?.('regular', (position) => {
-      return orderCardsRenderer.createRegularPositionCard({
-        position,
-        key: positionKey(position),
-        title: positionCardTitle(position),
-        createActionButton: ({ label, kind, className, onClick }) => {
-          const button = btn(label, className, onClick);
-          button.dataset.kind = kind;
-          return button;
-        },
-        dispatchPositionAction,
-        requestRemove: requestRemovePosition
-      });
+    if (
+      !orderCardsRenderer?.createRegularPositionView
+      || !orderCardsRenderer?.createRegularPositionActionsControl
+      || !orderCardsRenderer?.createRegularPositionCard
+    ) return;
+    context.cardRuntime?.registerCardView?.(
+      'regular-position-view',
+      orderCardsRenderer.createRegularPositionView
+    );
+    context.cardRuntime?.registerCardControl?.(
+      'regular-position-actions',
+      orderCardsRenderer.createRegularPositionActionsControl
+    );
+    context.cardRuntime?.registerCardShape?.(
+      'regular-position-card',
+      orderCardsRenderer.createRegularPositionCard
+    );
+    context.cardRuntime?.registerCardType?.({
+      type: 'regular',
+      view: 'regular-position-view',
+      controls: ['regular-position-actions'],
+      shape: 'regular-position-card'
     });
   }
 }];

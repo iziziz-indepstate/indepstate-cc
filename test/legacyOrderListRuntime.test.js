@@ -33,7 +33,6 @@ function createRuntime(overrides = {}) {
     orderCardHandlerForKey: () => null,
     scheduleOrderCardInstantExecution: () => {},
     removePositionSnapshotsForLegacyRow: () => false,
-    positionRemovalHandlerFor: () => null,
     positionMatchesLegacyRow: (position, row) => position.ticker === row.ticker,
     isRegularPositionSnapshot: position => (position.card?.type || 'regular') === 'regular',
     render: () => { renderCount += 1; },

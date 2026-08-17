@@ -7,7 +7,6 @@ catch (e) {
 }
 const Module = require('module');
 const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
-const { createPositionsRenderer } = require('../app/services/positions/renderer');
 
 function levelOrderSnapshot(id, actions) {
   return {
@@ -96,90 +95,41 @@ function regularSnapshot(id, state = 'draft', actions) {
   };
 }
 
-async function run() {
-  {
-    const isolatedHandlers = {};
-    const isolatedDom = new JSDOM('<!DOCTYPE html><div id="grid"></div>');
-    const isolatedDocument = isolatedDom.window.document;
-    let regularCalls = 0;
-    let levelOrderCalls = 0;
-    let optionCalls = 0;
-    let isolatedRenderer;
-    const grid = isolatedDocument.getElementById('grid');
-    const el = (tag, className, text) => {
-      const node = isolatedDocument.createElement(tag);
-      if (className) node.className = className;
-      if (text != null) node.textContent = text;
-      return node;
-    };
-    const render = () => {
-      grid.textContent = '';
-      for (const position of isolatedRenderer.positionsById.values()) {
-        grid.appendChild(isolatedRenderer.createPositionSnapshotCard(position));
-      }
-    };
-    isolatedRenderer = createPositionsRenderer({
-      ipcRenderer: {
-        invoke: async channel => channel === 'positions:list' ? [] : null,
-        on: (channel, fn) => { isolatedHandlers[channel] = fn; }
-      },
-      el,
-      createPositionDataGrid: () => el('div', 'grid-rendered'),
-      createPositionActions: () => el('div', 'actions-rendered'),
-      positionKey: position => `position|${position.id}`,
-      positionCardTitle: position => position.ticker,
-      render,
-      positionCardRenderers: {
-        regular(position) {
-          regularCalls += 1;
-          return el('div', 'regular-rendered', position.ticker);
-        },
-        levelOrder(position) {
-          levelOrderCalls += 1;
-          return el('div', 'level-rendered', position.ticker);
-        },
-        option(position) {
-          optionCalls += 1;
-          return el('div', 'option-rendered', position.ticker);
-        }
-      }
-    });
-    isolatedRenderer.mount();
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    isolatedHandlers['positions:changed'](null, {
-      event: { type: 'position.created' },
-      position: {
-        id: 'pos-option',
-        state: 'draft',
+function optionSnapshot(id = 'pos-option-1') {
+  return {
+    id,
+    state: 'placed',
+    ticker: 'SPY',
+    symbol: 'SPY',
+    instrumentType: 'OPT',
+    provider: 'optionstrat',
+    primaryTicket: 'option-ticket-1',
+    tickets: ['option-ticket-1'],
+    version: 1,
+    source: { cardType: 'option', ticker: 'SPY', symbol: 'SPY', provider: 'optionstrat' },
+    card: {
+      type: 'option',
+      actions: [{ id: 'close', label: 'Close', command: 'position.close', style: 'close' }],
+      data: {
         ticker: 'SPY',
-        card: { type: 'option', data: { ticker: 'SPY' }, actions: [] }
+        symbol: 'SPY',
+        name: 'SPY call spread',
+        provider: 'optionstrat',
+        state: 'placed',
+        ticket: 'option-ticket-1',
+        expirationDte: '2026-09-18',
+        legs: [
+          { right: 'C', strike: 700, qty: 1 },
+          { right: 'C', strike: 710, qty: -1 }
+        ],
+        payoff: { maxLoss: 200, maxProfit: 800 },
+        valuation: { currentValue: 350, change: 150, changePct: 75 }
       }
-    });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const optionCard = grid.querySelector('.position-card[data-position-id="pos-option"]');
-    assert(optionCard);
-    assert.strictEqual(optionCard.dataset.cardType, 'option');
-    assert.strictEqual(optionCalls, 1);
-    assert.strictEqual(regularCalls, 0);
+    }
+  };
+}
 
-    isolatedHandlers['positions:changed'](null, {
-      event: { type: 'position.created' },
-      position: {
-        id: 'pos-level',
-        state: 'draft',
-        ticker: 'ADAUSDT',
-        card: { type: 'levelOrder', data: { ticker: 'ADAUSDT' }, actions: [] }
-      }
-    });
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const levelCard = grid.querySelector('.position-card[data-position-id="pos-level"]');
-    assert(levelCard);
-    assert.strictEqual(levelCard.dataset.cardType, 'levelOrder');
-    assert.strictEqual(levelOrderCalls, 1);
-    assert.strictEqual(regularCalls, 0);
-  }
-
+async function run() {
   const handlers = {};
   const calls = [];
   const exactAddRow = {
@@ -253,6 +203,26 @@ async function run() {
   assert.strictEqual(card.querySelector('input.qty').value, '200');
   assert.strictEqual(card.querySelector('input.tp').value, '12');
   assert.deepStrictEqual(Array.from(card.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['LS']);
+  const levelOrderDefinition = t.cardRuntime.resolveCardType(initialPosition, { kind: 'position' });
+  assert.strictEqual(levelOrderDefinition.view, 'level-order-body');
+
+  const optionPosition = optionSnapshot();
+  handlers['positions:changed'](null, { event: { type: 'position.placed' }, position: optionPosition });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  const optionDefinition = t.cardRuntime.resolveCardType(optionPosition, { kind: 'position' });
+  assert.strictEqual(optionDefinition.view, 'option-snapshot-payoff-valuation');
+  assert.deepStrictEqual(optionDefinition.controls, ['option-snapshot-actions']);
+  assert.strictEqual(optionDefinition.shape, 'option-snapshot-position-card');
+  const optionCard = document.querySelector('.position-card[data-position-id="pos-option-1"]');
+  assert(optionCard);
+  assert.strictEqual(optionCard.dataset.cardType, 'option');
+  assert(optionCard.querySelector('.option-summary').textContent.includes('SPY'));
+  assert.deepStrictEqual(Array.from(optionCard.querySelectorAll('button.btn')).map(button => button.dataset.kind), ['close']);
+  optionCard.querySelector('button.btn[data-kind="close"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const optionCloseCall = calls.find(call => call.ch === 'execution:cancel-order' && call.payload.ticket === 'option-ticket-1');
+  assert(optionCloseCall);
+  assert.strictEqual(optionCloseCall.payload.symbol, 'SPY');
 
   const updatedPosition = levelOrderSnapshot('pos-1', [
     { id: 'LB', label: 'LB', command: 'position.levelOrder.buy', style: 'bl' },
@@ -288,6 +258,10 @@ async function run() {
   let regularCard = document.querySelector('.position-card[data-position-id="pos-reg-1"]');
   assert(regularCard);
   assert.strictEqual(regularCard.dataset.cardType, 'regular');
+  const regularDefinition = t.cardRuntime.resolveCardType(regularPosition, { kind: 'position' });
+  assert.strictEqual(regularDefinition.view, 'regular-position-view');
+  assert.deepStrictEqual(regularDefinition.controls, ['regular-position-actions']);
+  assert.strictEqual(regularDefinition.shape, 'regular-position-card');
   assert.strictEqual(regularCard.querySelector('.card__status').style.display, 'none');
   assert.strictEqual(regularCard.querySelector('input.pr').value, '100');
   assert.deepStrictEqual(Array.from(regularCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL', 'SC']);

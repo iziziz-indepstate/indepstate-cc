@@ -54,6 +54,8 @@ function run() {
     getClosedCardEventStrategy: () => fakeClosedCardEventStrategy
   };
   const fakeCard = { type: 'legacy-card' };
+  const fakePositionView = { type: 'regular-position-view' };
+  const fakePositionControl = { type: 'regular-position-actions' };
   const fakePositionCard = { type: 'regular-position-card' };
   const fakeRenderer = {
     createLegacyOrderCard(args) {
@@ -63,6 +65,14 @@ function run() {
     createRegularPositionCard(args) {
       calls.push(['createRegularPositionCard', args]);
       return fakePositionCard;
+    },
+    createRegularPositionView(args) {
+      calls.push(['createRegularPositionView', args]);
+      return fakePositionView;
+    },
+    createRegularPositionActionsControl(args) {
+      calls.push(['createRegularPositionActionsControl', args]);
+      return fakePositionControl;
     },
     registerInstrumentHandler: (...args) => {
       calls.push(['registerInstrumentHandler', args]);
@@ -139,7 +149,6 @@ function run() {
   const runtimeCalls = [];
   const rendererLayers = [];
   const rowProviders = [];
-  const positionRenderers = {};
   let connectedLegacyAdapter = null;
   const shellGetter = () => false;
   const loadConfig = () => ({});
@@ -178,7 +187,6 @@ function run() {
     isTerminalCardState: () => false,
     findKeyByTicker: () => null,
     removePositionSnapshotsForRow: () => false,
-    positionRemovalHandlerFor: () => null,
     positionMatchesLegacyRow: () => false,
     isRegularPositionSnapshot: () => false,
     shouldFilterLegacyRow: () => false,
@@ -214,10 +222,10 @@ function run() {
     registerTestingExtension(name, value) {
       testingExtensions[name] = value;
     },
-    registerPositionCardRenderer(cardType, renderer) {
-      positionRenderers[cardType] = renderer;
-    },
     cardRuntime: {
+      registerCardType(definition) {
+        runtimeCalls.push(['registerCardType', definition]);
+      },
       registerCardView(name, renderer) {
         runtimeCalls.push(['registerCardView', name, renderer]);
       },
@@ -264,13 +272,19 @@ function run() {
   fakeShouldShowSpread = true;
   assert.strictEqual(typeof rendererCall[1].cardRuntimeLibrary.shapes.createLegacyCardShape, 'function');
   assert.strictEqual(typeof rendererCall[1].cardRuntimeLibrary.shapes.createPositionCardShape, 'function');
-  for (const name of ['regular-order-legacy-card', 'regular-position-card']) {
-    assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === name));
-  }
+  assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'regular-order-legacy-card'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardShape' && call[1] === 'regular-position-card'));
   for (const name of ['standard-remove', 'standard-retry', 'standard-action-buttons']) {
     assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === name));
   }
   assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'position-data-grid'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardView' && call[1] === 'regular-position-view'));
+  assert(runtimeCalls.some(call => call[0] === 'registerCardControl' && call[1] === 'regular-position-actions'));
+  const regularDefinition = runtimeCalls.find(call => call[0] === 'registerCardType' && call[1].type === 'regular')?.[1];
+  assert(regularDefinition);
+  assert.strictEqual(regularDefinition.view, 'regular-position-view');
+  assert.deepStrictEqual(regularDefinition.controls, ['regular-position-actions']);
+  assert.strictEqual(regularDefinition.shape, 'regular-position-card');
   assert.strictEqual(connectedLegacyAdapter.renderer, fakeRenderer);
   assert.strictEqual(connectedLegacyAdapter.getRows(), listRuntimeCall[1].state.rows);
   assert.strictEqual(connectedLegacyAdapter.rowKey({ ticker: 'AAPL', event: 'up', time: 1, price: 2 }), 'AAPL|up|1|2');
@@ -320,11 +334,13 @@ function run() {
   assert.strictEqual(testingExtensions.orderCardInstrumentHandlers, fakeRenderer.instrumentTypeHandlers);
   assert.strictEqual(testingExtensions.orderCardTypeHandlers, fakeRenderer.cardTypeHandlers);
 
-  assert.strictEqual(typeof positionRenderers.regular, 'function');
-  assert.strictEqual(positionRenderers.regular({ id: 'p1', title: 'AAPL' }), fakePositionCard);
-  const positionCall = calls.find(call => call[0] === 'createRegularPositionCard');
-  assert.strictEqual(positionCall[1].key, 'position|p1');
-  assert.strictEqual(positionCall[1].title, 'AAPL');
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(rendererContext, 'registerPositionCardRenderer'), false);
+  const regularView = runtimeCalls.find(call => call[0] === 'registerCardView' && call[1] === 'regular-position-view')[2];
+  const regularControl = runtimeCalls.find(call => call[0] === 'registerCardControl' && call[1] === 'regular-position-actions')[2];
+  const regularShape = runtimeCalls.find(call => call[0] === 'registerCardShape' && call[1] === 'regular-position-card')[2];
+  assert.strictEqual(regularView({ position: { id: 'p1' }, key: 'position|p1' }), fakePositionView);
+  assert.strictEqual(regularControl({ position: { id: 'p1' }, body: fakePositionView }), fakePositionControl);
+  assert.strictEqual(regularShape({ position: { id: 'p1' }, body: fakePositionView, controls: [fakePositionControl] }), fakePositionCard);
 
   console.log('orderCardsManifestRenderer tests passed');
 }

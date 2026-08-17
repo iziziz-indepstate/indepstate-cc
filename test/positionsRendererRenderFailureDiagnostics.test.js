@@ -79,9 +79,17 @@ async function run() {
     await new Promise(resolve => setTimeout(resolve, 0));
     assert(document.querySelector('.position-card[data-position-id="pos-good-1"]'));
 
-    t.positionCardRenderers.bad = () => {
+    t.registerCardView('bad-position-view', () => ({}));
+    t.registerCardControl('bad-position-actions', () => ({}));
+    t.registerCardShape('bad-position-shape', () => {
       throw new Error('bad renderer boom');
-    };
+    });
+    t.registerCardType({
+      type: 'bad',
+      view: 'bad-position-view',
+      controls: ['bad-position-actions'],
+      shape: 'bad-position-shape'
+    });
     handlers['positions:changed'](null, { event: { type: 'position.created' }, position: badPosition });
     await new Promise(resolve => setTimeout(resolve, 0));
 

@@ -14,7 +14,6 @@ function createLegacyOrderListRuntime({
   orderCardHandlerForKey,
   scheduleOrderCardInstantExecution,
   removePositionSnapshotsForLegacyRow,
-  positionRemovalHandlerFor,
   positionMatchesLegacyRow,
   isRegularPositionSnapshot,
   shouldFilterLegacyRow = () => false,
@@ -355,13 +354,12 @@ function createLegacyOrderListRuntime({
   }
 
   function removeLegacyRowsForPosition(position = {}) {
-    const removedByService = positionRemovalHandlerFor(position.card?.type)?.(position) === true;
     const matches = state.rows.filter(row => {
       if (isRegularPositionSnapshot(position)) return positionMatchesLegacyRow(position, row);
       if (shouldFilterLegacyRow(row)) return positionMatchesLegacyRow(position, row);
       return shouldRemoveLegacyRowForPosition(position, row);
     });
-    if (matches.length === 0) return removedByService;
+    if (matches.length === 0) return false;
     const keys = new Set(matches.map(row => rowKey(row)));
     state.rows = state.rows.filter(row => !keys.has(rowKey(row)));
     for (const row of matches) {

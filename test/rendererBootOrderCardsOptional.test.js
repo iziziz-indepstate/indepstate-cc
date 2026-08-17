@@ -158,7 +158,23 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
         rendererPositionHandlers: [{
           cardType: 'levelOrder',
           register(context = {}) {
-            context.registerPositionCardRenderer('levelOrder', () => context.el('div', 'level-order-test-card', 'levelOrder'));
+            const runtime = context.cardRuntime;
+            runtime.registerCardView('level-order-test-view', () => context.el('div', 'level-order-test-card', 'levelOrder'));
+            runtime.registerCardControl('level-order-test-control', () => ({}));
+            runtime.registerCardShape('level-order-test-shape', ({ position, key, body }) => {
+              const card = context.el('div', 'card position-card');
+              card.dataset.rowkey = key;
+              card.dataset.positionId = position.id;
+              card.dataset.cardType = 'levelOrder';
+              card.appendChild(body);
+              return card;
+            });
+            runtime.registerCardType({
+              type: 'levelOrder',
+              view: 'level-order-test-view',
+              controls: ['level-order-test-control'],
+              shape: 'level-order-test-shape'
+            });
           }
         }]
       };
@@ -168,7 +184,23 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
         rendererHandlers: [{
           cardType: 'option',
           register(context = {}) {
-            context.registerPositionCardRenderer('option', () => context.el('div', 'option-test-card', 'option'));
+            const runtime = context.cardRuntime;
+            runtime.registerCardView('option-test-view', () => context.el('div', 'option-test-card', 'option'));
+            runtime.registerCardControl('option-test-control', () => ({}));
+            runtime.registerCardShape('option-test-shape', ({ position, key, body }) => {
+              const card = context.el('div', 'card position-card');
+              card.dataset.rowkey = key;
+              card.dataset.positionId = position.id;
+              card.dataset.cardType = 'option';
+              card.appendChild(body);
+              return card;
+            });
+            runtime.registerCardType({
+              type: 'option',
+              view: 'option-test-view',
+              controls: ['option-test-control'],
+              shape: 'option-test-shape'
+            });
           }
         }]
       };
@@ -208,7 +240,7 @@ async function run() {
       ctx.handlers['positions:changed'](null, { event: { type: 'position.created' }, position: position('level-1', 'levelOrder') });
       ctx.handlers['positions:changed'](null, { event: { type: 'position.created' }, position: position('option-1', 'option') });
       await new Promise(resolve => setImmediate(resolve));
-      assert(document.querySelector('.position-card[data-position-id="regular-1"][data-card-type="regular"]'));
+      assert.strictEqual(document.querySelector('.position-card[data-position-id="regular-1"]'), null);
       assert(document.querySelector('.position-card[data-position-id="level-1"][data-card-type="levelOrder"] .level-order-test-card'));
       assert(document.querySelector('.position-card[data-position-id="option-1"][data-card-type="option"] .option-test-card'));
       assert.strictEqual(document.querySelectorAll('.card:not(.position-card)').length, 0);
