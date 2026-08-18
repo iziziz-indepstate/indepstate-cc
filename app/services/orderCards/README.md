@@ -13,33 +13,31 @@ Flow:
 1. A source emits a row from a webhook, watched file, command-line command, or another service.
 2. `orderCards.ingestRow(row, context)` normalizes `ticker`/`symbol`, detects
    `instrumentType`, and resolves the execution provider.
-3. Routing decides whether the row should create a position snapshot or stay on the legacy row path.
-4. Snapshot-backed rows are converted into a position create command and sent to the positions
+3. Every normalized row is converted into a position create command and sent to the positions
    application service.
-5. The row read model is updated and `order-cards:changed` is published to the renderer.
-6. Position creation/update publishes `positions:changed`; the renderer chooses the card UI by
+4. After successful position creation, the row read model is updated and `order-cards:changed` is
+   published for source compatibility and diagnostics.
+5. Position creation/update publishes `positions:changed`; the renderer chooses the card UI by
    `position.card.type`.
 
-## Routing
+## Snapshot Contract
 
-Rows for these card types create position snapshots:
+All rows create position snapshots, including the built-in card types:
 
 - `regular`
 - `levelOrder`
 - `option`
 - `optionstrat`
 
-Rows recognized as legacy extension rows remain on the legacy row path until their owning module has
-fully moved to snapshot-backed rendering. This split is transitional and is implemented in
-`legacyRouting.js`.
+Unknown `cardType` values are preserved on the snapshot. If no renderer mapping is registered for
+that type, card runtime diagnostics report the missing composition; there is no fallback renderer.
 
 ## Renderer Runtime
 
-`orderCards` owns the shared renderer config runtime for regular/legacy cards. The service-local
+`orderCards` owns the shared renderer config runtime for regular snapshot cards. The service-local
 renderer bootstrap in `manifest.js` registers:
 
 - regular position-card rendering;
-- the transitional legacy order-list runtime;
 - card button rows and button config;
 - bid/ask and spread display policy;
 - card-state refresh hooks.
@@ -63,7 +61,8 @@ Each entry declares a `type` and options.
 ## Regression Coverage
 
 - `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
-- `test/orderCardsApplicationService.test.js` covers snapshot routing versus the legacy row path.
+- `test/orderCardsApplicationService.test.js` covers unconditional snapshot creation, including an
+  unregistered renderer type.
 
 For development troubleshooting, set `ISCC_DEBUG_POSITION_EVENTS=1` to trace order-card ingestion,
 routing, `order-cards:changed`, and related position events.

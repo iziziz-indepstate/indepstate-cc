@@ -158,56 +158,6 @@ function createCardRuntimeLibrary({
     return item;
   }
 
-  function createLegacyCardShape({
-    title,
-    body,
-    actions = [],
-    onPlace,
-    onRemove,
-    onRetryStop,
-    bidAskText,
-    spreadText,
-    status = '',
-    compact = false,
-    attributes = {},
-    actionRows = 1,
-    removeTitle = 'Удалить карточку',
-    removeColor = '#6b7280',
-    createActionButton: actionButtonFactory
-  } = {}) {
-    const card = createElement('div', 'card');
-    if (compact) card.classList.add('card--mini');
-    applyAttributes(card, attributes);
-    const retry = createRetryControl({ onRetryStop });
-    const remove = createRemoveControl({ onRemove, title: removeTitle, color: removeColor });
-    card.appendChild(createHeaderView({
-      title,
-      bidAskText,
-      spreadText,
-      status,
-      compact,
-      retryControl: retry,
-      removeControl: remove
-    }));
-    if (!compact) {
-      card.appendChild(createElement('div', 'meta'));
-      appendBody(card, body);
-    }
-    const buttons = createActionButtonsControl({
-      actions,
-      onAction: onPlace,
-      rows: actionRows,
-      createActionButton: actionButtonFactory
-    });
-    const note = createElement('div', 'card__note');
-    if (!compact) {
-      card.appendChild(buttons);
-      card.appendChild(note);
-    }
-    wireBody(card, body, buttons, note);
-    return card;
-  }
-
   function createPositionCardShape({
     title,
     status = '',
@@ -260,7 +210,7 @@ function createCardRuntimeLibrary({
   return {
     views: { createHeaderView, createStatusView, createDataGridView },
     controls: { createRemoveControl, createRetryControl, createActionButtonsControl },
-    shapes: { createLegacyCardShape, createPositionCardShape }
+    shapes: { createPositionCardShape }
   };
 }
 

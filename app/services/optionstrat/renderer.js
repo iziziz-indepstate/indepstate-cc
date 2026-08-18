@@ -21,48 +21,17 @@ function normalizeOptionStratDisplayFields(fields = {}) {
 function createOptionStratRenderer({
   ipcRenderer,
   el,
-  state,
-  legacyRows,
-  rowKey,
   render,
   toast,
   shakeCard,
-  pendingRequestLabels,
-  placedOrderLookup,
-  cardVisualState,
-  ticketBinding,
   pendingOptionValuations = new Set(),
+  getPositions = () => [],
+  positionKey = position => `position|${position?.id || ''}`,
   getValuationRefreshMs = () => 5000,
-  setTimeoutFn = setTimeout,
-  now = () => Date.now()
+  setTimeoutFn = setTimeout
 } = {}) {
-  const pendingOptionPayoffs = new Set();
   let displayFields = { ...DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS };
   let valuationRefreshMs = Number(getValuationRefreshMs()) || 5000;
-  const pendingState = pendingRequestLabels || {
-    clearPendingRequest: () => false
-  };
-  const placedOrders = placedOrderLookup || {
-    markPlacedOrder: () => false,
-    getPlacedOrder: () => undefined,
-    listPlacedOrders: () => []
-  };
-  const visualState = cardVisualState || {
-    getCardState: () => undefined,
-  };
-  const tickets = ticketBinding || {
-    bindTicket: () => false
-  };
-
-  function findLegacyRowByKey(key) {
-    if (typeof legacyRows?.findLegacyRowByKey === 'function') {
-      return legacyRows.findLegacyRowByKey(key);
-    }
-    const rows = typeof legacyRows?.legacyRows === 'function'
-      ? legacyRows.legacyRows()
-      : (Array.isArray(legacyRows) ? legacyRows : state?.rows);
-    return (Array.isArray(rows) ? rows : []).find(r => rowKey(r) === key);
-  }
 
   function setDisplayFields(fields) {
     displayFields = normalizeOptionStratDisplayFields(fields);
@@ -151,28 +120,6 @@ function createOptionStratRenderer({
       hour: '2-digit',
       minute: '2-digit'
     });
-  }
-
-  function markRowOpened(key, timestamp = now()) {
-    const row = findLegacyRowByKey(key);
-    if (row && row.instrumentType === 'OPT' && !row.openedAt) row.openedAt = timestamp;
-    const orderInfo = placedOrders.getPlacedOrder(key);
-    if (orderInfo && !orderInfo.openedAt) orderInfo.openedAt = timestamp;
-    if (orderInfo) placedOrders.markPlacedOrder(key, orderInfo);
-  }
-
-  function markRowClosed(key, timestamp = now()) {
-    const row = findLegacyRowByKey(key);
-    if (row && row.instrumentType === 'OPT') {
-      if (!row.openedAt) row.openedAt = timestamp;
-      row.closedAt = timestamp;
-    }
-    const orderInfo = placedOrders.getPlacedOrder(key);
-    if (orderInfo) {
-      if (!orderInfo.openedAt) orderInfo.openedAt = timestamp;
-      orderInfo.closedAt = timestamp;
-      placedOrders.markPlacedOrder(key, orderInfo);
-    }
   }
 
   function emitButtonEvent(action, row) {
@@ -455,6 +402,7 @@ function createOptionStratRenderer({
           const result = await requestRemove(position);
           return result?.ok === false ? { status: 'error', reason: result.reason } : { status: 'ok' };
         }
+        if (action.command === 'position.open') emitButtonEvent('open', row);
         const dispatch = createActionsFromSnapshot || dispatchPositionAction;
         if (typeof dispatch === 'function') {
           return dispatch(position, action, validated);
@@ -560,56 +508,39 @@ function createOptionStratRenderer({
     return card;
   }
 
-  function ensureOptionPayoff(row) {
-    if (!row || row.instrumentType !== 'OPT') return;
-    if (optionPayoffForRow(row)) return;
-    const key = rowKey(row);
-    if (pendingOptionPayoffs.has(key)) return;
-    pendingOptionPayoffs.add(key);
-    ipcRenderer.invoke('optionstrat:estimate', {
-      instrumentType: 'OPT',
-      provider: row.provider || 'optionstrat',
-      ticker: row.ticker || row.symbol,
-      symbol: row.symbol || row.ticker,
-      root: row.root,
-      name: row.name,
-      description: row.description,
-      expirationDte: row.expirationDte || row.expiration,
-      isCustomName: row.isCustomName,
-      isCashSecured: row.isCashSecured,
-      legs: row.legs
-    }).then(result => {
-      if (result?.status !== 'ok' || !result.payoff) return;
-      const current = findLegacyRowByKey(key);
-      if (!current) return;
-      current.estimatedPayoff = result.estimatedPayoff || result.payoff;
-      render();
-    }).catch(() => {
-    }).finally(() => {
-      pendingOptionPayoffs.delete(key);
+  function isOptionPosition(position = {}) {
+    const cardType = String(position.card?.type || position.source?.cardType || '').toLowerCase();
+    return cardType === 'option'
+      || cardType === 'optionstrat'
+      || String(position.instrumentType || position.card?.data?.instrumentType || '').toUpperCase() === 'OPT';
+  }
+
+  function openOptionPositions() {
+    const positions = typeof getPositions === 'function' ? getPositions() : [];
+    return (Array.isArray(positions) ? positions : []).filter(position => {
+      if (!isOptionPosition(position)) return false;
+      const stateName = String(position.state || position.card?.data?.state || '').toLowerCase();
+      return !['closed', 'cancelled', 'rejected', 'failed', 'archived'].includes(stateName);
     });
   }
 
-  function refreshOptionValuation(key, orderInfo) {
-    if (!orderInfo || !orderInfo.ticket || !orderInfo.provider) return Promise.resolve(null);
+  function refreshOptionValuation(position = {}) {
+    const row = optionSnapshotRow(position);
+    const ticket = ticketForOptionSnapshot(position);
+    const key = positionKey(position);
+    if (!ticket || !row.provider) return Promise.resolve(null);
     if (pendingOptionValuations.has(key)) return Promise.resolve(null);
     pendingOptionValuations.add(key);
     return ipcRenderer.invoke('optionstrat:valuation', {
-      provider: orderInfo.provider,
-      ticket: orderInfo.ticket,
-      symbol: orderInfo.symbol
+      provider: row.provider,
+      ticket,
+      symbol: row.symbol || row.ticker
     }).then(result => {
       if (result?.status !== 'ok' || !result.valuation) return result;
-      const current = findLegacyRowByKey(key);
-      if (current) {
-        current.valuation = result.valuation;
-        render();
-      }
-      const stored = placedOrders.getPlacedOrder(key);
-      if (stored) {
-        stored.valuation = result.valuation;
-        placedOrders.markPlacedOrder(key, stored);
-      }
+      if (!position.card) position.card = {};
+      if (!position.card.data) position.card.data = {};
+      position.card.data.valuation = result.valuation;
+      render?.();
       return result;
     }).catch(err => {
       return { status: 'error', reason: err?.message || String(err) };
@@ -621,94 +552,15 @@ function createOptionStratRenderer({
   function startValuationRefresh() {
     setTimeoutFn(async function tick() {
       try {
-        const entries = placedOrders.listPlacedOrders({ state: 'placed', instrumentType: 'OPT' }) || [];
-        await Promise.all(entries.map(({ key, orderInfo }) => refreshOptionValuation(key, orderInfo)));
+        await Promise.all(openOptionPositions().map(refreshOptionValuation));
       } finally {
         setTimeoutFn(tick, Math.max(1000, Number(valuationRefreshMs) || 5000));
       }
     }, Math.max(1000, Number(valuationRefreshMs) || 5000));
   }
 
-  function scheduleInstantExecution(row, place) {
-    if (!row || row.instrumentType !== 'OPT' || row.instantExecution !== true) return false;
-    setTimeoutFn(() => {
-      const key = rowKey(row);
-      const current = findLegacyRowByKey(key);
-      if (!current || visualState.getCardState(key)) return;
-      place('OPEN', current, { valid: true, type: 'option' }, 'OPT', 'OPEN');
-    }, 0);
-    return true;
-  }
-
-  function preparePlace({ row, requestId, baseMeta } = {}) {
-    const meta = {
-      ...(baseMeta || {}),
-      requestId,
-      qty: 1,
-      stopPts: 1,
-      takePts: null
-    };
-    emitButtonEvent('open', row);
-    return {
-      channel: 'queue-place-order',
-      payload: {
-        ticker: row.ticker,
-        symbol: row.symbol || row.ticker,
-        root: row.root,
-        provider: row.provider,
-        instrumentType: 'OPT',
-        event: row.event,
-        time: row.time,
-        cardType: row.cardType || 'option',
-        name: row.name,
-        description: row.description,
-        expirationDte: row.expirationDte,
-        isCustomName: row.isCustomName,
-        isCashSecured: row.isCashSecured,
-        legs: row.legs,
-        side: 'OPEN',
-        meta
-      }
-    };
-  }
-
-  function afterPlaceOk({ row, result, requestId, key, setCardState } = {}) {
-    if (!result?.providerOrderId) {
-      setCardState?.(key, 'pending');
-      return;
-    }
-    const openedAt = now();
-    pendingState.clearPendingRequest(requestId);
-    placedOrders.markPlacedOrder(key, {
-      provider: result.provider || row.provider || 'optionstrat',
-      ticket: String(result.providerOrderId),
-      symbol: row.symbol || row.ticker || '',
-      strategyCommand: row.strategyCommand,
-      name: row.name,
-      payoff: result.payoff || result.raw?.payoff,
-      valuation: result.valuation || result.raw?.valuation,
-      openedAt
-    });
-    if (result.payoff || result.raw?.payoff) row.payoff = result.payoff || result.raw.payoff;
-    if (result.valuation || result.raw?.valuation) row.valuation = result.valuation || result.raw.valuation;
-    row.openedAt = row.openedAt || openedAt;
-    tickets.bindTicket(String(result.providerOrderId), key);
-    setCardState?.(key, 'placed');
-  }
-
-  function createOrderCardHandler() {
-    return {
-      createBody: createOptionBody,
-      buttons: () => [{ label: 'OPEN', action: 'OPEN', style: 'bl' }],
-      preparePlace,
-      afterPlaceOk,
-      scheduleInstantExecution: ({ row, place } = {}) => scheduleInstantExecution(row, place)
-    };
-  }
-
   return {
     DEFAULT_OPTIONSTRAT_DISPLAY_FIELDS,
-    pendingOptionPayoffs,
     pendingOptionValuations,
     normalizeOptionStratDisplayFields,
     setDisplayFields,
@@ -719,15 +571,9 @@ function createOptionStratRenderer({
     createOptionSnapshotActionsControl,
     createOptionPositionCard,
     closeOptionSnapshot,
-    ensureOptionPayoff,
+    openOptionPositions,
     refreshOptionValuation,
     startValuationRefresh,
-    scheduleInstantExecution,
-    preparePlace,
-    afterPlaceOk,
-    createOrderCardHandler,
-    markRowOpened,
-    markRowClosed,
     emitButtonEvent,
     optionPayoffForRow,
     optionValuationForRow

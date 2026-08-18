@@ -8,7 +8,7 @@ async function run() {
       { cardType: 'levelOrder', shouldCreateSnapshot: true },
       { cardType: 'option', shouldCreateSnapshot: true },
       { cardType: 'optionstrat', shouldCreateSnapshot: true },
-      { cardType: 'legacyExtension', shouldCreateSnapshot: false }
+      { cardType: 'unknownCard', shouldCreateSnapshot: true }
     ];
     for (const item of cases) {
       const positionCommands = [];
@@ -35,17 +35,13 @@ async function run() {
         event: item.cardType,
         time: 1
       }, { source: 'routing-test' });
-      assert.strictEqual(positionCommands.length, item.shouldCreateSnapshot ? 1 : 0, `${item.cardType} snapshot routing`);
+      assert.strictEqual(positionCommands.length, 1, `${item.cardType} snapshot routing`);
       assert.strictEqual(published.length, 1, `${item.cardType} published row`);
       assert.strictEqual(published[0].channel, 'order-cards:changed');
       assert.strictEqual(published[0].payload.type, 'upsert');
-      if (item.shouldCreateSnapshot) {
-        assert.strictEqual(result.ok, true);
-        assert.strictEqual(result.position.card.type, item.cardType);
-        assert.strictEqual(positionCommands[0].cardType, item.cardType);
-      } else {
-        assert.strictEqual(result.cardType, item.cardType);
-      }
+      assert.strictEqual(result.ok, true);
+      assert.strictEqual(result.position.card.type, item.cardType);
+      assert.strictEqual(positionCommands[0].cardType, item.cardType);
     }
   }
 
@@ -101,9 +97,10 @@ async function run() {
       publish: (channel, payload) => published.push({ channel, payload })
     });
 
-    const row = service.ingestRow({ cardType: 'legacyExtension', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'webhook' });
-    assert.strictEqual(row.cardType, 'legacyExtension');
-    assert.strictEqual(positionCommands.length, 0);
+    const row = service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'webhook' });
+    assert.strictEqual(row.cardType, 'unregisteredRenderer');
+    assert.strictEqual(positionCommands.length, 1);
+    assert.strictEqual(positionCommands[0].card.type, 'unregisteredRenderer');
     assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
     assert.strictEqual(published[0].payload.source, 'webhook');
@@ -152,9 +149,10 @@ async function run() {
   {
     const published = [];
     const service = createOrderCardsApplicationService({
+      positions: { handle: () => ({ ok: true }) },
       publish: (channel, payload) => published.push({ channel, payload })
     });
-    service.ingestRow({ cardType: 'legacyExtension', ticker: 'AAPL', producingLineId: 'line-1', time: 1 });
+    service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', producingLineId: 'line-1', time: 1 });
     const result = service.remove({ producingLineId: 'line-1' });
     assert.deepStrictEqual(result, { ok: true });
     assert.deepStrictEqual(published.slice(-1).map(item => item.channel), ['order-cards:changed']);

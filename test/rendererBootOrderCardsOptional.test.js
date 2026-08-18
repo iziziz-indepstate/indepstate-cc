@@ -31,47 +31,6 @@ function cleanupDom() {
   delete global.navigator;
 }
 
-function createRuntime({ onMount } = {}) {
-  return {
-    legacyOrderStateApi: {
-      getCardState: () => undefined,
-      setCardState: () => true,
-      clearCardState: () => false,
-      setPendingExecLabel: () => true,
-      getPendingExecLabel: () => undefined,
-      clearPendingExecLabel: () => false,
-      markPendingRequest: () => true,
-      resolvePendingKey: () => undefined,
-      setPendingId: () => true,
-      getPendingId: () => undefined,
-      getRetryCount: () => undefined,
-      findPendingRequestIdByKey: () => undefined,
-      clearPendingRequest: () => false,
-      clearPendingByKey: () => false,
-      markPlacedOrder: () => true,
-      getPlacedOrder: () => undefined,
-      deletePlacedOrder: () => false,
-      resolveTicketKey: () => undefined,
-      bindTicket: () => true,
-      unbindTicket: () => false,
-      listPlacedOrders: () => [],
-      clearExecutionStateByKey: () => false
-    },
-    setClosedCardEventStrategy: () => {},
-    renderLegacyCards: () => {},
-    mount: () => onMount?.(),
-    markTouched: () => {},
-    isTouched: () => false,
-    removeRow: () => false,
-    removeLegacyRowsForPosition: () => false,
-    resetLegacyRowsForPosition: () => false,
-    removeRowByKey: () => false,
-    scheduleInstantExecution: () => undefined,
-    setFilter: () => {},
-    migrateKey: key => key
-  };
-}
-
 function position(id, cardType) {
   return {
     id,
@@ -113,7 +72,6 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
       return {};
     }
   };
-  let mountCalls = 0;
   const originalLoad = Module._load;
   Module._load = function(request, parent, isMain) {
     const parentPath = String(parent?.filename || '').replace(/\\/g, '/');
@@ -133,22 +91,23 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
       return {
         rendererHandlers: [{
           register(context = {}) {
-            const runtime = createRuntime({ onMount: () => { mountCalls += 1; } });
-            context.registerRendererLayer?.(({ grid } = {}) => {
-              const row = { ticker: 'LEGACY', event: 'legacy', time: 1, price: 1, cardType: 'legacyExtension' };
-              const card = document.createElement('div');
-              card.className = 'card';
-              card.dataset.rowkey = context.rowKey(row);
-              if (grid) grid.appendChild(card);
+            const runtime = context.cardRuntime;
+            runtime.registerCardView('regular-test-view', () => context.el('div', 'regular-test-card', 'regular'));
+            runtime.registerCardControl('regular-test-control', () => ({}));
+            runtime.registerCardShape('regular-test-shape', ({ position, key, body }) => {
+              const card = context.el('div', 'card position-card');
+              card.dataset.rowkey = key;
+              card.dataset.positionId = position.id;
+              card.dataset.cardType = 'regular';
+              card.appendChild(body);
+              return card;
             });
-            context.registerTestingExtension?.('legacyOrderStateApi', runtime.legacyOrderStateApi);
-            runtime.mount();
-            context.createLegacyOrderCard = (row) => {
-                const card = document.createElement('div');
-                card.className = 'card';
-                card.dataset.rowkey = context.rowKey(row);
-                return card;
-            };
+            runtime.registerCardType({
+              type: 'regular',
+              view: 'regular-test-view',
+              controls: ['regular-test-control'],
+              shape: 'regular-test-shape'
+            });
           }
         }]
       };
@@ -218,7 +177,7 @@ async function loadRenderer({ services, includeOrderCards = false } = {}) {
       Module._load = originalLoad;
       delete require.cache[rendererPath];
       cleanupDom();
-    }, mountCalls: () => mountCalls };
+    } };
   } catch (err) {
     Module._load = originalLoad;
     delete require.cache[rendererPath];
@@ -234,7 +193,6 @@ async function run() {
     });
     try {
       assert.strictEqual(typeof ctx.renderer.__testing.render, 'function');
-      assert.strictEqual(ctx.mountCalls(), 0);
       assert.strictEqual(typeof ctx.handlers['positions:changed'], 'function');
       ctx.handlers['positions:changed'](null, { event: { type: 'position.created' }, position: position('regular-1', 'regular') });
       ctx.handlers['positions:changed'](null, { event: { type: 'position.created' }, position: position('level-1', 'levelOrder') });
@@ -255,8 +213,11 @@ async function run() {
       includeOrderCards: true
     });
     try {
-      assert.strictEqual(ctx.mountCalls(), 1);
-      assert.strictEqual(typeof ctx.renderer.__testing.legacyOrderStateApi.getCardState, 'function');
+      assert.strictEqual(typeof ctx.handlers['positions:changed'], 'function');
+      ctx.handlers['positions:changed'](null, { event: { type: 'position.created' }, position: position('regular-1', 'regular') });
+      await new Promise(resolve => setImmediate(resolve));
+      assert(document.querySelector('.position-card[data-position-id="regular-1"][data-card-type="regular"] .regular-test-card'));
+      assert.strictEqual(Object.prototype.hasOwnProperty.call(ctx.renderer.__testing.cardRuntime, 'legacyRows'), false);
     } finally {
       ctx.restore();
     }

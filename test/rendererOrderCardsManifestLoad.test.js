@@ -52,7 +52,10 @@ async function run() {
     const renderer = require('../app/renderer.js');
     const t = renderer.__testing;
     assert.strictEqual(typeof t.migrateKey, 'function');
-    assert(t.orderCardTypeHandlers && typeof t.orderCardTypeHandlers === 'object');
+    const regular = t.cardRuntime.resolveCardType({ card: { type: 'regular' } }, { kind: 'position' });
+    assert(regular);
+    assert.strictEqual(regular.shape, 'regular-position-card');
+    assert.strictEqual(Object.prototype.hasOwnProperty.call(t, 'orderCardTypeHandlers'), false);
   } finally {
     Module._load = originalLoad;
     console.error = originalError;

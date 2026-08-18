@@ -1,6 +1,5 @@
 const { detectInstrumentType } = require('../instruments');
 const { legacyRowToCreateCommand } = require('../../application/positions');
-const { shouldCreatePositionSnapshot, shouldRouteRowToLegacyRuntime } = require('./legacyRouting');
 const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
@@ -74,7 +73,6 @@ function createOrderCardsApplicationService({
 
   function ingestRow(row = {}, context = {}) {
     const normalized = normalizeRow(row, context);
-    const routeToLegacy = shouldRouteRowToLegacyRuntime(normalized) && !shouldCreatePositionSnapshot(normalized);
     let positionResult = null;
     debugPositionEvents('orderCards.ingest:start', {
       ticker: normalized.ticker,
@@ -84,44 +82,42 @@ function createOrderCardsApplicationService({
     debugPositionEvents('orderCards.ingest:routing', {
       ticker: normalized.ticker,
       cardType: normalized.cardType || normalized.type || 'regular',
-      route: routeToLegacy ? 'legacy-row' : 'position-snapshot'
+      route: 'position-snapshot'
     });
-    if (!routeToLegacy) {
-      if (typeof positions?.handle !== 'function') {
-        const error = 'position snapshot handler is unavailable';
-        debugPositionEvents('orderCards.ingest:position-result', {
-          ticker: normalized.ticker,
-          cardType: normalized.cardType || normalized.type || 'regular',
-          ok: false,
-          error
-        }, 'warn');
-        console.warn('[positions] failed to record regular order card row:', error);
-        return { ok: false, error };
+    if (typeof positions?.handle !== 'function') {
+      const error = 'position snapshot handler is unavailable';
+      debugPositionEvents('orderCards.ingest:position-result', {
+        ticker: normalized.ticker,
+        cardType: normalized.cardType || normalized.type || 'regular',
+        ok: false,
+        error
+      }, 'warn');
+      console.warn('[positions] failed to record order card row:', error);
+      return { ok: false, error };
+    }
+    try {
+      const result = positions.handle(legacyRowToCreateCommand(normalized));
+      positionResult = result;
+      debugPositionEvents('orderCards.ingest:position-result', {
+        ok: result?.ok !== false,
+        error: result?.error || result?.reason || '',
+        ...positionDebugSummary(result?.position),
+        ticker: result?.position?.ticker || normalized.ticker,
+        cardType: result?.position?.card?.type || normalized.cardType || normalized.type || 'regular'
+      }, result?.ok === false ? 'warn' : 'log');
+      if (result?.ok === false) {
+        console.warn('[positions] failed to record order card row:', result.error || result.reason || 'unknown error');
+        return { ok: false, error: result.error || result.reason || 'position snapshot creation failed' };
       }
-      try {
-        const result = positions.handle(legacyRowToCreateCommand(normalized));
-        positionResult = result;
-        debugPositionEvents('orderCards.ingest:position-result', {
-          ok: result?.ok !== false,
-          error: result?.error || result?.reason || '',
-          ...positionDebugSummary(result?.position),
-          ticker: result?.position?.ticker || normalized.ticker,
-          cardType: result?.position?.card?.type || normalized.cardType || normalized.type || 'regular'
-        }, result?.ok === false ? 'warn' : 'log');
-        if (result?.ok === false) {
-          console.warn('[positions] failed to record regular order card row:', result.error || result.reason || 'unknown error');
-          return { ok: false, error: result.error || result.reason || 'position snapshot creation failed' };
-        }
-      } catch (err) {
-        debugPositionEvents('orderCards.ingest:position-result', {
-          ticker: normalized.ticker,
-          cardType: normalized.cardType || normalized.type || 'regular',
-          ok: false,
-          error: err?.message || String(err)
-        }, 'warn');
-        console.warn('[positions] failed to record regular order card row:', err?.message || String(err));
-        return { ok: false, error: err?.message || String(err) };
-      }
+    } catch (err) {
+      debugPositionEvents('orderCards.ingest:position-result', {
+        ticker: normalized.ticker,
+        cardType: normalized.cardType || normalized.type || 'regular',
+        ok: false,
+        error: err?.message || String(err)
+      }, 'warn');
+      console.warn('[positions] failed to record order card row:', err?.message || String(err));
+      return { ok: false, error: err?.message || String(err) };
     }
     readModel.set(rowIdentity(normalized), normalized);
     publishUpdate({
@@ -131,14 +127,12 @@ function createOrderCardsApplicationService({
       eventId: createEventId()
     });
     const output = clone(normalized);
-    if (!routeToLegacy) {
-      output.ok = true;
-      if (positionResult?.position) {
-        output.position = clone(positionResult.position);
-        output.cardType = positionResult.position.card?.type || output.cardType || output.type || 'regular';
-      } else {
-        output.cardType = output.cardType || output.type || 'regular';
-      }
+    output.ok = true;
+    if (positionResult?.position) {
+      output.position = clone(positionResult.position);
+      output.cardType = positionResult.position.card?.type || output.cardType || output.type || 'regular';
+    } else {
+      output.cardType = output.cardType || output.type || 'regular';
     }
     return output;
   }

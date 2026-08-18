@@ -277,25 +277,10 @@ async function run() {
   assert(regularOpenCall);
   assert.strictEqual(regularOpenCall.payload.ticker, 'MSFT');
 
-  handlers['order-cards:changed'](null, { type: 'upsert', row: {
-    cardType: 'regular',
-    ticker: 'MSFT',
-    event: 'up',
-    time: 42,
-    price: 100,
-    qty: 2,
-    sl: 6,
-    tp: 3,
-    riskUsd: 10,
-    provider: 'simulated',
-    instrumentType: 'EQ'
-  } });
-  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.strictEqual(handlers['order-cards:changed'], undefined);
   assert.strictEqual(document.querySelectorAll('.position-card[data-position-id="pos-reg-1"]').length, 1);
   assert.strictEqual(document.querySelector('.card[data-ticker="MSFT"]:not(.position-card)'), null);
 
-  handlers['order-cards:changed'](null, { type: 'upsert', row: exactAddRow });
-  await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT.cfd"]:not(.position-card)'), null);
   assert.strictEqual(document.querySelector('.position-card[data-ticker="ADAUSDT.cfd"]'), null);
 
@@ -374,22 +359,8 @@ async function run() {
   });
   await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(t.positionsById.has('pos-child-1'), true);
-  assert.strictEqual(document.querySelector('.position-card[data-position-id="pos-child-1"]'), null);
+  assert(document.querySelector('.position-card[data-position-id="pos-child-1"]'));
 
-  handlers['order-cards:changed'](null, { type: 'upsert', row: {
-    cardType: 'levelOrder',
-    ticker: 'ADAUSDT',
-    event: 'levelOrder',
-    time: 1,
-    level: 0.164,
-    riskUsd: 25,
-    stopOffsetPts: 4,
-    maxLot: 200,
-    takeProfitPts: 12,
-    provider: 'simulated',
-    instrumentType: 'CX'
-  } });
-  await new Promise(resolve => setTimeout(resolve, 0));
   assert.strictEqual(t.positionsById.has('pos-1'), true);
   assert(document.querySelector('.position-card[data-position-id="pos-1"]'));
   assert.strictEqual(document.querySelector('.card[data-ticker="ADAUSDT"]:not(.position-card)'), null);
@@ -441,14 +412,14 @@ async function run() {
       data: { ...placedPosition.card.data, state: 'closed' }
     }
   };
-  t.legacyOrderStateApi.setCardState('position|pos-preopen-closed', 'closed');
+  t.cardStateApi.setCardState('position|pos-preopen-closed', 'closed');
   handlers['positions:changed'](null, { event: { type: 'position.closed' }, position: preOpenClosedPosition });
   await new Promise(resolve => setTimeout(resolve, 0));
   const preOpenCard = document.querySelector('.position-card[data-position-id="pos-preopen-closed"]');
   assert(preOpenCard);
   assert.deepStrictEqual(Array.from(preOpenCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['archive']);
   assert.strictEqual(t.positionsById.get('pos-preopen-closed').state, 'closed');
-  assert.strictEqual(t.legacyOrderStateApi.getCardState('position|pos-preopen-closed'), undefined);
+  assert.strictEqual(t.cardStateApi.getCardState('position|pos-preopen-closed'), undefined);
 
   calls.length = 0;
   card = document.querySelector('.position-card[data-position-id="pos-1"]');

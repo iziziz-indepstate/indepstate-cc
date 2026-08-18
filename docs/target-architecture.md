@@ -99,7 +99,9 @@ The exact files can evolve, but the dependency direction should not. During the 
 
 Generic services are open for extension through composition. A card type that needs special execution behavior should provide a small service-local controller/policy and register it from its manifest. `main.js` should inject the accumulated controller registry into the generic application service. The generic execution service should ask those controllers for decisions instead of branching on `card.type`, strategy names, or service-specific metadata.
 
-During migration, an extension may also expose a temporary `legacyGuard.js` to describe compatibility filters for legacy rows, events, or payload-to-policy mapping. These guards are transitional only: once the extension no longer depends on legacy renderer rows/events, every `legacyGuard.js` should be deleted rather than treated as a permanent extension API.
+The row-to-position application adapter may still use compatibility policies while old external
+payload shapes exist. Those policies belong to ingestion/application mapping only; they are not
+renderer extension points and must not decide whether a snapshot or a row owns the UI.
 
 Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
 
@@ -113,7 +115,6 @@ Implemented renderer extension points:
 - `hookRenderer(ipcRenderer)` for small renderer boot hooks such as keyboard shortcuts.
 - `rendererHandlers` for general renderer service bootstrap.
 - `rendererPositionHandlers` for position/card UI behavior.
-- `rendererLegacyGuards` for transitional filters between snapshot-backed positions and legacy rows/events.
 - `registerCardType`, `registerCardView`, `registerCardControl`, and `registerCardShape` for runtime-composed position cards.
 - `createPositionCard(position, context)` to resolve and compose a snapshot card exclusively from its registered type, view, controls, and shape.
 - `onRemovePosition` on a card type definition for service-owned renderer cleanup.
@@ -148,9 +149,9 @@ Canonical flow:
 
 The renderer should become a composite renderer backed by a shell-owned card runtime. See
 [card-runtime.md](card-runtime.md) for the target infrastructure/interface subsystem that maps
-position snapshots, application read models, and transitional legacy rows into shell cards.
+position snapshots and application read models into shell cards.
 
-- Card type registry selects by `card.type`, instrument type, or transitional legacy row match.
+- Card type registry selects by `card.type` or a service-owned snapshot matcher.
 - View renderers select by available `card.data` keys and service-registered view names.
 - Control renderers select by available `card.actions` and service-registered control names.
 - Shape composers arrange reusable views and controls into concrete card layouts.
@@ -161,9 +162,14 @@ position snapshots, application read models, and transitional legacy rows into s
 
 Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
 
-Legacy renderer maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey` are now hidden behind shell card runtime facades for pending requests, placed orders, visual state, and ticket binding. The shell runtime also owns the dependency-injected legacy row presentation/reconciliation adapter; `orderCards` only supplies legacy rows, private lookups, and its regular renderer implementation. These APIs remain transitional compatibility infrastructure, and durable lifecycle state should continue moving into application read models or infrastructure bridges.
+Renderer-local maps such as `cardStates`, `pendingByReqId`, `ticketToKey`, and `placedOrderByKey`
+remain transient interaction state behind shell-owned APIs. They do not own card rows or lifecycle
+truth; reconciliation comes from `Position` snapshots.
 
-Until that migration is complete, `app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be added in service-local renderer modules and registered from the owning service manifest through dependency injection from the shell. Do not add new level-order-only helpers, action flows, or snapshot filters directly to `app/renderer.js`.
+`app/renderer.js` remains the shell/composition layer. New card-specific renderer behavior should be
+added in service-local renderer modules and registered from the owning service manifest through
+dependency injection from the shell. Do not add new level-order-only helpers, action flows, or
+snapshot filters directly to `app/renderer.js`.
 
 ## Target Execution Extension Points
 
@@ -185,7 +191,7 @@ Implemented extension registries include:
 
 - `servicesApi.executionPayloadPolicies` for module-specific payload normalization and validation.
 - `servicesApi.executionCloseControllers` for provider/card-specific close post-processing.
-- renderer registries populated from service manifests for card creation, action controls, snapshot rendering, and legacy compatibility filters.
+- renderer registries populated from service manifests for card creation, action controls, and snapshot rendering.
 
 ## Target Provider Boundary
 
@@ -226,16 +232,14 @@ true in the code and what remains.
   for card-creating commands.
 - The renderer dispatches snapshot cards through a manifest-populated registry keyed by
   `position.card.type`.
-- The renderer has a shell-owned card runtime with card type, view, control, and shape registries,
-  state facades, legacy row access, and a dependency-injected legacy row presentation adapter.
-- `orderCards` no longer owns generic card runtime infrastructure. It supplies regular order bodies,
-  legacy rows, private lookups, and regular renderer implementation while reusable card primitives
-  live under the shell card runtime.
+- The renderer has a shell-owned card runtime with card type, view, control, and shape registries.
+- `orderCards` no longer owns generic card runtime infrastructure. It supplies regular snapshot
+  bodies and actions while reusable card primitives live under the shell card runtime.
 - Legacy order-card public APIs such as `registerOrderCardInstrumentHandler`,
   `registerOrderCardTypeHandler`, `orderCardsState`, `setLegacyOrderCardState`, and
   `orderCardHandlerFor*` have been removed from renderer context.
-- `OptionStrat` is isolated as an extension-owned service. Its adapter, renderer behavior, IPC
-  handlers, execution payload policy, close controller, legacy guards, settings policy, lifecycle
+- `OptionStrat` is isolated as an extension-owned service. Its adapter, snapshot renderer behavior,
+  IPC handlers, execution payload policy, close controller, settings policy, lifecycle
   enrichment, action helpers, and execution defaults live under `app/services/optionstrat`.
 - Brokerage no longer hard-codes OptionStrat provider defaults. Optional provider modules register
   adapter factories and execution config defaults from their manifests.
@@ -245,14 +249,13 @@ true in the code and what remains.
   are contributed through lifecycle enrichers.
 - `riskManager` base defaults no longer include OptionStrat, while unknown provider overrides remain
   supported by descriptor policy.
-- Generic execution orchestration, IPC wiring, renderer registries, and compatibility hooks now have
+- Generic execution orchestration, IPC wiring, and renderer registries now have
   extension points that can be reused by later modules.
+- `orderCards.ingestRow` always creates a `Position` snapshot. The legacy row renderer, routing
+  split, runtime bridge, presentation adapter, and renderer guards have been removed.
 
 ### Remaining
 
-- Remove the remaining row-backed path after position/read-model snapshots replace it completely; then
-  delete the transitional state facades, presentation adapter, and compatibility guards instead of
-  keeping them as permanent APIs.
 - Continue moving order-card and position workflows from `app/main.js` and `app/renderer.js` into
   application/infrastructure/interface modules.
 - Promote mature registries into clearer typed contracts once more modules use them.
@@ -265,11 +268,11 @@ true in the code and what remains.
 
 - `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
 - `test/positionsRenderer.test.js` covers renderer dispatch by `position.card.type`.
-- `test/orderCardsApplicationService.test.js` covers snapshot routing versus the legacy row path.
-- `test/cardRuntime.test.js`, `test/cardRuntimeLibrary.test.js`, and
-  `test/cardRuntimeLegacyRowPresentation.test.js` cover shell card runtime registries, reusable
-  card primitives, and legacy row presentation behavior.
-- `test/orderCardsManifestRenderer.test.js` covers `orderCards` renderer bootstrap, built-in card
-  runtime registrations, and the private legacy row adapter connection.
+- `test/orderCardsApplicationService.test.js` covers unconditional snapshot creation, including an
+  unknown renderer type.
+- `test/cardRuntime.test.js` and `test/cardRuntimeLibrary.test.js` cover snapshot registry
+  composition and reusable card primitives.
+- `test/orderCardsManifestRenderer.test.js` covers `orderCards` snapshot renderer bootstrap and
+  built-in card runtime registrations.
 
 For boot/event troubleshooting during development, set `ISCC_DEBUG_POSITION_EVENTS=1`. The trace logs renderer manifest loading, handler registration, position/order-card event routing, and related failures. Keep it dev-only; it is intended for diagnosing boot and event ordering issues, not normal user output.

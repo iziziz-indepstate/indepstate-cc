@@ -22,8 +22,8 @@ function run() {
     'app/services/optionstrat/renderer.js'
   ]) {
     const source = read(file);
-    assert(!source.includes('orderCardsState'), `${file} must use cardRuntime legacy row facade`);
-    assert(!source.includes('setLegacyOrderCardState'), `${file} must not use the legacy row visual setter`);
+    assert(!source.includes('orderCardsState'), `${file} must not consume order-card row state`);
+    assert(!source.includes('setLegacyOrderCardState'), `${file} must not use a row visual setter`);
   }
 
   const rendererSource = read('app/renderer.js');

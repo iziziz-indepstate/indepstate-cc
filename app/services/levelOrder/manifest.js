@@ -234,12 +234,9 @@ const rendererPositionHandlers = [{
   }
 }];
 
-const rendererLegacyGuards = [createLevelOrderLegacyGuard()];
-
 module.exports = {
   initService,
   registerMainApplicationServices,
   registerMainIpcHandlers,
-  rendererPositionHandlers,
-  rendererLegacyGuards
+  rendererPositionHandlers
 };

@@ -17,30 +17,21 @@ function createOrderCardsRenderer({
   detectInstrumentType,
   rowKey,
   ipcRenderer,
-  legacyOrderStateApi,
+  orderStateApi,
   cardByKey,
   setCardState,
   pendingActionInfo,
-  instrumentTypeHandlers = {},
-  cardTypeHandlers = {},
   toast,
   shakeCard,
   render,
   btn,
-  removeRow,
-  formatBidAskText = () => '',
-  formatSpreadTriple = () => '',
-  updateSpreadForTicker = () => {},
-  shouldShowBidAsk = () => false,
-  shouldShowSpread = () => false,
   getCardButtons = () => [],
   getButtonRows = () => 1,
-  getRows = () => [],
   cardRuntimeLibrary,
   now = () => Date.now(),
   random = () => Math.random()
 } = {}) {
-  const legacyState = legacyOrderStateApi || {
+  const executionState = orderStateApi || {
     markPendingRequest: () => false,
     setPendingExecLabel: () => false,
     setPendingId: () => false
@@ -51,54 +42,7 @@ function createOrderCardsRenderer({
     document: typeof document !== 'undefined' ? document : null
   });
 
-function registerInstrumentHandler(instrumentType, handler) {
-  const key = String(instrumentType || '').trim();
-  if (!key || !handler || typeof handler !== 'object') return false;
-  instrumentTypeHandlers[key] = handler;
-  return () => {
-    if (instrumentTypeHandlers[key] === handler) delete instrumentTypeHandlers[key];
-  };
-}
-
-function registerCardTypeHandler(cardType, handler) {
-  const key = String(cardType || '').trim();
-  if (!key || !handler || typeof handler !== 'object') return false;
-  cardTypeHandlers[key] = handler;
-  return () => {
-    if (cardTypeHandlers[key] === handler) delete cardTypeHandlers[key];
-  };
-}
-
-function handlerFor(row = {}, instrumentType) {
-  const type = instrumentType || row.instrumentType;
-  return instrumentTypeHandlers[type] || cardTypeHandlers[row.cardType] || cardTypeHandlers[row.type] || null;
-}
-
-function handlerForKey(key) {
-  const row = (getRows() || []).find(r => rowKey(r) === key) || {};
-  return handlerFor(row, row.instrumentType);
-}
-
-function titleFor(row = {}, instrumentType) {
-  const handler = handlerFor(row, instrumentType);
-  const custom = typeof handler?.title === 'function'
-    ? handler.title({ row, instrumentType })
-    : null;
-  return custom || row.ticker;
-}
-
-function matchesExistingRow(incomingRow = {}, existingRow = {}) {
-  const instrumentType = incomingRow.instrumentType || detectInstrumentType(incomingRow.ticker);
-  const handler = handlerFor(incomingRow, instrumentType);
-  if (typeof handler?.matchesExistingRow === 'function') {
-    return !!handler.matchesExistingRow({ incomingRow, existingRow, rowKey });
-  }
-  return existingRow.ticker === incomingRow.ticker;
-}
-
 function createBody(row, key, instrumentType) {
-  const handler = handlerFor(row, instrumentType);
-  if (handler && typeof handler.createBody === 'function') return handler.createBody(row, key);
   switch (instrumentType) {
     case 'EQ':
       return createEquitiesBody(row, key);
@@ -109,23 +53,6 @@ function createBody(row, key, instrumentType) {
     default:
       return createEquitiesBody(row, key);
   }
-}
-
-function buttons(row, instrumentType) {
-  const handler = handlerFor(row, instrumentType);
-  if (handler && typeof handler.buttons === 'function') {
-    const configured = handler.buttons(row);
-    if (Array.isArray(configured) && configured.length) return configured;
-  }
-  return null;
-}
-
-function scheduleInstantExecution(row, placeFn = place, instrumentType) {
-  const handler = handlerFor(row, instrumentType);
-  if (!handler || typeof handler.scheduleInstantExecution !== 'function') return false;
-  if (typeof handler.shouldScheduleInstantExecution === 'function'
-    && !handler.shouldScheduleInstantExecution({ row, instrumentType })) return false;
-  return handler.scheduleInstantExecution({ row, place: placeFn, instrumentType });
 }
 
 // ======= Crypto body (Qty, Price, SL, TP; TP auto = SL*3) =======
@@ -715,50 +642,6 @@ function keyForRow(row = {}) {
   return row.__positionKey || rowKey(row);
 }
 
-function isUpEvent(ev) {
-  return /(up|long)/i.test(String(ev));
-}
-
-function createLegacyOrderCard({ row = {}, index } = {}) {
-  const key = rowKey(row);
-  const instrumentType = row.instrumentType || detectInstrumentType(row.ticker);
-  const cardHandler = handlerFor(row, instrumentType);
-
-  ensureInstrument(row.ticker, row.provider);
-  cardHandler?.onCreateCard?.({ row, key, instrumentType });
-  const body = createBody(row, key, instrumentType);
-  const cardButtons = buttons(row, instrumentType) || getCardButtons();
-  const card = library.shapes.createLegacyCardShape({
-    title: titleFor(row, instrumentType),
-    body,
-    actions: cardButtons,
-    onPlace: async (action) => {
-      const v = body.validate();
-      if (!v.valid) return;
-      await place(action.action, row, v, instrumentType, action.label);
-    },
-    onRemove: () => removeRow?.(row),
-    onRetryStop: (event) => {
-      const cardEl = event.currentTarget.closest('.card');
-      const reqId = cardEl?.dataset.reqId;
-      if (reqId) ipcRenderer.invoke('execution:stop-retry', reqId);
-    },
-    bidAskText: shouldShowBidAsk()
-      ? formatBidAskText(instrumentInfoFor(row.ticker, row), row) || ''
-      : undefined,
-    spreadText: shouldShowSpread() ? formatSpreadTriple(row.ticker, row) || '' : undefined,
-    status: '',
-    actionRows: getButtonRows(),
-    removeColor: isUpEvent(row.event) ? '#2e7d32' : '#c62828',
-    attributes: {
-      'data-rowkey': key,
-      'data-ticker': row.ticker,
-      'data-instrument-type': instrumentType
-    }
-  });
-  return card;
-}
-
 async function place(kind, row, v, instrumentType, btnLabel) {
   if (!v.valid) return;
 
@@ -768,8 +651,8 @@ async function place(kind, row, v, instrumentType, btnLabel) {
   const isPendingExec = !!pendingInfo;
   const isLong = pendingInfo ? pendingInfo.side === 'long' : null;
   const alias = isPendingExec ? btnLabel : null;
-  legacyState.markPendingRequest(requestId, key, { retryCount: 0 });
-  if (alias) legacyState.setPendingExecLabel(key, alias);
+  executionState.markPendingRequest(requestId, key, { retryCount: 0 });
+  if (alias) executionState.setPendingExecLabel(key, alias);
   setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
   const card = cardByKey(key);
   if (card) {
@@ -813,7 +696,6 @@ async function place(kind, row, v, instrumentType, btnLabel) {
 
   let res;
   try {
-    const handler = handlerFor(row, instrumentType);
     if (isPendingExec) {
       const pendPayload = {
         ticker: row.ticker,
@@ -828,27 +710,20 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       };
       res = await ipcRenderer.invoke('queue-place-pending', pendPayload);
     } else {
-      const prepared = handler && typeof handler.preparePlace === 'function'
-        ? await handler.preparePlace({ row, validated: v, requestId, baseMeta, kind, instrumentType, btnLabel })
-        : null;
-      if (prepared) {
-        res = await ipcRenderer.invoke(prepared.channel || 'queue-place-order', prepared.payload || prepared);
-      } else {
-        const payload = {
-          ticker: row.ticker,
-          event: row.event,
-          price: Number(priceVal),
-          kind,
-          instrumentType: instrumentType,
-          tickSize: tick,
-          meta: baseMeta,
-        };
-        res = await ipcRenderer.invoke('queue-place-order', payload);
-      }
+      const payload = {
+        ticker: row.ticker,
+        event: row.event,
+        price: Number(priceVal),
+        kind,
+        instrumentType: instrumentType,
+        tickSize: tick,
+        meta: baseMeta,
+      };
+      res = await ipcRenderer.invoke('queue-place-order', payload);
     }
     if (res && typeof res.providerOrderId === 'string' && res.providerOrderId.startsWith('pending:')) {
       const pendId = res.providerOrderId.slice('pending:'.length);
-      legacyState.setPendingId(requestId, pendId);
+      executionState.setPendingId(requestId, pendId);
       if (card) card.dataset.pendingId = pendId;
       toast(`… ${row.ticker}: sent, waiting confirmation`);
     }
@@ -858,11 +733,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       shakeCard(key);
       render();
     } else {
-      if (handler && typeof handler.afterPlaceOk === 'function') {
-        await handler.afterPlaceOk({ row, validated: v, result: res, requestId, key, baseMeta, kind, instrumentType, btnLabel, setCardState });
-      } else {
-        setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
-      }
+      setCardState(key, isPendingExec ? 'pending-exec' : 'pending');
       render();
     }
   } catch (e) {
@@ -1076,22 +947,11 @@ function createRegularPositionCard({
     createFxBody,
     createEquitiesBody,
     createBody,
-    createLegacyOrderCard,
-    buttons,
-    registerInstrumentHandler,
-    registerCardTypeHandler,
-    handlerFor,
-    handlerForKey,
-    matchesExistingRow,
-    titleFor,
-    scheduleInstantExecution,
     place,
     regularRowFromPosition,
     createRegularPositionView,
     createRegularPositionActionsControl,
-    createRegularPositionCard,
-    instrumentTypeHandlers,
-    cardTypeHandlers
+    createRegularPositionCard
   };
 }
 

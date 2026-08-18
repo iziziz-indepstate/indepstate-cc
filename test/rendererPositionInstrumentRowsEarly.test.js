@@ -58,16 +58,7 @@ async function run() {
       };
     }
     if (normalizedRequest.endsWith('/app/services/orderCards/manifest.js')) {
-      return {
-        rendererHandlers: [{
-          cardType: 'regular',
-          register(context = {}) {
-            const rows = [];
-            context.registerRendererRowProvider?.(() => rows);
-            context.registerTestingExtension?.('orderCardsRows', rows);
-          }
-        }]
-      };
+      return { rendererHandlers: [] };
     }
     return originalLoad(request, parent, isMain);
   };

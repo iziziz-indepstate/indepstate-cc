@@ -1,146 +1,100 @@
 # Card Runtime
 
-The card runtime is the renderer infrastructure subsystem that adapts application read models into shell cards.
-
-It is not a domain abstraction. Positions and order aggregates remain the source of lifecycle truth. The card runtime only describes how snapshots, actions, and transitional legacy rows are presented and controlled in the renderer shell.
+The card runtime is renderer infrastructure that composes `Position` snapshots into shell cards.
+It is not a domain abstraction: position aggregates and their application read models remain the
+source of lifecycle truth.
 
 ## Architectural Role
 
-The runtime belongs to the infrastructure/interface side of the app:
+The runtime sits on the infrastructure/interface side of the app:
 
-- It maps position snapshots, application read models, and legacy order rows into renderer view models and DOM.
-- It defines reusable card concepts such as controls, views, shapes, and card type registration.
-- It owns renderer-local compatibility state while that state still exists.
-- It sends commands through application or IPC boundaries when users act.
-- It does not enforce domain invariants, decide aggregate transitions, or treat UI state as lifecycle truth.
+- it resolves a snapshot renderer from `position.card.type` or a registered snapshot matcher;
+- it composes registered views, controls, and shapes;
+- it sends user actions through injected application or IPC boundaries;
+- it invokes service-owned cleanup when a snapshot is removed;
+- it does not accept or render order-card rows.
 
-The dependency direction should be:
+The dependency direction is:
 
 ```text
-domain/application aggregates and read models
+domain/application Position snapshots
   -> renderer shell card runtime
-       <- orderCards registers regular/legacy mappings
-       <- optionstrat registers option mappings
-       <- levelOrder registers level-order mappings
+       <- orderCards registers regular snapshot composition
+       <- optionstrat registers option snapshot composition
+       <- levelOrder registers level-order snapshot composition
 ```
 
-`orderCards` is therefore one module using the runtime. It should not be the owner of generic card infrastructure.
+`orderCards` is one consumer of the runtime. Generic card infrastructure remains shell-owned.
 
-## Shell-Owned Concepts
+## Registry API
 
-The renderer shell owns the generic runtime surface:
-
-- **Card type registry**: selects a card definition by `card.type`, instrument type, or a transitional legacy row match.
-- **Control registry**: reusable action controls such as open, close, remove, cancel pending, retry, or module-defined controls.
-- **View registry**: reusable visual fragments such as status badges, identity headers, order detail fields, option legs, payoff summaries, valuation fields, and position data grids.
-- **Shape registry**: reusable card composers that arrange views and controls into concrete layouts.
-- **Renderer state facades**: compatibility stores for pending requests, placed orders, visual state, and ticket bindings.
-- **Legacy row presentation adapter**: transitional status, pending/placed/profit/loss, compact-card, retry, cancel/close, restore, and handler-hook reconciliation for row-backed cards.
-- **Lifecycle slots**: shared hooks for render, validate, act, reconcile, restore, and remove behavior.
-
-These concepts should be exposed through narrow registration APIs and injected dependencies rather than by importing a specific card module.
-
-Conceptual API shape:
+Service manifests register snapshot components through:
 
 ```js
+cardRuntime.registerCardView('option-snapshot', renderOptionSnapshot);
+cardRuntime.registerCardControl('option-actions', createOptionActions);
+cardRuntime.registerCardShape('option-card', composeOptionCard);
 cardRuntime.registerCardType({
   type: 'option',
-  match: snapshotOrRow => snapshotOrRow.card?.type === 'option',
-  shape: 'trade-card',
-  view: 'optionSnapshot',
-  controls: ['openOption', 'closeOption', 'remove'],
+  view: 'option-snapshot',
+  controls: ['option-actions'],
+  shape: 'option-card'
 });
-
-cardRuntime.registerCardView('optionSnapshot', renderer);
-cardRuntime.registerCardControl('closeOption', factory);
-cardRuntime.registerCardShape('trade-card', composer);
 ```
 
-This is a registry/composition contract, not a base-class hierarchy. A service can reuse library views, controls, and shapes, or register specialized ones when its card semantics require them.
+The shell creates and cleans up cards through:
 
-### Snapshot Card Composition
+- `createPositionCard(position, context)`;
+- `cleanupPositionCard(position, context)`.
 
-`cardRuntime.createPositionCard(position, context)` is the shell-facing snapshot composition helper. It resolves the card definition with `resolveCardType(position, { kind: 'position' })`, resolves the named `view`, every named entry in `controls`, and the named `shape`, then calls the shape with the composed parts.
+There is no row-renderer connection API. Card definitions do not support `legacyRow`,
+`legacyInstrumentTypes`, or `legacyCardTypes`, and the runtime does not expose legacy row lookup or
+state mutation facades.
 
-The stable snapshot definition fields are:
+## Snapshot Composition
+
+`createPositionCard()` resolves a definition with `resolveCardType(position, { kind: 'position' })`,
+then resolves its named `view`, every named control, and its shape. Stable definition fields are:
 
 - `type` and/or `match` for selection;
 - `view` for the service-owned body renderer;
 - `controls` for service-owned or shared controls;
 - `shape` for final DOM composition;
-- optional `onRemovePosition(position, context)` for renderer cleanup.
+- optional `onRemovePosition(position, context)` for cleanup.
 
-The view, controls, and shape receive a normalized composition context containing `position`, `key`, `title`, `requestRemove`, `createActionsFromSnapshot`, and injected renderer dependencies. The shape additionally receives `body`/`view`, snapshot `actions`, and resolved `controls`. The shell may build `createActionsFromSnapshot` from its generic `dispatchPositionAction` helper, but components should depend on the composed callback name. If the definition or any named component required for composition is absent, `createPositionCard()` returns `undefined` and the shell does not render that snapshot. The helper composes presentation only and does not store or infer lifecycle state.
+Views, controls, and shapes receive a normalized context containing `position`, `key`, `title`,
+`requestRemove`, `createActionsFromSnapshot`, and injected renderer dependencies. If the card type or
+any required component is missing, `createPositionCard()` returns `undefined`; renderer diagnostics
+then report that no runtime composition is available. An unknown `card.type` never falls back to a
+row renderer.
 
-## Built-In Card Library
+## Built-In Library
 
-The shell-owned library in `app/infrastructure/renderer/cardRuntime/library.js` provides the shared DOM composition used by regular cards:
+`app/infrastructure/renderer/cardRuntime/library.js` provides reusable snapshot primitives:
 
-```js
-const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
+- header, status, and data-grid views;
+- remove, retry, and action-button controls;
+- `createPositionCardShape` for the standard position shell.
 
-const library = createCardRuntimeLibrary({
-  el,
-  btn,
-  document,
-  formatValue,
-  createActionButton
-});
-```
-
-Its public surface is grouped by responsibility:
-
-- `views.createHeaderView`, `views.createStatusView`, and `views.createDataGridView` create standard card fragments and position field grids.
-- `controls.createRemoveControl`, `controls.createRetryControl`, and `controls.createActionButtonsControl` preserve the standard close, retry, and `data-kind` action-button contracts.
-- `shapes.createLegacyCardShape` and `shapes.createPositionCardShape` compose the regular legacy-order and position shells from injected bodies, actions, callbacks, status, compact mode, and attributes.
-
-During renderer bootstrap, `orderCards` registers these reusable entries in `cardRuntime`:
+During renderer bootstrap, `orderCards` registers:
 
 | Registry | Name |
 | --- | --- |
-| Shape | `regular-order-legacy-card` |
 | Shape | `regular-position-card` |
-| Control | `standard-remove` |
-| Control | `standard-retry` |
-| Control | `standard-action-buttons` |
 | Control | `regular-position-actions` |
 | View | `position-data-grid` |
 | View | `regular-position-view` |
 
-Other renderer modules can resolve them through `getCardShape`, `getCardControl`, and `getCardView`. The library only owns generic DOM composition. `orderCards` continues to own the EQ/FX/CX input bodies, sizing and validation, placement, regular action semantics, legacy row ingestion, and private handler lookup. Specialized modules such as `optionstrat` and `levelOrder` may adopt the named library pieces independently.
+`optionstrat` and `levelOrder` register their own snapshot views, controls, shapes, and types from
+their service manifests.
 
-When a card type declares `legacyInstrumentTypes` or `legacyCardTypes`, the runtime composes the transitional row handler from its registered `view`, `controls`, and `legacyRow` callbacks and connects it to the `orderCards` renderer automatically. The former public APIs `registerOrderCardInstrumentHandler` and `registerOrderCardTypeHandler` have been removed. Legacy row integration is available only through card type definitions registered with `registerCardType({ legacyInstrumentTypes, legacyCardTypes, view, controls, legacyRow })`.
+## State and Lifecycle
 
-`orderCards` no longer publishes legacy row state or handler APIs such as `orderCardsState`, `setLegacyOrderCardState`, `orderCardHandlerFor`, or `orderCardHandlerForKey` in the renderer context. It injects private row/card lookup, handler lookup, state facades, IPC, and shell callbacks into `cardRuntime/legacyRowPresentation.js`. The resulting shell-owned `setCardState` callback is shared by the regular renderer, `legacyOrderListRuntime`, and `cardRuntime.connectLegacyOrderCardRenderer({ renderer, getRows, rowKey, setCardState })`. Modules that still need transitional row access use the shell-owned `cardRuntime.legacyRows`, `cardRuntime.findLegacyRowByKey`, and `cardRuntime.setLegacyRowCardState` facades together with card type definitions.
+Renderer-local state may cache transient interaction details, but it must not become a second
+aggregate model. Controls send commands; reconciliation comes from updated `Position` snapshots.
+Periodic option valuation also enumerates current snapshots and updates their read-model data rather
+than looking up mutable order-card rows.
 
-## Service-Owned Registration
-
-Each service owns the mappings that are specific to its aggregate, provider, strategy, or legacy adapter:
-
-- `orderCards` registers regular/manual order cards and standard order controls, supplies legacy rows and the regular renderer implementation, and injects its private lookups into the shell-owned legacy row presentation adapter while row-backed cards still exist.
-- `optionstrat` registers separate legacy-row and snapshot views/controls, snapshot definitions for both `option` and `optionstrat`, option card shapes, payoff and valuation rendering, and option-specific reconciliation.
-- `levelOrder` registers level-order controls, level input views, level-order position card views, and LB/LS action behavior.
-
-Snapshot cards are registered only through `registerCardType`, `registerCardView`, `registerCardControl`, and `registerCardShape`. Service-owned renderer cleanup belongs in the definition's `onRemovePosition` hook and is invoked through `cardRuntime.cleanupPositionCard(position)`.
-
-Service manifests should populate the runtime registries during renderer bootstrap. Service-specific card bodies, validation UI, action payload mapping, and removal/reconciliation behavior should stay in the owning service.
-
-## State And Lifecycle Rules
-
-Position snapshots and application read models remain authoritative for lifecycle state. Renderer-local state may cache presentation details or bridge compatibility gaps, but it should not become a second aggregate model.
-
-Controls should send commands or IPC requests and let application services and aggregates decide outcomes. They may optimistically mark renderer state as pending for feedback, but reconciliation must come from command results, provider events, or updated read models.
-
-Legacy maps such as pending request labels, placed order lookup, card visual state, and ticket binding should live behind shell-owned runtime facades. During migration, modules may consume those facades through injection. Long term, durable lifecycle state should move into application read models or infrastructure bridges.
-
-## Migration Direction
-
-The current renderer still contains a row-backed legacy order-card path. Its generic presentation and reconciliation behavior now lives in the shell card runtime, while `orderCards` supplies rows and the regular renderer implementation. That path remains transitional.
-
-The target migration is:
-
-1. Keep generic renderer state, legacy row presentation, and legacy row access behind the shell card runtime facades.
-2. Keep `orderCards` as the source for regular/manual order cards and legacy rows without exporting its private row state or handlers into renderer context.
-3. Register `regular`, `optionstrat`, `levelOrder`, and later snapshot card types only through card runtime registries.
-4. Promote stable registry contracts once multiple services use the same concepts.
-5. Delete the remaining row-backed path, legacy guards, and transitional presentation adapter when snapshot-backed read models fully replace them.
+`order-cards:changed` remains a source/read-model compatibility and diagnostic event. It is not a
+card creation signal. Renderer card creation is driven exclusively by `positions:list` and
+`positions:changed`.

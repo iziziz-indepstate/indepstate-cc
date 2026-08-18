@@ -1,6 +1,5 @@
 const { createCardStateApi } = require('./cardStateApi');
-const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('./stateFacades');
-const { createLegacyRowPresentationAdapter } = require('./legacyRowPresentation');
+const { createOrderStateFacades } = require('./stateFacades');
 
 function unregisterFrom(list, item) {
   const index = list.indexOf(item);
@@ -41,153 +40,6 @@ function createCardRuntime(options = {}) {
   const cardViews = createNamedRegistry();
   const cardControls = createNamedRegistry();
   const cardShapes = createNamedRegistry();
-  const legacyDefinitionHandlers = new Map();
-  let legacyOrderCardAdapter = null;
-  const legacyInstrumentHandlerUnregisters = {};
-  const legacyCardTypeHandlerUnregisters = {};
-  const bridgedLegacyInstrumentHandlers = {};
-  const bridgedLegacyCardTypeHandlers = {};
-
-  function legacyRenderer() {
-    return legacyOrderCardAdapter?.renderer || legacyOrderCardAdapter;
-  }
-
-  function bridgeLegacyInstrumentHandler(instrumentType, handler) {
-    const renderer = legacyRenderer();
-    if (!renderer || typeof renderer.registerInstrumentHandler !== 'function') return undefined;
-    return renderer.registerInstrumentHandler(instrumentType, handler);
-  }
-
-  function bridgeLegacyCardTypeHandler(cardType, handler) {
-    const renderer = legacyRenderer();
-    if (!renderer || typeof renderer.registerCardTypeHandler !== 'function') return undefined;
-    return renderer.registerCardTypeHandler(cardType, handler);
-  }
-
-  function onceUnregister(unregister) {
-    if (typeof unregister !== 'function') return undefined;
-    let called = false;
-    return () => {
-      if (called) return;
-      called = true;
-      unregister();
-    };
-  }
-
-  function legacyKeys(values) {
-    if (!Array.isArray(values)) return [];
-    return Array.from(new Set(values.map(value => String(value || '').trim()).filter(Boolean)));
-  }
-
-  function controlDefinitionsFor(definition, context = {}) {
-    const names = Array.isArray(definition.controls) ? definition.controls : [];
-    return names.map(name => {
-      const factory = cardControls.get(name);
-      if (typeof factory !== 'function') return factory;
-      return factory({ definition, runtime, ...context });
-    }).filter(Boolean);
-  }
-
-  function controlProperty(definition, property, context = {}) {
-    const controls = controlDefinitionsFor(definition, context);
-    for (let index = controls.length - 1; index >= 0; index -= 1) {
-      if (controls[index]?.[property] !== undefined) return controls[index][property];
-    }
-    return undefined;
-  }
-
-  function createLegacyHandler(definition) {
-    const handler = {
-      ...(definition.legacyRow || {}),
-      createBody(row, key) {
-        const view = cardViews.get(definition.view);
-        return typeof view === 'function' ? view(row, key) : undefined;
-      },
-      buttons(row) {
-        return controlDefinitionsFor(definition, { row }).flatMap(control => {
-          const buttons = typeof control?.buttons === 'function' ? control.buttons(row) : control?.buttons;
-          if (Array.isArray(buttons)) return buttons;
-          return buttons ? [buttons] : [];
-        });
-      }
-    };
-    const controlProperties = [
-      'preparePlace',
-      'afterPlaceOk',
-      'scheduleInstantExecution',
-      'placedStatusTitle',
-      'placedButton',
-      'closePlacedOrder',
-      'shouldKeepFullCardOnState',
-      'shouldEnableButtonOnState',
-      'shouldHideButtonsOnState',
-      'resetButtons'
-    ];
-    for (const property of controlProperties) {
-      Object.defineProperty(handler, property, {
-        configurable: true,
-        enumerable: true,
-        get() {
-          return controlProperty(definition, property);
-        }
-      });
-    }
-    return handler;
-  }
-
-  function definitionHandlerFor(kind, key) {
-    const field = kind === 'instrument' ? 'legacyInstrumentTypes' : 'legacyCardTypes';
-    for (let index = cardTypeDefinitions.length - 1; index >= 0; index -= 1) {
-      const definition = cardTypeDefinitions[index];
-      if (legacyKeys(definition[field]).includes(key)) return legacyDefinitionHandlers.get(definition);
-    }
-    return undefined;
-  }
-
-  function syncLegacyBridge(kind, key) {
-    const unregisters = kind === 'instrument'
-      ? legacyInstrumentHandlerUnregisters
-      : legacyCardTypeHandlerUnregisters;
-    const bridgedHandlers = kind === 'instrument'
-      ? bridgedLegacyInstrumentHandlers
-      : bridgedLegacyCardTypeHandlers;
-    const desired = definitionHandlerFor(kind, key);
-    if (bridgedHandlers[key] === desired) return;
-    if (typeof unregisters[key] === 'function') unregisters[key]();
-    delete unregisters[key];
-    delete bridgedHandlers[key];
-    if (!legacyOrderCardAdapter || !desired) return;
-    const unregister = kind === 'instrument'
-      ? bridgeLegacyInstrumentHandler(key, desired)
-      : bridgeLegacyCardTypeHandler(key, desired);
-    unregisters[key] = onceUnregister(unregister);
-    bridgedHandlers[key] = desired;
-  }
-
-  function syncAllLegacyBridges() {
-    const instrumentKeys = new Set(Object.keys(bridgedLegacyInstrumentHandlers));
-    const cardTypeKeys = new Set(Object.keys(bridgedLegacyCardTypeHandlers));
-    for (const definition of cardTypeDefinitions) {
-      legacyKeys(definition.legacyInstrumentTypes).forEach(key => instrumentKeys.add(key));
-      legacyKeys(definition.legacyCardTypes).forEach(key => cardTypeKeys.add(key));
-    }
-    instrumentKeys.forEach(key => syncLegacyBridge('instrument', key));
-    cardTypeKeys.forEach(key => syncLegacyBridge('cardType', key));
-  }
-
-  function disconnectLegacyBridges() {
-    for (const unregister of Object.values(legacyInstrumentHandlerUnregisters)) {
-      if (typeof unregister === 'function') unregister();
-    }
-    for (const unregister of Object.values(legacyCardTypeHandlerUnregisters)) {
-      if (typeof unregister === 'function') unregister();
-    }
-    for (const key of Object.keys(legacyInstrumentHandlerUnregisters)) delete legacyInstrumentHandlerUnregisters[key];
-    for (const key of Object.keys(legacyCardTypeHandlerUnregisters)) delete legacyCardTypeHandlerUnregisters[key];
-    for (const key of Object.keys(bridgedLegacyInstrumentHandlers)) delete bridgedLegacyInstrumentHandlers[key];
-    for (const key of Object.keys(bridgedLegacyCardTypeHandlers)) delete bridgedLegacyCardTypeHandlers[key];
-  }
-
   const runtime = {
     stateApi,
     stateFacades,
@@ -195,11 +47,8 @@ function createCardRuntime(options = {}) {
       instrumentDisplayPolicy: [],
       cardStateHook: []
     },
-    rendererLayers: [],
-    rendererRowProviders: [],
     positionSnapshotHooks: [],
     positionRemovedHooks: [],
-    rendererLegacyGuards: [],
     cardTypeDefinitions,
     cardViews: cardViews.values,
     cardControls: cardControls.values,
@@ -222,30 +71,6 @@ function createCardRuntime(options = {}) {
       return this.registerRendererExtension('cardStateHook', hook);
     },
 
-    registerRendererLayer(layer) {
-      if (typeof layer !== 'function') return false;
-      this.rendererLayers.push(layer);
-      return () => unregisterFrom(this.rendererLayers, layer);
-    },
-
-    registerRendererRowProvider(provider) {
-      if (typeof provider !== 'function') return false;
-      this.rendererRowProviders.push(provider);
-      return () => unregisterFrom(this.rendererRowProviders, provider);
-    },
-
-    rendererRows() {
-      return this.rendererRowProviders.flatMap(provider => {
-        try {
-          const rows = provider();
-          return Array.isArray(rows) ? rows : [];
-        } catch (err) {
-          console.error('[rendererExtension] row provider failed', err?.message || err);
-          return [];
-        }
-      });
-    },
-
     registerPositionSnapshotHook(hook) {
       if (typeof hook !== 'function') return false;
       this.positionSnapshotHooks.push(hook);
@@ -258,59 +83,15 @@ function createCardRuntime(options = {}) {
       return () => unregisterFrom(this.positionRemovedHooks, hook);
     },
 
-    registerRendererLegacyGuard(guard = {}) {
-      if (!guard || typeof guard !== 'object') return false;
-      this.rendererLegacyGuards.push(guard);
-      return () => unregisterFrom(this.rendererLegacyGuards, guard);
-    },
-
-    connectLegacyOrderCardRenderer(adapter = {}) {
-      disconnectLegacyBridges();
-      const connectedAdapter = adapter?.renderer ? adapter : { renderer: adapter };
-      legacyOrderCardAdapter = connectedAdapter;
-      syncAllLegacyBridges();
-      return () => {
-        if (legacyOrderCardAdapter !== connectedAdapter) return;
-        disconnectLegacyBridges();
-        legacyOrderCardAdapter = null;
-      };
-    },
-
-    legacyRows() {
-      try {
-        const rows = legacyOrderCardAdapter?.getRows?.();
-        return Array.isArray(rows) ? rows : [];
-      } catch (err) {
-        console.error('[cardRuntime] legacy row adapter failed', err?.message || err);
-        return [];
-      }
-    },
-
-    findLegacyRowByKey(key) {
-      const rowKey = legacyOrderCardAdapter?.rowKey;
-      if (typeof rowKey !== 'function') return undefined;
-      return this.legacyRows().find(row => rowKey(row) === key);
-    },
-
-    setLegacyRowCardState(key, state) {
-      return legacyOrderCardAdapter?.setCardState?.(key, state);
-    },
-
     registerCardType(definition = {}) {
       if (!definition || typeof definition !== 'object') return false;
       if (!definition.type && typeof definition.match !== 'function') return false;
       this.cardTypeDefinitions.push(definition);
-      legacyDefinitionHandlers.set(definition, createLegacyHandler(definition));
-      legacyKeys(definition.legacyInstrumentTypes).forEach(key => syncLegacyBridge('instrument', key));
-      legacyKeys(definition.legacyCardTypes).forEach(key => syncLegacyBridge('cardType', key));
       let unregistered = false;
       return () => {
         if (unregistered) return;
         unregistered = true;
         unregisterFrom(this.cardTypeDefinitions, definition);
-        legacyDefinitionHandlers.delete(definition);
-        legacyKeys(definition.legacyInstrumentTypes).forEach(key => syncLegacyBridge('instrument', key));
-        legacyKeys(definition.legacyCardTypes).forEach(key => syncLegacyBridge('cardType', key));
       };
     },
 
@@ -417,7 +198,5 @@ function createCardRuntime(options = {}) {
 module.exports = {
   createCardRuntime,
   createCardStateApi,
-  createOrderStateFacades,
-  createLegacyOrderStateCompatApi,
-  createLegacyRowPresentationAdapter
+  createOrderStateFacades
 };

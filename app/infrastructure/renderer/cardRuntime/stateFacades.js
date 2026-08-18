@@ -74,38 +74,6 @@ function createOrderStateFacades(...sources) {
   };
 }
 
-function createLegacyOrderStateCompatApi(facades = {}) {
-  const pending = facades.pendingRequestLabels || {};
-  const placed = facades.placedOrderLookup || {};
-  const visual = facades.cardVisualState || {};
-  const tickets = facades.ticketBinding || {};
-  return {
-    getCardState: (...args) => visual.getCardState?.(...args),
-    setCardState: (...args) => visual.setCardState?.(...args),
-    clearCardState: (...args) => visual.clearCardState?.(...args),
-    setPendingExecLabel: (...args) => pending.setPendingExecLabel?.(...args),
-    getPendingExecLabel: (...args) => pending.getPendingExecLabel?.(...args),
-    clearPendingExecLabel: (...args) => pending.clearPendingExecLabel?.(...args),
-    markPendingRequest: (...args) => pending.markPendingRequest?.(...args),
-    resolvePendingKey: (...args) => pending.resolvePendingKey?.(...args),
-    setPendingId: (...args) => pending.setPendingId?.(...args),
-    getPendingId: (...args) => pending.getPendingId?.(...args),
-    getRetryCount: (...args) => pending.getRetryCount?.(...args),
-    findPendingRequestIdByKey: (...args) => pending.findPendingRequestIdByKey?.(...args),
-    clearPendingRequest: (...args) => pending.clearPendingRequest?.(...args),
-    clearPendingByKey: (...args) => pending.clearPendingByKey?.(...args),
-    markPlacedOrder: (...args) => placed.markPlacedOrder?.(...args),
-    getPlacedOrder: (...args) => placed.getPlacedOrder?.(...args),
-    deletePlacedOrder: (...args) => placed.deletePlacedOrder?.(...args),
-    listPlacedOrders: (...args) => placed.listPlacedOrders?.(...args),
-    resolveTicketKey: (...args) => tickets.resolveTicketKey?.(...args),
-    bindTicket: (...args) => tickets.bindTicket?.(...args),
-    unbindTicket: (...args) => tickets.unbindTicket?.(...args),
-    clearExecutionStateByKey: (...args) => visual.clearExecutionStateByKey?.(...args)
-  };
-}
-
 module.exports = {
-  createOrderStateFacades,
-  createLegacyOrderStateCompatApi
+  createOrderStateFacades
 };

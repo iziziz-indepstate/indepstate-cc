@@ -63,7 +63,7 @@ async function run() {
     assert(scopes.includes('renderer.boot:start'));
     assert(scopes.includes('renderer.boot:after-hooks'));
     assert(scopes.includes('renderer.boot:after-handler-load'));
-    assert(scopes.includes('renderer.boot:after-legacy-runtime-check'));
+    assert.strictEqual(scopes.includes('renderer.boot:after-legacy-runtime-check'), false);
     assert(scopes.includes('renderer.boot:before-positions-mount'));
     assert(scopes.includes('renderer.boot:after-positions-mount'));
     assert(scopes.includes('renderer.boot:ready'));

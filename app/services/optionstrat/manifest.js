@@ -156,166 +156,24 @@ const rendererHandlers = [{
     const {
       ipcRenderer,
       el,
-      state,
-      rowKey,
       render,
       toast,
       shakeCard,
-      pendingRequestLabels,
-      placedOrderLookup,
-      cardVisualState,
-      ticketBinding,
-      setCardState,
       settingsRuntime
     } = context;
 
-    if (!ipcRenderer || !el || !state || !rowKey) return;
+    if (!ipcRenderer || !el) return;
     const cardRuntime = context.cardRuntime || context;
     let optionStratValuationRefreshMs = 5000;
     const optionStratRenderer = createOptionStratRenderer({
       ipcRenderer,
       el,
-      state,
-      legacyRows: cardRuntime,
-      rowKey,
       render,
       toast,
       shakeCard,
-      pendingRequestLabels,
-      placedOrderLookup,
-      cardVisualState,
-      ticketBinding,
+      getPositions: context.getPositionSnapshots,
+      positionKey: context.positionKey,
       getValuationRefreshMs: () => optionStratValuationRefreshMs
-    });
-
-    const optionOrderCardHandler = {
-      ...optionStratRenderer.createOrderCardHandler(),
-      title({ row } = {}) {
-        return row?.name || row?.ticker;
-      },
-      matchesExistingRow({ incomingRow, existingRow, rowKey: keyForRow } = {}) {
-        return typeof keyForRow === 'function'
-          && keyForRow(incomingRow || {}) === keyForRow(existingRow || {});
-      },
-      shouldScheduleInstantExecution({ row } = {}) {
-        return row?.instantExecution === true;
-      },
-      onExecutionResultOk({ row, openedAt } = {}) {
-        if (row && openedAt) row.openedAt = row.openedAt || openedAt;
-      },
-      placedStatusTitle: 'Close OptionStrat position',
-      placedButton: {
-        label: 'CLOSE',
-        title: 'Close OptionStrat position',
-        removeClasses: ['bl'],
-        addClasses: ['sl']
-      },
-      onCreateCard({ row } = {}) {
-        optionStratRenderer.ensureOptionPayoff(row);
-      },
-      async closePlacedOrder({
-        key,
-        row,
-        orderInfo,
-        placedOrderLookup: placedOrders,
-        ticketBinding: tickets,
-        setCardState: setState,
-        render: rerender,
-        ipcRenderer: ipc,
-        toast: showToast,
-        shakeCard: shake
-      } = {}) {
-        const hedgeRow = row || (orderInfo ? {
-          ...orderInfo,
-          ticker: orderInfo.symbol,
-          instrumentType: 'OPT'
-        } : null);
-        if (hedgeRow) optionStratRenderer.emitButtonEvent('close', hedgeRow);
-        let result = null;
-        if (orderInfo && orderInfo.ticket && orderInfo.provider) {
-          try {
-            result = await ipc.invoke('execution:cancel-order', {
-              provider: orderInfo.provider,
-              ticket: orderInfo.ticket,
-              symbol: orderInfo.symbol,
-              name: orderInfo.name || row?.name
-            });
-          } catch (err) {
-            result = { status: 'error', reason: err?.message || String(err) };
-          }
-        }
-        if (result && result.status !== 'ok') {
-          showToast?.(`x ${orderInfo?.symbol || ''}: ${result.reason || 'Close failed'}`);
-          shake?.(key);
-          return true;
-        }
-        const finalValuation = result?.valuation || result?.raw?.valuation;
-        if (finalValuation) {
-          if (row) row.valuation = finalValuation;
-          if (orderInfo) orderInfo.valuation = finalValuation;
-        }
-        if (orderInfo?.ticket) tickets?.unbindTicket?.(orderInfo.ticket);
-        optionStratRenderer.markRowClosed(key);
-        placedOrders?.deletePlacedOrder?.(key);
-        optionStratRenderer.pendingOptionValuations.delete(key);
-        setState?.(key, 'profit');
-        rerender?.();
-        return true;
-      },
-      shouldKeepFullCardOnState({ state } = {}) {
-        return state === 'placed' || state === 'profit';
-      },
-      shouldEnableButtonOnState({ state } = {}) {
-        return state === 'placed';
-      },
-      shouldHideButtonsOnState({ state } = {}) {
-        return state === 'profit';
-      },
-      resetButtons(button) {
-        button.textContent = 'OPEN';
-        button.classList.remove('sl');
-        button.classList.add('bl');
-        button.title = '';
-      },
-      onPositionOpened({ key } = {}) {
-        optionStratRenderer.markRowOpened(key);
-      },
-      onPositionClosed({ key } = {}) {
-        optionStratRenderer.markRowClosed(key);
-      }
-    };
-
-    cardRuntime.registerCardView?.('option-legacy-row-view', optionStratRenderer.createOptionBody);
-    cardRuntime.registerCardControl?.('option-legacy-open', () => ({
-      buttons: row => optionOrderCardHandler.buttons?.(row),
-      preparePlace: optionOrderCardHandler.preparePlace,
-      afterPlaceOk: optionOrderCardHandler.afterPlaceOk,
-      scheduleInstantExecution: optionOrderCardHandler.scheduleInstantExecution
-    }));
-    cardRuntime.registerCardControl?.('option-legacy-close-remove', () => ({
-      placedStatusTitle: optionOrderCardHandler.placedStatusTitle,
-      placedButton: optionOrderCardHandler.placedButton,
-      closePlacedOrder: optionOrderCardHandler.closePlacedOrder,
-      shouldKeepFullCardOnState: optionOrderCardHandler.shouldKeepFullCardOnState,
-      shouldEnableButtonOnState: optionOrderCardHandler.shouldEnableButtonOnState,
-      shouldHideButtonsOnState: optionOrderCardHandler.shouldHideButtonsOnState,
-      resetButtons: optionOrderCardHandler.resetButtons
-    }));
-    cardRuntime.registerCardType?.({
-      type: 'option-legacy-row',
-      view: 'option-legacy-row-view',
-      controls: ['option-legacy-open', 'option-legacy-close-remove'],
-      legacyInstrumentTypes: ['OPT'],
-      legacyCardTypes: ['option', 'optionstrat'],
-      legacyRow: {
-        title: optionOrderCardHandler.title,
-        matchesExistingRow: optionOrderCardHandler.matchesExistingRow,
-        shouldScheduleInstantExecution: optionOrderCardHandler.shouldScheduleInstantExecution,
-        onExecutionResultOk: optionOrderCardHandler.onExecutionResultOk,
-        onCreateCard: optionOrderCardHandler.onCreateCard,
-        onPositionOpened: optionOrderCardHandler.onPositionOpened,
-        onPositionClosed: optionOrderCardHandler.onPositionClosed
-      }
     });
     cardRuntime.registerCardView?.(
       'option-snapshot-payoff-valuation',
@@ -371,7 +229,6 @@ module.exports = {
   registerMainApplicationServices,
   registerMainIpcHandlers,
   rendererHandlers,
-  rendererLegacyGuards: [createOptionStratLegacyGuard()],
   optionStratExecutionExtension,
   createOptionStratLifecycleEnricher
 };

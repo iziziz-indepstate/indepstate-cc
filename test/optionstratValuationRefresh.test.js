@@ -10,14 +10,8 @@ async function run() {
       }
     },
     el: () => ({ appendChild: () => {}, dataset: {}, style: {}, classList: { add: () => {}, remove: () => {} } }),
-    state: { rows: [] },
-    rowKey: row => row.key,
     render: () => {},
-    placedOrderLookup: {
-      listPlacedOrders: () => undefined,
-      getPlacedOrder: () => undefined,
-      markPlacedOrder: () => false
-    },
+    getPositions: () => [],
     setTimeoutFn(fn, ms) {
       scheduled.push({ fn, ms });
       return scheduled.length;

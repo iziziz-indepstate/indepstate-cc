@@ -98,8 +98,7 @@ let rendererServiceManifests = null;
 const rendererHandlerDiagnostics = {
   serviceList: null,
   manifests: [],
-  handlers: [],
-  legacyOrderCardsRegistered: false
+  handlers: []
 };
 
 loadRendererHooks();
@@ -206,53 +205,8 @@ function loadRendererHandlers(context = {}) {
 }
 
 // ======= Utils =======
-function findKeyByTicker(ticker) {
-  const row = rendererRows().find(r => r.ticker === ticker);
-  return row ? rowKey(row) : null;
-}
-
 function rowKey(row) {
   return `${row.ticker}|${row.event}|${row.time}|${row.price}`;
-}
-
-function positionMatchesLegacyRow(position = {}, row = {}) {
-  const source = position.source || {};
-  const data = position.card?.data || {};
-  const positionTicker = source.ticker || source.symbol || data.ticker || data.symbol || position.ticker || position.symbol;
-  const rowTicker = row.ticker || row.symbol;
-  if (!positionTicker || !rowTicker || String(positionTicker) !== String(rowTicker)) return false;
-
-  const positionCardType = source.cardType || position.card?.type;
-  if (positionCardType && row.cardType && String(positionCardType) !== String(row.cardType)) return false;
-
-  if (source.event != null || source.time != null || source.price != null) {
-    return rowKey({
-      ticker: source.ticker || source.symbol || positionTicker,
-      event: source.event,
-      time: source.time,
-      price: source.price
-    }) === rowKey({
-      ticker: row.ticker || row.symbol,
-      event: row.event,
-      time: row.time,
-      price: row.price
-    });
-  }
-
-  return String(positionCardType || '') === String(row.cardType || '');
-}
-
-function regularCardType(value) {
-  return String(value || 'regular') === 'regular';
-}
-
-function isRegularPositionSnapshot(position = {}) {
-  return regularCardType(position.card?.type || position.source?.cardType || 'regular');
-}
-
-function isPositionRenderedByLegacyRow(position = {}) {
-  if (isRegularPositionSnapshot(position)) return false;
-  return rendererRows().some(row => positionMatchesLegacyRow(position, row));
 }
 
 function registerRendererExtension(kind, extension) {
@@ -265,18 +219,6 @@ function registerInstrumentDisplayPolicy(policy) {
 
 function registerCardStateHook(hook) {
   return cardRuntime.registerCardStateHook(hook);
-}
-
-function registerRendererLayer(layer) {
-  return cardRuntime.registerRendererLayer(layer);
-}
-
-function registerRendererRowProvider(provider) {
-  return cardRuntime.registerRendererRowProvider(provider);
-}
-
-function rendererRows() {
-  return cardRuntime.rendererRows();
 }
 
 function registerPositionSnapshotHook(hook) {
@@ -560,27 +502,12 @@ function isTouched(ticker) {
 // ======= Rendering =======
 function render() {
   $grid.innerHTML = '';
-  for (const layer of cardRuntime.rendererLayers) {
-    try {
-      layer({ grid: $grid });
-    } catch (err) {
-      console.error('[rendererExtension] render layer failed', err?.message || err);
-    }
-  }
   const debugPositions = isDebugPositionEventsEnabled();
   const positions = getPositionSnapshots();
   positions.sort((a, b) => (Number(b.version) || 0) - (Number(a.version) || 0));
   let renderedPositionCount = 0;
   const skippedPositions = [];
   for (const position of positions) {
-    if (shouldHidePositionSnapshot(position)) {
-      if (debugPositions) skippedPositions.push({ reason: 'hidden', ...positionDebugSummary(position) });
-      continue;
-    }
-    if (!shouldUseSnapshotInsteadOfLegacyRows(position) && isPositionRenderedByLegacyRow(position)) {
-      if (debugPositions) skippedPositions.push({ reason: 'legacy-rendered', ...positionDebugSummary(position) });
-      continue;
-    }
     const key = positionKey(position);
     let card;
     if (debugPositions) {
@@ -696,8 +623,8 @@ const instrumentInfoRenderer = createInstrumentInfoRenderer({
   cssEsc,
   getGrid: () => $grid,
   render,
-  getRows: () => rendererRows().concat(positionInstrumentRows()),
-  findRowByTicker: (ticker) => rendererRows().find(r => r.ticker === ticker) || positionInstrumentRows().find(r => r.ticker === ticker),
+  getRows: positionInstrumentRows,
+  findRowByTicker: ticker => positionInstrumentRows().find(r => r.ticker === ticker),
   revalidateCard: (card) => {
     if (typeof card._validate !== 'function') return;
     try {
@@ -718,61 +645,6 @@ const revalidateCardsForTicker = (...args) => instrumentInfoRenderer.revalidateC
 instrumentInfoRenderer.startPeriodicRefresh();
 
 const pendingOrdersRenderer = createPendingOrdersRenderer();
-
-function registerRendererLegacyGuard(guard = {}) {
-  return cardRuntime.registerRendererLegacyGuard(guard);
-}
-
-function shouldFilterLegacyRow(row = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => {
-    if (guard.shouldFilterRow?.(row)) return true;
-    const types = Array.isArray(guard.filteredRowTypes) ? guard.filteredRowTypes : [];
-    return types.map(String).includes(String(row?.cardType || ''));
-  });
-}
-
-function shouldIgnoreLegacyExecutionEvent(rec = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyExecutionEvent?.(rec, legacyGuardContext()));
-}
-
-function shouldIgnoreLegacyPositionEvent(rec = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyPositionEvent?.(rec, legacyGuardContext()));
-}
-
-function shouldHidePositionSnapshot(position = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldHidePositionSnapshot?.(position, legacyGuardContext()));
-}
-
-function shouldRemoveLegacyRowForPosition(position = {}, row = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldRemoveLegacyRowForPosition?.(position, row, legacyGuardContext()));
-}
-
-function shouldResetLegacyRowForPosition(position = {}, row = {}) {
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldResetLegacyRowForPosition?.(position, row, legacyGuardContext()));
-}
-
-function shouldIgnoreLegacyRowForExistingPosition(row = {}) {
-  const context = legacyGuardContext();
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldIgnoreLegacyRowForExistingPosition?.(row, context));
-}
-
-function shouldRemovePositionSnapshotForLegacyRowRemoval(row = {}, position = {}) {
-  const context = legacyGuardContext();
-  return cardRuntime.rendererLegacyGuards.some(guard => guard.shouldRemovePositionSnapshotForLegacyRowRemoval?.(row, position, context));
-}
-
-function legacyGuardContext() {
-  return {
-    positions: getPositionSnapshots(),
-    rows: rendererRows()
-  };
-}
-
-function shouldUseSnapshotInsteadOfLegacyRows(position = {}) {
-  if (isRegularPositionSnapshot(position)) return true;
-  if (shouldFilterLegacyRow({ cardType: position.card?.type || position.source?.cardType })) return true;
-  return rendererRows().some(row => shouldRemoveLegacyRowForPosition(position, row));
-}
 
 loadRendererHandlers({
   loadConfig,
@@ -802,6 +674,7 @@ loadRendererHandlers({
   placedOrderLookup: rendererOrderStateFacades.placedOrderLookup,
   cardVisualState: rendererOrderStateFacades.cardVisualState,
   ticketBinding: rendererOrderStateFacades.ticketBinding,
+  cardStateApi,
   setCardState,
   positionKey,
   positionCardTitle,
@@ -816,27 +689,14 @@ loadRendererHandlers({
   formatSpreadTriple,
   updateSpreadForTicker,
   notifyCardRestored,
-  getRows: rendererRows,
-  findKeyByTicker,
   cardStateOrder: {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7},
   isTerminalCardState: stateName => new Set(['closed', 'profit', 'loss']).has(stateName),
-  positionMatchesLegacyRow,
-  isRegularPositionSnapshot,
-  shouldFilterLegacyRow,
-  shouldIgnoreLegacyRowForExistingPosition,
-  shouldIgnoreLegacyExecutionEvent,
-  shouldIgnoreLegacyPositionEvent,
-  shouldRemoveLegacyRowForPosition,
-  shouldResetLegacyRowForPosition,
-  removePositionSnapshotsForRow,
   forgetInstrument: (...args) => forgetInstrument(...args),
   dispatchPositionAction,
   requestRemovePosition,
   registerRendererExtension,
   registerInstrumentDisplayPolicy,
   registerCardStateHook,
-  registerRendererLayer,
-  registerRendererRowProvider,
   registerPositionSnapshotHook,
   registerPositionRemovedHook,
   registerTestingExtension,
@@ -849,27 +709,16 @@ loadRendererHandlers({
   registerCardShape: (...args) => cardRuntime.registerCardShape(...args),
   getCardShape: (...args) => cardRuntime.getCardShape(...args),
   cardRuntime,
-  registerRendererLegacyGuard
+  getPositionSnapshots
 });
 debugPositionEvents('renderer.boot:after-handler-load');
-debugPositionEvents('renderer.boot:after-legacy-runtime-check');
-
-for (const { dir, manifest } of loadRendererServiceManifests()) {
-  try {
-    const guards = Array.isArray(manifest?.rendererLegacyGuards) ? manifest.rendererLegacyGuards : [];
-    for (const guard of guards) registerRendererLegacyGuard(guard);
-  } catch (err) {
-    console.error('[rendererServiceLoader] Failed to load legacy guards', dir, err.message);
-  }
-}
 
 positionsRenderer = createPositionsRenderer({
   ipcRenderer,
   render,
-  onPositionRemoved: removeLegacyRowsForPosition,
+  onPositionRemoved: notifyPositionRemoved,
   onPositionSnapshot(position = {}) {
     notifyPositionSnapshot(position);
-    if (!shouldUseSnapshotInsteadOfLegacyRows(position)) return;
     const key = positionKey(position);
     cardStateApi.clearCardState(key);
     cardStateApi.clearPendingExecLabel(key);
@@ -899,7 +748,7 @@ async function requestRemovePosition(position = {}) {
   return result;
 }
 
-function legacyPayloadForPositionAction(position = {}, action = {}) {
+function positionActionPayload(position = {}, action = {}) {
   const data = position.card?.data || {};
   const payload = {
     ...(action.payload || {}),
@@ -916,7 +765,7 @@ function legacyPayloadForPositionAction(position = {}, action = {}) {
 async function dispatchPositionAction(position = {}, action = {}, inputPayload = {}) {
   const id = String(action.id || action.label || '').toUpperCase();
   const base = {
-    ...legacyPayloadForPositionAction(position, action),
+    ...positionActionPayload(position, action),
     ...inputPayload
   };
 
@@ -1003,27 +852,6 @@ function createPositionSnapshotCard(position = {}) {
   return runtimeCard;
 }
 
-function removePositionSnapshotsForRow(row = {}) {
-  const matches = Array.from(positionsById.values())
-    .filter(position => shouldRemovePositionSnapshotForLegacyRowRemoval(row, position));
-  for (const position of matches) {
-    const key = positionKey(position);
-    cardStateApi.clearCardState(key);
-    cardStateApi.clearPendingExecLabel(key);
-    removePositionSnapshot(position.id);
-    notifyPositionRemoved(position);
-    ipcRenderer.invoke('positions:remove', {
-      positionId: position.id,
-      reason: 'renderer.remove-extension-row'
-    }).catch(() => {});
-  }
-  return matches.length > 0;
-}
-
-function removeLegacyRowsForPosition(position = {}) {
-  return notifyPositionRemoved(position);
-}
-
 // ======= IPC wiring =======
 debugPositionEvents('renderer.boot:before-positions-mount');
 positionsRenderer.mount();
@@ -1049,7 +877,6 @@ if (typeof module !== 'undefined') {
     ...testingExtensions,
     setCardState,
     rowKey,
-    findKeyByTicker,
     cardByKey,
     state,
     cardRuntime,

@@ -119,7 +119,7 @@ async function run() {
   const t = renderer.__testing;
   await new Promise(resolve => setTimeout(resolve, 20));
 
-  assert.strictEqual(t.orderCardsRows.some(row => row.cardType === 'levelOrder'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(t, 'orderCardsRows'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(t, 'positionCardRenderers'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(t.cardRuntime, 'positionActionHandlers'), false);
   assert.strictEqual(Object.prototype.hasOwnProperty.call(t.cardRuntime, 'positionRemovalHandlers'), false);
@@ -166,55 +166,6 @@ async function run() {
   const parentRequestId = call.payload.requestId;
   assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
   assert.strictEqual(t.cardStateApi.getPendingExecLabel(key), 'LB');
-
-  handlers['execution:pending'](null, {
-    reqId: `${parentRequestId}_1`,
-    pendingId: 'cid-1',
-    order: {
-      symbol: 'TST',
-      side: 'buy',
-      qty: 1,
-      meta: { requestId: `${parentRequestId}_1`, parentRequestId, childCount: 2 }
-    }
-  });
-  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
-
-  handlers['execution:result'](null, {
-    reqId: `${parentRequestId}_1`,
-    provider: 'simulated',
-    status: 'ok',
-    providerOrderId: 'ticket-1',
-    order: {
-      symbol: 'TST',
-      side: 'buy',
-      qty: 1,
-      meta: { requestId: `${parentRequestId}_1`, parentRequestId, childCount: 2 }
-    }
-  });
-  handlers['execution:result'](null, {
-    reqId: `${parentRequestId}_2`,
-    provider: 'simulated',
-    status: 'ok',
-    providerOrderId: 'ticket-2',
-    order: {
-      symbol: 'TST',
-      side: 'buy',
-      qty: 2,
-      meta: { requestId: `${parentRequestId}_2`, parentRequestId, childCount: 2 }
-    }
-  });
-  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
-
-  handlers['position:opened'](null, {
-    ticket: 'position-1',
-    origOrder: { meta: { requestId: `${parentRequestId}_1`, parentRequestId, childCount: 2 } }
-  });
-  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
-  handlers['position:opened'](null, {
-    ticket: 'position-2',
-    origOrder: { meta: { requestId: `${parentRequestId}_2`, parentRequestId, childCount: 2 } }
-  });
-  assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
 
   const placedSnapshot = levelOrderSnapshot('pos-level-1', {
     state: 'placed',

@@ -27,7 +27,7 @@ function createRenderer(overrides = {}) {
     detectInstrumentType: () => 'EQ',
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`,
     ipcRenderer: { invoke: async () => ({ status: 'ok' }) },
-    legacyOrderStateApi: {
+    orderStateApi: {
       markPendingRequest: () => true,
       setPendingExecLabel: () => true,
       setPendingId: () => true
@@ -43,41 +43,11 @@ function createRenderer(overrides = {}) {
 }
 
 async function run() {
-  const scheduleCalls = [];
-  const typeHandler = {
-    shouldScheduleInstantExecution: ({ row }) => row.instantExecution === true,
-    scheduleInstantExecution: ({ row, place, instrumentType }) => {
-      scheduleCalls.push({ row, place, instrumentType });
-      return true;
-    }
-  };
-  const cardTypeHandler = {
-    createBody: () => ({ type: 'custom' })
-  };
-
-  const renderer = createRenderer({
-    instrumentTypeHandlers: { CUSTOM: typeHandler },
-    cardTypeHandlers: { customCard: cardTypeHandler }
-  });
-
-  assert.strictEqual(renderer.handlerFor({ instrumentType: 'CUSTOM' }), typeHandler);
-  assert.strictEqual(renderer.handlerFor({ cardType: 'customCard' }), cardTypeHandler);
-  assert.strictEqual(renderer.titleFor({ ticker: 'AAPL', instrumentType: 'CUSTOM' }, 'CUSTOM'), 'AAPL');
-  assert.strictEqual(renderer.scheduleInstantExecution({ ticker: 'AAPL', instrumentType: 'CUSTOM', instantExecution: false }, () => {}, 'CUSTOM'), false);
-  assert.strictEqual(scheduleCalls.length, 0);
-  assert.strictEqual(renderer.scheduleInstantExecution({ ticker: 'AAPL', instrumentType: 'CUSTOM', instantExecution: true }, () => {}, 'CUSTOM'), true);
-  assert.strictEqual(scheduleCalls.length, 1);
-  assert.strictEqual(scheduleCalls[0].instrumentType, 'CUSTOM');
-  assert.strictEqual(renderer.scheduleInstantExecution({ ticker: 'AAPL', instrumentType: 'EQ', instantExecution: true }, () => {}, 'EQ'), false);
-
-  const registered = renderer.registerInstrumentHandler('REG', typeHandler);
-  assert.strictEqual(renderer.handlerFor({ instrumentType: 'REG' }), typeHandler);
-  registered();
-  assert.strictEqual(renderer.handlerFor({ instrumentType: 'REG' }), null);
-  const registeredCardType = renderer.registerCardTypeHandler('registeredCard', cardTypeHandler);
-  assert.strictEqual(renderer.handlerFor({ cardType: 'registeredCard' }), cardTypeHandler);
-  registeredCardType();
-  assert.strictEqual(renderer.handlerFor({ cardType: 'registeredCard' }), null);
+  const renderer = createRenderer();
+  assert.strictEqual(typeof renderer.createRegularPositionCard, 'function');
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(renderer, 'createLegacyOrderCard'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(renderer, 'registerInstrumentHandler'), false);
+  assert.strictEqual(Object.prototype.hasOwnProperty.call(renderer, 'registerCardTypeHandler'), false);
 
   if (JSDOM) {
     const dom = new JSDOM('<!DOCTYPE html><div id="grid"></div>');
@@ -104,10 +74,6 @@ async function run() {
     const cardRuntimeLibrary = {
       ...baseLibrary,
       shapes: {
-        createLegacyCardShape(options) {
-          shapeCalls.push(['legacy', options]);
-          return baseLibrary.shapes.createLegacyCardShape(options);
-        },
         createPositionCardShape(options) {
           shapeCalls.push(['position', options]);
           return baseLibrary.shapes.createPositionCardShape(options);
@@ -138,52 +104,6 @@ async function run() {
       cardRuntimeLibrary,
       getCardButtons: () => [{ label: 'BL', action: 'BL', style: 'bl' }]
     });
-    const legacyRow = {
-      ticker: 'AAPL',
-      event: 'up',
-      time: 1,
-      price: 100,
-      qty: 2,
-      sl: 1,
-      risk: 10,
-      instrumentType: 'EQ'
-    };
-    const legacyCard = domRenderer.createLegacyOrderCard({ row: legacyRow, index: 0 });
-    document.getElementById('grid').appendChild(legacyCard);
-    assert.strictEqual(legacyCard.dataset.rowkey, 'AAPL|up|1|100');
-    assert.strictEqual(legacyCard.dataset.ticker, 'AAPL');
-    assert.strictEqual(legacyCard.querySelector('.card__status').style.display, 'none');
-    assert.strictEqual(legacyCard.querySelector('.card__close').title, 'Удалить карточку');
-    assert.deepStrictEqual(Array.from(legacyCard.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL']);
-    assert(legacyCard.querySelector('input.qty'));
-    assert(legacyCard.querySelector('.card__note'));
-    assert.strictEqual(shapeCalls[0][0], 'legacy');
-    assert.strictEqual(shapeCalls[0][1].attributes['data-rowkey'], 'AAPL|up|1|100');
-
-    const customBody = {
-      type: 'custom',
-      line: document.createElement('div'),
-      setButtons(btns) { this.btns = btns; },
-      setNote(note) { this.note = note; },
-      validate() { return { valid: true, type: 'custom', qty: 1, pr: 1, sl: 1, risk: 1 }; }
-    };
-    customBody.line.className = 'custom-body';
-    const customHandler = {
-      title: ({ row }) => `Custom ${row.ticker}`,
-      createBody: () => customBody,
-      buttons: () => [{ label: 'OPEN', action: 'OPEN', style: 'open' }],
-      matchesExistingRow: ({ incomingRow, existingRow }) => incomingRow.id === existingRow.id
-    };
-    domRenderer.registerCardTypeHandler('customLegacy', customHandler);
-    const customLegacy = domRenderer.createLegacyOrderCard({
-      row: { id: 'same', ticker: 'TSLA', event: 'custom', time: 2, price: 200, cardType: 'customLegacy' },
-      index: 1
-    });
-    assert(customLegacy.textContent.includes('Custom TSLA'));
-    assert.strictEqual(customLegacy.querySelector('button.btn').dataset.kind, 'OPEN');
-    assert.strictEqual(domRenderer.matchesExistingRow({ id: 'same', ticker: 'TSLA', cardType: 'customLegacy' }, { id: 'same', ticker: 'OLD' }), true);
-    assert.strictEqual(domRenderer.matchesExistingRow({ id: 'new', ticker: 'TSLA', cardType: 'customLegacy' }, { id: 'same', ticker: 'TSLA' }), false);
-
     const card = domRenderer.createRegularPositionCard({
       position: {
         id: 'pos-reg-1',

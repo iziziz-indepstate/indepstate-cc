@@ -3,10 +3,7 @@ const settings = require('../settings');
 const loadConfig = require('../../config/load');
 const { createOrderCardsRenderer } = require('./renderer');
 const { createOrderCardsRendererConfigRuntime } = require('./rendererConfigRuntime');
-const { createLegacyOrderListRuntime } = require('./legacyOrderListRuntime');
-const { createOrderStateFacades, createLegacyOrderStateCompatApi } = require('../../infrastructure/renderer/cardRuntime');
 const { createCardRuntimeLibrary } = require('../../infrastructure/renderer/cardRuntime/library');
-const { createLegacyRowPresentationAdapter } = require('../../infrastructure/renderer/cardRuntime/legacyRowPresentation');
 const { registerOrderCardsIpcHandlers } = require('./infrastructure/ipc');
 const { AddCommand } = require('../commands/add');
 const { RemoveCommand } = require('../commands/remove');
@@ -20,18 +17,11 @@ settings.register(
 const rendererHandlers = [{
   cardType: 'regular',
   register(context = {}) {
-    const legacyState = { uiState: context.uiState };
-    const state = { rows: [], filter: '', autoscroll: true };
-    let legacyOrderListRuntime;
-    let orderCardsRenderer;
     const orderCardsRuntime = createOrderCardsRendererConfigRuntime({
       loadConfig: context.loadConfig || loadConfig,
       settingsRuntime: context.settingsRuntime,
       env: context.env || process.env,
-      render: context.render,
-      onConfigApplied: (runtime) => {
-        legacyOrderListRuntime?.setClosedCardEventStrategy(runtime.getClosedCardEventStrategy());
-      }
+      render: context.render
     });
     context.registerInstrumentDisplayPolicy?.({
       getInstrumentRefreshMs: () => orderCardsRuntime.getInstrumentRefreshMs(),
@@ -41,104 +31,18 @@ const rendererHandlers = [{
     context.registerCardStateHook?.(({ card, updateSpreadForTicker }) => {
       if (orderCardsRuntime.shouldShowSpread()) updateSpreadForTicker?.(card?.dataset?.ticker);
     });
-    const cardStateOrder = context.cardStateOrder || {pending: 1, 'pending-exec': 2, placed: 3, executing: 4, closed: 5, profit: 6, loss: 7};
     const rowKey = context.rowKey || (row => `${row.ticker}|${row.event}|${row.time}|${row.price}`);
-    const cardByKey = context.cardByKey || (() => null);
-    const ipcRenderer = context.ipcRenderer;
-    const render = context.render || (() => {});
-    const toast = context.toast || (() => {});
-    const shakeCard = context.shakeCard || (() => {});
     const cardRuntimeLibrary = createCardRuntimeLibrary({
       el: context.el,
       btn: context.btn,
       document: context.document || (typeof document !== 'undefined' ? document : null),
       createActionButton: context.createActionButton
     });
-    context.cardRuntime?.registerCardShape?.(
-      'regular-order-legacy-card',
-      cardRuntimeLibrary.shapes.createLegacyCardShape
-    );
-    context.cardRuntime?.registerCardControl?.(
-      'standard-remove',
-      cardRuntimeLibrary.controls.createRemoveControl
-    );
-    context.cardRuntime?.registerCardControl?.(
-      'standard-retry',
-      cardRuntimeLibrary.controls.createRetryControl
-    );
-    context.cardRuntime?.registerCardControl?.(
-      'standard-action-buttons',
-      cardRuntimeLibrary.controls.createActionButtonsControl
-    );
     context.cardRuntime?.registerCardView?.(
       'position-data-grid',
       cardRuntimeLibrary.views.createDataGridView
     );
-    const legacyOrderStateApi = {};
-    for (const method of [
-      'getCardState',
-      'setCardState',
-      'clearCardState',
-      'setPendingExecLabel',
-      'getPendingExecLabel',
-      'clearPendingExecLabel',
-      'markPendingRequest',
-      'resolvePendingKey',
-      'setPendingId',
-      'getPendingId',
-      'getRetryCount',
-      'findPendingRequestIdByKey',
-      'clearPendingRequest',
-      'clearPendingByKey',
-      'markPlacedOrder',
-      'getPlacedOrder',
-      'deletePlacedOrder',
-      'resolveTicketKey',
-      'bindTicket',
-      'unbindTicket',
-      'listPlacedOrders',
-      'clearExecutionStateByKey'
-    ]) {
-      legacyOrderStateApi[method] = (...args) => legacyOrderListRuntime?.legacyOrderStateApi?.[method]?.(...args);
-    }
-
-    const rendererStateCompat = createLegacyOrderStateCompatApi({
-      pendingRequestLabels: context.pendingRequestLabels,
-      placedOrderLookup: context.placedOrderLookup,
-      cardVisualState: context.cardVisualState,
-      ticketBinding: context.ticketBinding
-    });
-    const orderStateFacades = createOrderStateFacades(legacyOrderStateApi, rendererStateCompat);
-
-    function legacyRowByKey(key) {
-      return state.rows.find(row => rowKey(row) === key);
-    }
-
-    function legacyCardHandlerForKey(key) {
-      const row = legacyRowByKey(key) || {};
-      return orderCardsRenderer?.handlerFor?.(row, row.instrumentType) || null;
-    }
-
-    const legacyPresentation = createLegacyRowPresentationAdapter({
-      rowByKey: legacyRowByKey,
-      cardByKey,
-      rowKey,
-      stateApi: legacyOrderStateApi,
-      stateFacades: orderStateFacades,
-      handlerForKey: legacyCardHandlerForKey,
-      ipcRenderer,
-      render,
-      toast,
-      shakeCard,
-      notifyCardRestored: context.notifyCardRestored,
-      updateSpreadForTicker: context.updateSpreadForTicker
-    });
-
-    function setLegacyCardState(key, stateName) {
-      return legacyPresentation.setCardState(key, stateName);
-    }
-
-    orderCardsRenderer = createOrderCardsRenderer({
+    const orderCardsRenderer = createOrderCardsRenderer({
       el: context.el,
       inputNumber: context.inputNumber,
       uiState: context.uiState,
@@ -154,106 +58,24 @@ const rendererHandlers = [{
       markTouched: context.markTouched,
       detectInstrumentType: context.detectInstrumentType,
       rowKey,
-      ipcRenderer,
-      legacyOrderStateApi,
-      cardByKey,
-      setCardState: setLegacyCardState,
+      ipcRenderer: context.ipcRenderer,
+      orderStateApi: context.cardStateApi || context.cardRuntime?.stateApi,
+      cardByKey: context.cardByKey,
+      setCardState: context.setCardState,
       pendingActionInfo: context.pendingActionInfo,
-      toast,
-      shakeCard,
-      render,
+      toast: context.toast,
+      shakeCard: context.shakeCard,
+      render: context.render,
       btn: context.btn,
-      removeRow: row => legacyOrderListRuntime?.removeRow?.(row),
       formatBidAskText: context.formatBidAskText,
       formatSpreadTriple: context.formatSpreadTriple,
       updateSpreadForTicker: context.updateSpreadForTicker,
-      getRows: () => state.rows,
       shouldShowBidAsk: () => orderCardsRuntime.shouldShowBidAsk(),
       shouldShowSpread: () => orderCardsRuntime.shouldShowSpread(),
       getCardButtons: () => orderCardsRuntime.getCardButtons(),
       getButtonRows: () => orderCardsRuntime.getButtonRows(),
       cardRuntimeLibrary
     });
-    context.cardRuntime?.connectLegacyOrderCardRenderer?.({
-      renderer: orderCardsRenderer,
-      getRows: () => state.rows,
-      rowKey,
-      setCardState: setLegacyCardState
-    });
-    legacyOrderListRuntime = createLegacyOrderListRuntime({
-      ipcRenderer,
-      state,
-      legacyState,
-      rowKey,
-      findKeyByTicker: context.findKeyByTicker,
-      isTerminalCardState: context.isTerminalCardState,
-      cardByKey,
-      setCardState: setLegacyCardState,
-      removePositionSnapshotsForLegacyRow: context.removePositionSnapshotsForRow,
-      positionMatchesLegacyRow: context.positionMatchesLegacyRow,
-      isRegularPositionSnapshot: context.isRegularPositionSnapshot,
-      shouldFilterLegacyRow: context.shouldFilterLegacyRow,
-      shouldIgnoreLegacyRowForExistingPosition: context.shouldIgnoreLegacyRowForExistingPosition,
-      shouldIgnoreLegacyExecutionEvent: context.shouldIgnoreLegacyExecutionEvent,
-      shouldIgnoreLegacyPositionEvent: context.shouldIgnoreLegacyPositionEvent,
-      shouldRemoveLegacyRowForPosition: context.shouldRemoveLegacyRowForPosition,
-      shouldResetLegacyRowForPosition: context.shouldResetLegacyRowForPosition,
-      forgetInstrument: context.forgetInstrument,
-      toast,
-      shakeCard,
-      render,
-      matchesExistingOrderRow: (...args) => orderCardsRenderer.matchesExistingRow(...args),
-      orderCardHandlerForRow: (...args) => orderCardsRenderer.handlerFor(...args),
-      orderCardHandlerForKey: (...args) => orderCardsRenderer.handlerForKey(...args),
-      scheduleOrderCardInstantExecution: (...args) => orderCardsRenderer.scheduleInstantExecution(...args)
-    });
-    legacyOrderListRuntime?.setClosedCardEventStrategy?.(orderCardsRuntime.getClosedCardEventStrategy?.() || 'ignore');
-
-    context.pendingRequestLabels = orderStateFacades.pendingRequestLabels;
-    context.placedOrderLookup = orderStateFacades.placedOrderLookup;
-    context.cardVisualState = orderStateFacades.cardVisualState;
-    context.ticketBinding = orderStateFacades.ticketBinding;
-    context.registerTestingExtension?.('legacyOrderStateApi', legacyOrderStateApi);
-    context.registerTestingExtension?.('pendingRequestLabels', orderStateFacades.pendingRequestLabels);
-    context.registerTestingExtension?.('placedOrderLookup', orderStateFacades.placedOrderLookup);
-    context.registerTestingExtension?.('cardVisualState', orderStateFacades.cardVisualState);
-    context.registerTestingExtension?.('ticketBinding', orderStateFacades.ticketBinding);
-    context.registerTestingExtension?.('orderCardInstrumentHandlers', orderCardsRenderer.instrumentTypeHandlers);
-    context.registerTestingExtension?.('orderCardTypeHandlers', orderCardsRenderer.cardTypeHandlers);
-    context.registerTestingExtension?.('orderCardsRows', {
-      get length() { return state.rows.length; },
-      some: (...args) => state.rows.some(...args),
-      find: (...args) => state.rows.find(...args),
-      filter: (...args) => state.rows.filter(...args),
-      map: (...args) => state.rows.map(...args),
-      push: (...args) => state.rows.push(...args),
-      entries: () => state.rows.entries(),
-      [Symbol.iterator]: () => state.rows[Symbol.iterator]()
-    });
-
-    context.registerRendererRowProvider?.(() => state.rows);
-    context.registerRendererLayer?.(({ grid } = {}) => {
-      legacyOrderListRuntime.renderLegacyCards((row, index) => {
-        const card = orderCardsRenderer.createLegacyOrderCard({ row, index });
-        if (card && grid) grid.appendChild(card);
-        return card;
-      }, cardStateOrder);
-    });
-    context.registerPositionSnapshotHook?.((position = {}) => {
-      legacyOrderListRuntime.resetLegacyRowsForPosition(position);
-      legacyOrderListRuntime.removeLegacyRowsForPosition(position);
-      const cardType = position.card?.type || position.source?.cardType || 'regular';
-      const shouldUseSnapshot = String(cardType || 'regular') === 'regular'
-        || context.shouldFilterLegacyRow?.({ cardType })
-        || state.rows.some(row => context.shouldRemoveLegacyRowForPosition?.(position, row));
-      if (!shouldUseSnapshot) return;
-      const key = context.positionKey?.(position);
-      legacyOrderListRuntime.legacyOrderStateApi.clearCardState(key);
-      legacyOrderListRuntime.legacyOrderStateApi.clearPendingExecLabel(key);
-    });
-    context.registerPositionRemovedHook?.((position = {}) => legacyOrderListRuntime.removeLegacyRowsForPosition(position));
-
-    legacyOrderListRuntime.mount?.({ place: (...args) => orderCardsRenderer.place(...args) });
 
     if (
       !orderCardsRenderer?.createRegularPositionView

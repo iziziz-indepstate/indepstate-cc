@@ -5,7 +5,6 @@ const { createCardRuntimeLibrary } = require('../app/infrastructure/renderer/car
 function run() {
   const dom = new JSDOM('<!DOCTYPE html><div id="root"></div>');
   const { document } = dom.window;
-  const calls = [];
   const el = (tag, className, text, attrs) => {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -21,48 +20,6 @@ function run() {
     return button;
   };
   const library = createCardRuntimeLibrary({ el, btn, document });
-
-  const body = {
-    line: el('div', 'quad-line'),
-    setButtons(buttons) { this.buttons = buttons; },
-    setNote(note) { this.note = note; },
-    validate() {
-      calls.push('validate');
-      return { valid: true };
-    }
-  };
-  const legacy = library.shapes.createLegacyCardShape({
-    title: 'AAPL',
-    body,
-    actions: [{ label: 'Buy', action: 'BL', style: 'buy' }],
-    onPlace: action => calls.push(`place:${action.action}`),
-    onRemove: () => calls.push('remove'),
-    onRetryStop: () => calls.push('retry'),
-    bidAskText: '100 / 101',
-    spreadText: '1 / 2 / 3',
-    attributes: { 'data-rowkey': 'legacy|1', 'data-ticker': 'AAPL' }
-  });
-  document.getElementById('root').appendChild(legacy);
-
-  assert(legacy.matches('.card'));
-  assert(legacy.querySelector('.row'));
-  assert(legacy.querySelector('.card__status'));
-  assert(legacy.querySelector('.card__close'));
-  assert(legacy.querySelector('.retry-btn'));
-  assert(legacy.querySelector('.btns'));
-  assert(legacy.querySelector('.card__note'));
-  assert.strictEqual(legacy.dataset.rowkey, 'legacy|1');
-  assert.strictEqual(legacy.querySelector('button.btn').dataset.kind, 'BL');
-  assert.strictEqual(body.buttons, legacy.querySelector('.btns'));
-  assert.strictEqual(body.note, legacy.querySelector('.card__note'));
-  assert.strictEqual(typeof legacy._validate, 'function');
-
-  legacy.querySelector('button.btn').click();
-  legacy.querySelector('.card__close').click();
-  legacy.querySelector('.retry-btn').click();
-  assert(calls.includes('place:BL'));
-  assert(calls.includes('remove'));
-  assert(calls.includes('retry'));
 
   const compact = library.shapes.createPositionCardShape({
     title: 'Closed AAPL',
