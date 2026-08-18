@@ -16,14 +16,14 @@ const { LevelOrderOpeningPolicy, createLevelOrderOpeningPolicy } = require('../a
 const { LevelOrderIntegrationCommand } = require('../app/services/levelOrder/domain/types');
 const {
   createPositionApplicationService,
-  legacyOrderPayloadToCreateCommand,
-  legacyRowToCreateCommand,
-  registerLegacyPositionGuard
+  orderPayloadToCreatePositionCommand,
+  rowToCreatePositionCommand,
+  registerPositionInputAdapter
 } = require('../app/application/positions');
-const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
-const { createOptionStratLegacyGuard } = require('../app/services/optionstrat/legacyGuard');
+const { createLevelOrderPositionInputAdapter } = require('../app/services/levelOrder/positionInputAdapter');
+const { createOptionStratPositionInputAdapter } = require('../app/services/optionstrat/positionInputAdapter');
 
-registerLegacyPositionGuard(createLevelOrderLegacyGuard());
+registerPositionInputAdapter(createLevelOrderPositionInputAdapter());
 
 function eventTypes(result) {
   return (result.events || []).map(event => event.type);
@@ -121,9 +121,9 @@ function runPolicyTests() {
   assert.strictEqual(levelResult.integrationCommands[0].children.length, 2);
 }
 
-function runApplicationAndLegacyTests() {
+function runApplicationAndInputAdapterTests() {
   const service = createPositionApplicationService({ clock: () => 100 });
-  const create = legacyOrderPayloadToCreateCommand({
+  const create = orderPayloadToCreatePositionCommand({
     symbol: 'BTCUSDT',
     instrumentType: 'CX',
     side: 'buy',
@@ -145,23 +145,23 @@ function runApplicationAndLegacyTests() {
   assert.strictEqual(closed.position.state, PositionState.CLOSED);
   assert.strictEqual(closed.position.pnlSnapshot.value, -3);
 
-  const rowCreate = legacyRowToCreateCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
+  const rowCreate = rowToCreatePositionCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
   assert.strictEqual(rowCreate.openingPolicy.kind, 'levelOrder');
 
-  const optionRowWithoutGuard = legacyRowToCreateCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
-  assert.strictEqual(optionRowWithoutGuard.cardType, 'regular');
-  assert.strictEqual(optionRowWithoutGuard.card.type, 'regular');
+  const optionRowWithoutAdapter = rowToCreatePositionCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
+  assert.strictEqual(optionRowWithoutAdapter.cardType, 'regular');
+  assert.strictEqual(optionRowWithoutAdapter.card.type, 'regular');
 
-  const optionPayloadWithoutGuard = legacyOrderPayloadToCreateCommand({
+  const optionPayloadWithoutAdapter = orderPayloadToCreatePositionCommand({
     ticker: 'SPY',
     provider: 'optionstrat',
     instrumentType: 'OPT',
-    meta: { requestId: 'option-without-guard' }
+    meta: { requestId: 'option-without-adapter' }
   }, 'optionstrat');
-  assert.strictEqual(optionPayloadWithoutGuard.cardType, undefined);
-  assert.strictEqual(optionPayloadWithoutGuard.card.type, undefined);
+  assert.strictEqual(optionPayloadWithoutAdapter.cardType, undefined);
+  assert.strictEqual(optionPayloadWithoutAdapter.card.type, undefined);
 
-  const regularPayloadWithPositionId = legacyOrderPayloadToCreateCommand({
+  const regularPayloadWithPositionId = orderPayloadToCreatePositionCommand({
     ticker: 'MSFT',
     provider: 'simulated',
     instrumentType: 'EQ',
@@ -169,22 +169,22 @@ function runApplicationAndLegacyTests() {
   }, 'simulated');
   assert.strictEqual(regularPayloadWithPositionId.positionId, 'pos-reg-existing');
 
-  const unregisterOptionGuard = registerLegacyPositionGuard(createOptionStratLegacyGuard());
+  const unregisterOptionAdapter = registerPositionInputAdapter(createOptionStratPositionInputAdapter());
   try {
-    const optionRowWithGuard = legacyRowToCreateCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
-    assert.strictEqual(optionRowWithGuard.cardType, 'option');
-    assert.strictEqual(optionRowWithGuard.card.type, 'option');
+    const optionRowWithAdapter = rowToCreatePositionCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
+    assert.strictEqual(optionRowWithAdapter.cardType, 'option');
+    assert.strictEqual(optionRowWithAdapter.card.type, 'option');
 
-    const optionPayloadWithGuard = legacyOrderPayloadToCreateCommand({
+    const optionPayloadWithAdapter = orderPayloadToCreatePositionCommand({
       ticker: 'SPY',
       provider: 'optionstrat',
       instrumentType: 'OPT',
-      meta: { requestId: 'option-with-guard' }
+      meta: { requestId: 'option-with-adapter' }
     }, 'optionstrat');
-    assert.strictEqual(optionPayloadWithGuard.cardType, 'option');
-    assert.strictEqual(optionPayloadWithGuard.card.type, 'option');
+    assert.strictEqual(optionPayloadWithAdapter.cardType, 'option');
+    assert.strictEqual(optionPayloadWithAdapter.card.type, 'option');
 
-    const explicitCardType = legacyRowToCreateCommand({
+    const explicitCardType = rowToCreatePositionCommand({
       ticker: 'SPY',
       provider: 'optionstrat',
       instrumentType: 'OPT',
@@ -192,7 +192,7 @@ function runApplicationAndLegacyTests() {
     });
     assert.strictEqual(explicitCardType.cardType, 'customOption');
   } finally {
-    unregisterOptionGuard();
+    unregisterOptionAdapter();
   }
 }
 
@@ -240,7 +240,7 @@ function runCardMetadataTests() {
 
 function runLevelOrderParentLifecycleTest() {
   const service = createPositionsWithLevelOrder({ clock: () => 100 });
-  const created = service.handle(legacyRowToCreateCommand({
+  const created = service.handle(rowToCreatePositionCommand({
     positionId: 'level-parent',
     ticker: 'ES',
     provider: 'simulated',
@@ -336,7 +336,7 @@ function runLevelOrderParentLifecycleTest() {
 
 function runLevelOrderPartialPlacementTest() {
   const service = createPositionsWithLevelOrder();
-  const created = service.handle(legacyRowToCreateCommand({ positionId: 'partial-parent', ticker: 'NQ', provider: 'simulated', cardType: 'levelOrder' }));
+  const created = service.handle(rowToCreatePositionCommand({ positionId: 'partial-parent', ticker: 'NQ', provider: 'simulated', cardType: 'levelOrder' }));
   service.handle({ type: PositionCommand.OPEN, positionId: created.position.id, payload: { ticker: 'NQ' }, openingPolicy: { kind: 'levelOrder' } });
   service.recordPlaced({
     positionId: created.position.id,
@@ -363,7 +363,7 @@ function runLevelOrderPartialPlacementTest() {
 
 function runLevelOrderPreOpenClosedResetsDraftTest() {
   const service = createPositionsWithLevelOrder();
-  const created = service.handle(legacyRowToCreateCommand({ positionId: 'closed-before-open', ticker: 'YM', provider: 'simulated', cardType: 'levelOrder' }));
+  const created = service.handle(rowToCreatePositionCommand({ positionId: 'closed-before-open', ticker: 'YM', provider: 'simulated', cardType: 'levelOrder' }));
   service.handle({ type: PositionCommand.OPEN, positionId: created.position.id, payload: { ticker: 'YM' }, openingPolicy: { kind: 'levelOrder' } });
   service.recordPlaced({
     positionId: created.position.id,
@@ -392,7 +392,7 @@ function runLevelOrderPreOpenClosedResetsDraftTest() {
 runAggregateLifecycleTest();
 runRejectedCancelledTest();
 runPolicyTests();
-runApplicationAndLegacyTests();
+runApplicationAndInputAdapterTests();
 runCardMetadataTests();
 runLevelOrderParentLifecycleTest();
 runLevelOrderPartialPlacementTest();

@@ -23,7 +23,7 @@ assert.strictEqual(baseDescriptor.options.providers.__allowUnknown, true);
 
 const servicesApi = {
   executionPayloadPolicies: { register() {} },
-  positions: { registerLegacyGuard() {} },
+  positions: { registerPositionInputAdapter() {} },
   events: {},
   commands: []
 };

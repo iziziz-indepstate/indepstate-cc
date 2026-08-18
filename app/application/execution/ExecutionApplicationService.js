@@ -1,4 +1,4 @@
-const { legacyOrderPayloadToCreateCommand } = require('../positions');
+const { orderPayloadToCreatePositionCommand } = require('../positions');
 const { PositionCommand } = require('../../domain/positions');
 const {
   normalizeCid,
@@ -106,7 +106,7 @@ class ExecutionApplicationService {
       if (tracksStandalonePosition) {
         try {
           const explicitPositionId = order.meta?.positionId;
-          const createCommand = legacyOrderPayloadToCreateCommand(execOrder, providerName);
+          const createCommand = orderPayloadToCreatePositionCommand(execOrder, providerName);
           execOrder.meta.positionId = createCommand.positionId;
           if (explicitPositionId) {
             this.positions?.handle?.({

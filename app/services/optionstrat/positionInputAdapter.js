@@ -26,7 +26,7 @@ function isOptionStratLike(value = {}) {
     || hasLegs(value);
 }
 
-function positionIdSeedForLegacy(value = {}) {
+function positionIdSeedForInput(value = {}) {
   if (!isOptionStratLike(value)) return null;
   const explicit = text(value.positionId || value.sourcePositionId || value.meta?.positionId);
   if (explicit) return explicit;
@@ -38,22 +38,22 @@ function positionIdSeedForLegacy(value = {}) {
   return sourceKey || null;
 }
 
-function cardTypeForLegacy(value = {}) {
+function cardTypeForInput(value = {}) {
   return isOptionStratLike(value) ? 'option' : null;
 }
 
-function createOptionStratLegacyGuard() {
+function createOptionStratPositionInputAdapter() {
   return {
     id: 'optionstrat',
-    positionIdSeedForLegacy,
-    cardTypeForLegacy
+    positionIdSeedForInput,
+    cardTypeForInput
   };
 }
 
 module.exports = {
-  createOptionStratLegacyGuard,
+  createOptionStratPositionInputAdapter,
   hasLegs,
   isOptionStratLike,
-  cardTypeForLegacy,
-  positionIdSeedForLegacy
+  cardTypeForInput,
+  positionIdSeedForInput
 };

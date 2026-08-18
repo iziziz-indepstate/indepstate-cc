@@ -6,7 +6,7 @@ const {
   createPositionBehaviorRegistry,
   createOpeningPolicyRegistry
 } = require('../../domain/positions');
-const { registerLegacyPositionGuard } = require('./legacy');
+const { registerPositionInputAdapter } = require('./adapters');
 const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
@@ -124,8 +124,8 @@ class PositionApplicationService {
     return this.openingPolicyRegistry.register(kind, factory);
   }
 
-  registerLegacyGuard(guard) {
-    return registerLegacyPositionGuard(guard);
+  registerPositionInputAdapter(adapter) {
+    return registerPositionInputAdapter(adapter);
   }
 
   handle(command = {}) {

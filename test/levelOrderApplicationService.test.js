@@ -1,12 +1,12 @@
 const assert = require('assert');
 const { createLevelOrderApplicationService, createLevelOrderRuntime } = require('../app/services/levelOrder');
-const { createPositionApplicationService, legacyRowToCreateCommand, registerLegacyPositionGuard } = require('../app/application/positions');
+const { createPositionApplicationService, rowToCreatePositionCommand, registerPositionInputAdapter } = require('../app/application/positions');
 const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
-const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+const { createLevelOrderPositionInputAdapter } = require('../app/services/levelOrder/positionInputAdapter');
 
-registerLegacyPositionGuard(createLevelOrderLegacyGuard());
+registerPositionInputAdapter(createLevelOrderPositionInputAdapter());
 
 async function run() {
   const logs = [];
@@ -17,7 +17,7 @@ async function run() {
       { kind: 'levelOrder', factory: createLevelOrderOpeningPolicy }
     ])
   });
-  const createdPosition = positions.handle(legacyRowToCreateCommand({
+  const createdPosition = positions.handle(rowToCreatePositionCommand({
     positionId: 'pos-level-app',
     ticker: 'ADAUSDT',
     provider: 'simulated',

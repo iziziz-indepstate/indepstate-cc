@@ -8,7 +8,7 @@ const {
 } = require('./application');
 const { createLevelOrderPositionBehavior } = require('./domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('./domain/openingPolicy');
-const { createLevelOrderLegacyGuard } = require('./legacyGuard');
+const { createLevelOrderPositionInputAdapter } = require('./positionInputAdapter');
 const { createLevelOrderRenderer } = require('./infrastructure/renderer/renderer');
 
 settings.register(
@@ -36,7 +36,7 @@ function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.executionCardControllers)) servicesApi.executionCardControllers = [];
   servicesApi.positions?.registerBehavior?.(createLevelOrderPositionBehavior());
   servicesApi.positions?.registerOpeningPolicy?.('levelOrder', createLevelOrderOpeningPolicy);
-  servicesApi.positions?.registerLegacyGuard?.(createLevelOrderLegacyGuard());
+  servicesApi.positions?.registerPositionInputAdapter?.(createLevelOrderPositionInputAdapter());
   const resolvers = new Map();
   servicesApi.levelOrder = {
     registerLevelResolver(name, fn) {

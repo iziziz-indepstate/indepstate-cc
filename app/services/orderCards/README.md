@@ -13,8 +13,9 @@ Flow:
 1. A source emits a row from a webhook, watched file, command-line command, or another service.
 2. `orderCards.ingestRow(row, context)` normalizes `ticker`/`symbol`, detects
    `instrumentType`, and resolves the execution provider.
-3. Every normalized row is converted into a position create command and sent to the positions
-   application service.
+3. Every normalized row is adapted into a `PositionCommand.CREATE` command through
+   `rowToCreatePositionCommand` and sent to the positions application service, which creates the
+   `Position` snapshot.
 4. After successful position creation, the row read model is updated and `order-cards:changed` is
    published for source compatibility and diagnostics.
 5. Position creation/update publishes `positions:changed`; the renderer chooses the card UI by

@@ -34,7 +34,7 @@ assertRegistration('../app/services/brokerage-adapter-ibkr/manifest', 'ibkr');
 assertRegistration('../app/services/brokerage-adapter-simulated/manifest', 'simulated');
 assertRegistration('../app/services/optionstrat/manifest', 'optionstrat', {
   executionPayloadPolicies: { register() {} },
-  positions: { registerLegacyGuard() {} },
+  positions: { registerPositionInputAdapter() {} },
   events: {},
   commands: []
 });

@@ -1,14 +1,14 @@
 const assert = require('assert');
 const { EventEmitter } = require('events');
 const { createAdapterLifecycleBridge } = require('../app/application/execution');
-const { createPositionApplicationService, legacyOrderPayloadToCreateCommand, registerLegacyPositionGuard } = require('../app/application/positions');
+const { createPositionApplicationService, orderPayloadToCreatePositionCommand, registerPositionInputAdapter } = require('../app/application/positions');
 const { createPositionBehaviorRegistry, createOpeningPolicyRegistry } = require('../app/domain/positions');
 const { createLevelOrderPositionBehavior } = require('../app/services/levelOrder/domain/positionBehavior');
 const { createLevelOrderOpeningPolicy } = require('../app/services/levelOrder/domain/openingPolicy');
-const { createLevelOrderLegacyGuard } = require('../app/services/levelOrder/legacyGuard');
+const { createLevelOrderPositionInputAdapter } = require('../app/services/levelOrder/positionInputAdapter');
 const { createLevelOrderExecutionController } = require('../app/services/levelOrder');
 
-registerLegacyPositionGuard(createLevelOrderLegacyGuard());
+registerPositionInputAdapter(createLevelOrderPositionInputAdapter());
 
 function createPositionsWithLevelOrder(opts = {}) {
   return createPositionApplicationService({
@@ -50,7 +50,7 @@ function run() {
     positionLifecycleCalls.push(['recordOpened', payload]);
     return originalRecordOpened(payload);
   };
-  const createCommand = legacyOrderPayloadToCreateCommand({
+  const createCommand = orderPayloadToCreatePositionCommand({
     symbol: 'AAPL',
     instrumentType: 'EQ',
     side: 'buy',
@@ -114,7 +114,7 @@ function run() {
   levelAdapter.on = levelAdapter.on.bind(levelAdapter);
   const levelSent = [];
   const levelPositions = createPositionsWithLevelOrder({ eventBus, clock: () => 300 });
-  const createdLevel = levelPositions.handle(legacyOrderPayloadToCreateCommand({
+  const createdLevel = levelPositions.handle(orderPayloadToCreatePositionCommand({
     ticker: 'ES',
     symbol: 'ES',
     provider: 'simulated',
@@ -190,7 +190,7 @@ function run() {
   const rejectedAdapter = new EventEmitter();
   rejectedAdapter.on = rejectedAdapter.on.bind(rejectedAdapter);
   const rejectedPositions = createPositionsWithLevelOrder({ eventBus, clock: () => 500 });
-  const rejectedParent = rejectedPositions.handle(legacyOrderPayloadToCreateCommand({
+  const rejectedParent = rejectedPositions.handle(orderPayloadToCreatePositionCommand({
     ticker: 'USTEC',
     symbol: 'USTEC',
     provider: 'mt5-gerchikco-dwx',

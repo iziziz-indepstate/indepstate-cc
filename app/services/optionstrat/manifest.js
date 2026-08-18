@@ -4,7 +4,7 @@ const loadConfig = require('../../config/load');
 const { createOptionStratCommands } = require('./command');
 const { optionLegs, optionLegPair } = require('./actionFunctions');
 const { createOptionStratApplicationService } = require('./application');
-const { createOptionStratLegacyGuard } = require('./legacyGuard');
+const { createOptionStratPositionInputAdapter } = require('./positionInputAdapter');
 const { createOptionStratCloseController } = require('./closeController');
 const { createOptionStratRenderer } = require('./renderer');
 const { createOptionStratExecutionPolicy } = require('./executionPolicy');
@@ -82,7 +82,7 @@ function initService(servicesApi = {}) {
   servicesApi.executionPayloadPolicies?.register?.(createOptionStratExecutionPolicy());
   servicesApi.outboundWebhooks?.registerLifecycleEnricher?.(createOptionStratLifecycleEnricher());
   if (!Array.isArray(servicesApi.executionCloseControllers)) servicesApi.executionCloseControllers = [];
-  servicesApi.positions?.registerLegacyGuard?.(createOptionStratLegacyGuard());
+  servicesApi.positions?.registerPositionInputAdapter?.(createOptionStratPositionInputAdapter());
   if (!servicesApi.executionCloseControllers.some(controller => controller?.id === 'optionstrat')) {
     servicesApi.executionCloseControllers.push(createOptionStratCloseController({
       positions: servicesApi.positions,

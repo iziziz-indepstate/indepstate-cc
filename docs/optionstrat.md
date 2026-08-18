@@ -25,6 +25,10 @@ The `app/services/optionstrat` service registers its execution defaults with bro
 
 The base brokerage defaults intentionally do not hard-code `OPT` or the `optionstrat` provider. User overrides in `config/execution.json` still win over these module defaults.
 
+The OptionStrat manifest also registers a `PositionInputAdapter`. It maps OptionStrat-like incoming
+rows and order payloads to stable position ID seeds and `card.type: "option"` metadata before the
+generic positions application service creates the snapshot.
+
 The same API fields are also exposed in the `OptionStrat` settings section:
 
 - `cookie`: full `Cookie` header value from an authorized OptionStrat session.

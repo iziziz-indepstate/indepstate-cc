@@ -99,9 +99,11 @@ The exact files can evolve, but the dependency direction should not. During the 
 
 Generic services are open for extension through composition. A card type that needs special execution behavior should provide a small service-local controller/policy and register it from its manifest. `main.js` should inject the accumulated controller registry into the generic application service. The generic execution service should ask those controllers for decisions instead of branching on `card.type`, strategy names, or service-specific metadata.
 
-The row-to-position application adapter may still use compatibility policies while old external
-payload shapes exist. Those policies belong to ingestion/application mapping only; they are not
-renderer extension points and must not decide whether a snapshot or a row owns the UI.
+The position application adapter maps incoming rows and order payloads into position commands.
+`orderCards.ingestRow` uses `rowToCreatePositionCommand` to adapt source rows into `Position`
+snapshots. Services can register a `PositionInputAdapter` for service-owned ID, card-type, or opening
+policy metadata. These adapters belong to ingestion/application mapping only; they are not renderer
+extension points and must not decide whether a snapshot or a row owns the UI.
 
 Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
 
@@ -251,8 +253,9 @@ true in the code and what remains.
   supported by descriptor policy.
 - Generic execution orchestration, IPC wiring, and renderer registries now have
   extension points that can be reused by later modules.
-- `orderCards.ingestRow` always creates a `Position` snapshot. The legacy row renderer, routing
-  split, runtime bridge, presentation adapter, and renderer guards have been removed.
+- `orderCards.ingestRow` always adapts source rows through `rowToCreatePositionCommand` and creates a
+  `Position` snapshot. The legacy row renderer, routing split, runtime bridge, presentation adapter,
+  and renderer guards have been removed.
 
 ### Remaining
 

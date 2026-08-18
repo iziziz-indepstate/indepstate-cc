@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const { PositionCommand } = require('../../domain/positions');
 
-const legacyPositionGuards = [];
+const positionInputAdapters = [];
 
 function hashId(prefix, value) {
   const text = JSON.stringify(value || {});
@@ -12,35 +12,35 @@ function normalizeProvider(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function positionIdSeedForLegacy(value = {}) {
-  for (const guard of legacyPositionGuards) {
-    const seed = guard.positionIdSeedForLegacy?.(value);
+function positionIdSeedForInput(value = {}) {
+  for (const adapter of positionInputAdapters) {
+    const seed = adapter.positionIdSeedForInput?.(value);
     if (seed) return seed;
   }
   return null;
 }
 
-function cardTypeForLegacy(value = {}, fallback) {
-  for (const guard of legacyPositionGuards) {
-    const cardType = guard.cardTypeForLegacy?.(value);
+function cardTypeForInput(value = {}, fallback) {
+  for (const adapter of positionInputAdapters) {
+    const cardType = adapter.cardTypeForInput?.(value);
     if (cardType) return cardType;
   }
   return fallback;
 }
 
-function registerLegacyPositionGuard(guard = {}) {
-  if (!guard || typeof guard !== 'object') return false;
-  legacyPositionGuards.push(guard);
+function registerPositionInputAdapter(adapter = {}) {
+  if (!adapter || typeof adapter !== 'object') return false;
+  positionInputAdapters.push(adapter);
   return () => {
-    const idx = legacyPositionGuards.indexOf(guard);
-    if (idx >= 0) legacyPositionGuards.splice(idx, 1);
+    const idx = positionInputAdapters.indexOf(adapter);
+    if (idx >= 0) positionInputAdapters.splice(idx, 1);
   };
 }
 
-function legacyRowToCreateCommand(row = {}) {
+function rowToCreatePositionCommand(row = {}) {
   const ticker = String(row.ticker || row.symbol || '').trim();
-  const idSeed = positionIdSeedForLegacy(row) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
-  const cardType = row.cardType || cardTypeForLegacy(row, 'regular');
+  const idSeed = positionIdSeedForInput(row) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
+  const cardType = row.cardType || cardTypeForInput(row, 'regular');
   return {
     type: PositionCommand.CREATE,
     positionId: idSeed ? hashId('pos', idSeed) : hashId('pos', row),
@@ -55,19 +55,19 @@ function legacyRowToCreateCommand(row = {}) {
       type: cardType,
       actions: row.cardActions || row.actions
     },
-    openingPolicy: openingPolicyForLegacy(row),
+    openingPolicy: openingPolicyForInput(row),
     source: row,
     executionIntent: row
   };
 }
 
-function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
+function orderPayloadToCreatePositionCommand(payload = {}, resolvedProvider) {
   const meta = payload.meta || {};
   const ticker = String(payload.ticker || payload.symbol || '').trim();
   const requestId = meta.requestId || payload.requestId || payload.cid || meta.cid;
   const explicitPositionId = payload.positionId || payload.sourcePositionId || meta.positionId;
-  const idSeed = positionIdSeedForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider });
-  const cardType = payload.cardType || cardTypeForLegacy({ ...payload, provider: resolvedProvider || payload.provider || meta.provider }, undefined);
+  const idSeed = positionIdSeedForInput({ ...payload, provider: resolvedProvider || payload.provider || meta.provider });
+  const cardType = payload.cardType || cardTypeForInput({ ...payload, provider: resolvedProvider || payload.provider || meta.provider }, undefined);
   return {
     type: PositionCommand.CREATE,
     positionId: explicitPositionId || (idSeed ? hashId('pos', idSeed) : requestId ? hashId('pos', requestId) : hashId('pos', payload)),
@@ -82,24 +82,24 @@ function legacyOrderPayloadToCreateCommand(payload = {}, resolvedProvider) {
       type: cardType,
       actions: payload.cardActions || payload.actions
     },
-    openingPolicy: openingPolicyForLegacy(payload),
+    openingPolicy: openingPolicyForInput(payload),
     source: payload,
     executionIntent: payload
   };
 }
 
-function legacyOrderPayloadToOpenCommand(payload = {}, positionId) {
+function orderPayloadToOpenPositionCommand(payload = {}, positionId) {
   return {
     type: PositionCommand.OPEN,
     positionId,
     payload,
-    openingPolicy: openingPolicyForLegacy(payload)
+    openingPolicy: openingPolicyForInput(payload)
   };
 }
 
-function openingPolicyForLegacy(value = {}) {
-  for (const guard of legacyPositionGuards) {
-    const policy = guard.openingPolicyForLegacy?.(value);
+function openingPolicyForInput(value = {}) {
+  for (const adapter of positionInputAdapters) {
+    const policy = adapter.openingPolicyForInput?.(value);
     if (policy) return policy;
   }
   if (String(value.cardType || value.type || '').trim() === 'levelOrder') {
@@ -146,12 +146,13 @@ function providerCancelledToCommand(event = {}, positionId) {
 }
 
 module.exports = {
-  registerLegacyPositionGuard,
-  cardTypeForLegacy,
-  legacyRowToCreateCommand,
-  legacyOrderPayloadToCreateCommand,
-  legacyOrderPayloadToOpenCommand,
-  openingPolicyForLegacy,
+  registerPositionInputAdapter,
+  positionIdSeedForInput,
+  cardTypeForInput,
+  rowToCreatePositionCommand,
+  orderPayloadToCreatePositionCommand,
+  orderPayloadToOpenPositionCommand,
+  openingPolicyForInput,
   providerOpenedToCommand,
   providerClosedToCommand,
   providerCancelledToCommand

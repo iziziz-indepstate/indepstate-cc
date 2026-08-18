@@ -1,14 +1,14 @@
 const assert = require('assert');
 const {
-  createOptionStratLegacyGuard,
-  cardTypeForLegacy,
+  createOptionStratPositionInputAdapter,
+  cardTypeForInput,
   isOptionStratLike,
-  positionIdSeedForLegacy
-} = require('../app/services/optionstrat/legacyGuard');
+  positionIdSeedForInput
+} = require('../app/services/optionstrat/positionInputAdapter');
 const {
-  legacyOrderPayloadToCreateCommand,
-  legacyRowToCreateCommand,
-  registerLegacyPositionGuard,
+  orderPayloadToCreatePositionCommand,
+  rowToCreatePositionCommand,
+  registerPositionInputAdapter,
   createPositionApplicationService
 } = require('../app/application/positions');
 const { normalizeOrderPayload, registerOrderPayloadPolicy } = require('../app/application/execution');
@@ -31,18 +31,18 @@ const optionRow = {
 
 assert.strictEqual(isOptionStratLike(optionRow), true);
 assert.strictEqual(isOptionStratLike({ ticker: 'AAPL', instrumentType: 'EQ', provider: 'j2t' }), false);
-assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', instrumentType: 'OPT' }), 'option');
-assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', provider: 'optionstrat' }), 'option');
-assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', event: 'optionstrat' }), 'option');
-assert.strictEqual(cardTypeForLegacy({ ticker: 'SPY', instrumentType: 'EQ', provider: 'j2t' }), null);
-assert.strictEqual(positionIdSeedForLegacy(optionRow), 'SPY:optionstrat:1');
+assert.strictEqual(cardTypeForInput({ ticker: 'SPY', instrumentType: 'OPT' }), 'option');
+assert.strictEqual(cardTypeForInput({ ticker: 'SPY', provider: 'optionstrat' }), 'option');
+assert.strictEqual(cardTypeForInput({ ticker: 'SPY', event: 'optionstrat' }), 'option');
+assert.strictEqual(cardTypeForInput({ ticker: 'SPY', instrumentType: 'EQ', provider: 'j2t' }), null);
+assert.strictEqual(positionIdSeedForInput(optionRow), 'SPY:optionstrat:1');
 
-assert.strictEqual(legacyRowToCreateCommand(optionRow).cardType, 'regular');
-registerLegacyPositionGuard(createOptionStratLegacyGuard());
-const rowCreate = legacyRowToCreateCommand(optionRow);
+assert.strictEqual(rowToCreatePositionCommand(optionRow).cardType, 'regular');
+registerPositionInputAdapter(createOptionStratPositionInputAdapter());
+const rowCreate = rowToCreatePositionCommand(optionRow);
 assert.strictEqual(rowCreate.cardType, 'option');
 
-const orderCreate = legacyOrderPayloadToCreateCommand({
+const orderCreate = orderPayloadToCreatePositionCommand({
   ...optionRow,
   meta: { requestId: 'execution-req-1' }
 }, 'optionstrat');
@@ -50,7 +50,7 @@ assert.strictEqual(orderCreate.positionId, rowCreate.positionId);
 assert.strictEqual(orderCreate.cardType, 'option');
 
 registerOrderPayloadPolicy(createOptionStratExecutionPolicy());
-const normalizedOrderCreate = legacyOrderPayloadToCreateCommand(normalizeOrderPayload({
+const normalizedOrderCreate = orderPayloadToCreatePositionCommand(normalizeOrderPayload({
   ...optionRow,
   cardType: 'option',
   meta: { requestId: 'execution-req-2' }

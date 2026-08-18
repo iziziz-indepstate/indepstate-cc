@@ -6,7 +6,7 @@ catch (e) {
   process.exit(0);
 }
 const Module = require('module');
-const { createPositionApplicationService, legacyRowToCreateCommand } = require('../app/application/positions');
+const { createPositionApplicationService, rowToCreatePositionCommand } = require('../app/application/positions');
 
 function levelOrderSnapshot(id, actions) {
   return {
@@ -142,7 +142,7 @@ async function run() {
     instrumentType: 'EQ'
   };
   const exactAddSnapshot = createPositionApplicationService({ clock: () => 100 })
-    .handle(legacyRowToCreateCommand(exactAddRow))
+    .handle(rowToCreatePositionCommand(exactAddRow))
     .position;
   const initialPosition = levelOrderSnapshot('pos-1', [
     { id: 'LS', label: 'LS', command: 'position.levelOrder.sell', style: 'sl' }

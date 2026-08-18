@@ -1,5 +1,5 @@
 const { detectInstrumentType } = require('../instruments');
-const { legacyRowToCreateCommand } = require('../../application/positions');
+const { rowToCreatePositionCommand } = require('../../application/positions');
 const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
@@ -96,7 +96,7 @@ function createOrderCardsApplicationService({
       return { ok: false, error };
     }
     try {
-      const result = positions.handle(legacyRowToCreateCommand(normalized));
+      const result = positions.handle(rowToCreatePositionCommand(normalized));
       positionResult = result;
       debugPositionEvents('orderCards.ingest:position-result', {
         ok: result?.ok !== false,

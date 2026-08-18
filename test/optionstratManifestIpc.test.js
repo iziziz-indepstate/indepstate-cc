@@ -54,7 +54,7 @@ async function run() {
       }
     },
     positions: {
-      registerLegacyGuard() {},
+      registerPositionInputAdapter() {},
       recordClosed(payload) {
         closed.push(payload);
         return { ok: true };

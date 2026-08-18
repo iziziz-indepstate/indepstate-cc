@@ -1,4 +1,4 @@
 module.exports = {
   ...require('./service'),
-  ...require('./legacy')
+  ...require('./adapters')
 };
