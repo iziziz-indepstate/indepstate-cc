@@ -1,5 +1,8 @@
 const assert = require('assert');
+const fs = require('fs');
 const Module = require('module');
+const os = require('os');
+const path = require('path');
 
 async function run() {
   const ipcHandlers = new Map();
@@ -15,7 +18,35 @@ async function run() {
     return originalLoad(request, parent, isMain);
   };
 
+  let loadConfig;
+  let originalConfigRoots;
+  let originalUserRoot;
+  let tempRoot;
   try {
+    loadConfig = require('../app/config/load');
+    originalConfigRoots = loadConfig.CONFIG_ROOTS.slice();
+    originalUserRoot = loadConfig.USER_ROOT;
+
+    tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'iscc-command-line-add-'));
+    const configRoot = path.join(tempRoot, 'config');
+    fs.mkdirSync(configRoot, { recursive: true });
+    fs.writeFileSync(path.join(configRoot, 'optionstrat.json'), JSON.stringify({
+      commands: [{
+        enabled: true,
+        command: 'bcs {s1} {s2} {q}',
+        ticker: 'SPY',
+        provider: 'optionstrat',
+        expiration: '0DTE',
+        legs: [
+          { option: 'CALL', side: 'buy', strike: '{s1}', quantity: '{q}' },
+          { option: 'CALL', side: 'sell', strike: '{s2}', quantity: '{q}' }
+        ]
+      }]
+    }));
+    loadConfig.CONFIG_ROOTS.length = 0;
+    loadConfig.CONFIG_ROOTS.push(configRoot);
+    loadConfig.USER_ROOT = tempRoot;
+
     const servicesApi = {};
     const positionsManifest = require('../app/services/positions/manifest');
     const orderCardsManifest = require('../app/services/orderCards/manifest');
@@ -51,6 +82,10 @@ async function run() {
       getMainWindow: () => mainWindow
     });
 
+    assert(
+      servicesApi.commands.some(command => command.names?.includes('bcs')),
+      'optionstrat should register the bcs command before commandLine initialization'
+    );
     commandLineManifest.initService(servicesApi);
     const runCommand = ipcHandlers.get('cmdline:run');
     assert.strictEqual(typeof runCommand, 'function');
@@ -154,7 +189,13 @@ async function run() {
 
     publisher.dispose();
   } finally {
+    if (loadConfig && originalConfigRoots) {
+      loadConfig.CONFIG_ROOTS.length = 0;
+      loadConfig.CONFIG_ROOTS.push(...originalConfigRoots);
+      loadConfig.USER_ROOT = originalUserRoot;
+    }
     Module._load = originalLoad;
+    if (tempRoot) fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 
   console.log('commandLineAddPositionIntegration tests passed');
