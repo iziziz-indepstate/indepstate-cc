@@ -10,7 +10,7 @@ The main-process application service is registered from `manifest.js` during the
 
 Flow:
 
-1. A regular-card source emits a row from a webhook, watched file, `add` command, or another legacy
+1. A regular-card source emits a row from a watched file, the `add` command, or another registered
    source adapter.
 2. `orderCards.ingestRow(row, context)` normalizes `ticker`/`symbol`, detects
    `instrumentType`, and resolves the execution provider.
@@ -57,8 +57,13 @@ Each entry declares a `type` and options.
 
 ### Source Types
 
-- `webhook` - accepts rows parsed by the [webhooks service](../webhooks/README.md).
-- `file` - watches a JSON file and emits cards when it changes.
+- `file` - watches the plain-text file named by `pathEnvVar` and emits cards when it changes.
+
+Unknown source types are not started and produce a warning. An empty `sources` array starts no
+source; the regular `add`/`remove` command facade remains available.
+
+Inbound webhooks are intentionally not an order-card source. `orderCards` does not host a webhook
+endpoint, import webhook parsers, or replay webhook logs.
 
 ## Regression Coverage
 
@@ -66,6 +71,8 @@ Each entry declares a `type` and options.
   `orderCards`, plus the regular compatibility facade and positions IPC publishing.
 - `test/orderCardsApplicationService.test.js` covers unconditional snapshot creation, including an
   unregistered renderer type.
+- `test/orderCardsWebhookDecoupling.test.js` prevents webhook infrastructure from being reintroduced
+  under `orderCards`.
 
 For development troubleshooting, set `ISCC_DEBUG_POSITION_EVENTS=1` to trace order-card ingestion,
 routing, `order-cards:changed`, and related position events.

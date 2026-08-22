@@ -9,6 +9,7 @@ This directory contains high-level notes about the codebase.
 - [settings.md](settings.md) - settings registration, live/restart apply policies, and config/descriptor fragments.
 - [execution-adapters.md](execution-adapters.md) - adapter/provider registration and execution routing extension defaults.
 - [outbound-webhooks.md](outbound-webhooks.md) - outbound webhook sending and lifecycle payload enrichers.
+- [future-tickets/refactor-inbound-webhooks.md](future-tickets/refactor-inbound-webhooks.md) - future standalone inbound webhook platform module.
 - `app/main.js` – Electron main process wiring adapters and relaying events to the renderer
 - `app/renderer.js` – UI layer showing order cards and status indicators
 - `app/services/events.js` – lightweight event bus for `order:placed`, `position:opened`, `position:closed` and `order:cancelled`

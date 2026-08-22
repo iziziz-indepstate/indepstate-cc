@@ -18,12 +18,12 @@ async function run() {
       }
     });
     assert.deepStrictEqual(
-      await handlers.get('order-cards:list')(null, { source: 'webhooks', rows: 8 }),
-      [{ source: 'webhooks', rows: 8 }]
+      await handlers.get('order-cards:list')(null, { source: 'orderCards', rows: 8 }),
+      [{ source: 'orderCards', rows: 8 }]
     );
     assert.deepStrictEqual(
       await handlers.get('order-cards:list')(null, {}),
-      [{ source: 'webhooks', rows: 100 }]
+      [{ source: 'orderCards', rows: 100 }]
     );
     await assert.rejects(
       () => handlers.get('order-cards:list')(null),
@@ -53,6 +53,10 @@ async function run() {
     await assert.rejects(
       () => handlers.get('order-cards:list')(null, { source: 'executions', rows: 10 }),
       /Unknown order-cards source: executions/
+    );
+    await assert.rejects(
+      () => handlers.get('order-cards:list')(null, { source: 'webhooks', rows: 10 }),
+      /Unknown order-cards source: webhooks/
     );
     await assert.rejects(
       () => handlers.get('order-cards:list')(null, { file: 'webhooks', rows: 10 }),

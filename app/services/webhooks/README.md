@@ -1,6 +1,8 @@
 # Webhook Parsers
 
-Converts raw webhook payloads into order card rows.
+Legacy parser-only module for converting raw inbound webhook payloads into normalized rows.
 Registered parsers are tried in order until one succeeds.
 
-This service powers the `webhook` source of the order cards service.
+This module is currently not wired to HTTP ingestion, card creation, or position snapshot creation.
+It is retained only for a future inbound-webhook refactor. New integrations must not call
+`orderCards.ingestRow` from this module.

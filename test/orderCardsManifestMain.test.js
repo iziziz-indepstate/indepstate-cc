@@ -1,5 +1,4 @@
 const assert = require('assert');
-const path = require('path');
 const Module = require('module');
 
 function run() {
@@ -22,6 +21,9 @@ function run() {
     const parentPath = String(parent?.filename || '').replace(/\\/g, '/');
     if (parentPath.endsWith('app/services/orderCards/manifest.js') && request === './index') {
       return {
+        isOrderCardSourceType(type) {
+          return type === 'file';
+        },
         createOrderCardService(opts) {
           calls.push(['createOrderCardService', opts]);
           const source = {
@@ -55,18 +57,19 @@ function run() {
   const servicesApi = {};
   const positions = { handle: () => ({ ok: true }) };
   const resolveProviderName = () => 'simulated';
+  const warnings = [];
   const service = manifest.registerMainApplicationServices({
     servicesApi,
     positions,
     resolveProviderName,
     sendToRenderer: () => {},
     nowTs: () => 123,
-    logDir: path.join('tmp', 'logs'),
-    defaultWebhookPort: 3210,
+    warn: message => warnings.push(message),
     orderCardsConfig: {
       sources: [
-        { type: 'webhook', port: 0, logFile: 'incoming.jsonl', truncateOnStart: false },
-        { type: 'file', path: 'orders.jsonl' }
+        { type: 'webhook', port: 3210, logFile: 'incoming.jsonl', truncateOnStart: true },
+        { type: 'file', pathEnvVar: 'ORDER_CARDS_TEST_PATH', pollMs: 500 },
+        { type: 'future-source' }
       ]
     }
   });
@@ -77,33 +80,43 @@ function run() {
   assert.deepStrictEqual(servicesApi.commands[0].names, ['add', 'a']);
   assert.deepStrictEqual(servicesApi.commands[1].names, ['rm']);
   assert.deepStrictEqual(servicesApi.commands[0].run(['MSFT', '300', '10']), { ok: true });
-  assert.deepStrictEqual(appService.ingested[2], {
-    row: { ticker: 'MSFT', price: 300, sl: 10, time: appService.ingested[2].row.time, event: 'manual' },
+  assert.deepStrictEqual(appService.ingested[1], {
+    row: { ticker: 'MSFT', price: 300, sl: 10, time: appService.ingested[1].row.time, event: 'manual' },
     context: { source: 'commandLine' }
   });
   assert.deepStrictEqual(servicesApi.commands[1].run(['producingLineId:line-1']), { ok: true, removed: 1 });
   assert.deepStrictEqual(calls[calls.length - 1], ['remove', { producingLineId: 'line-1' }]);
-  assert.strictEqual(sources.length, 2);
+  assert.strictEqual(sources.length, 1);
   assert.strictEqual(sources[0].started, true);
-  assert.strictEqual(sources[1].started, true);
   assert.strictEqual(calls[0][0], 'createOrderCardService');
-  assert.strictEqual(calls[0][1].type, 'webhook');
-  assert.strictEqual(calls[0][1].port, 3210);
-  assert.strictEqual(calls[0][1].logFile, path.join('tmp', 'logs', 'incoming.jsonl'));
-  assert.strictEqual(calls[0][1].truncateOnStart, false);
-  assert.strictEqual(calls[1][1].type, 'file');
-  assert.strictEqual(calls[2][0], 'createOrderCardsApplicationService');
-  assert.strictEqual(calls[2][1].positions, positions);
-  assert.strictEqual(calls[2][1].resolveProviderName, resolveProviderName);
-  assert.deepStrictEqual(calls[2][1].getSourceServices(), sources);
-  assert.deepStrictEqual(appService.ingested.slice(0, 2), [
-    { row: { ticker: 'AAPL', time: 1 }, context: { source: 'webhook' } },
-    { row: { ticker: 'AAPL', time: 1 }, context: { source: 'file' } }
+  assert.strictEqual(calls[0][1].type, 'file');
+  assert.strictEqual(calls[0][1].pathEnvVar, 'ORDER_CARDS_TEST_PATH');
+  assert.strictEqual(calls[0][1].pollMs, 500);
+  assert.strictEqual(calls[1][0], 'createOrderCardsApplicationService');
+  assert.strictEqual(calls[1][1].positions, positions);
+  assert.strictEqual(calls[1][1].resolveProviderName, resolveProviderName);
+  assert.deepStrictEqual(calls[1][1].getSourceServices(), sources);
+  assert.deepStrictEqual(appService.ingested[0], {
+    row: { ticker: 'AAPL', time: 1 },
+    context: { source: 'file' }
+  });
+  assert.deepStrictEqual(warnings, [
+    '[orderCards] Ignoring unknown source type: webhook',
+    '[orderCards] Ignoring unknown source type: future-source'
   ]);
 
   const second = manifest.registerMainApplicationServices({ servicesApi });
   assert.strictEqual(second, appService);
-  assert.strictEqual(sources.length, 2);
+  assert.strictEqual(sources.length, 1);
+
+  const emptyServicesApi = {};
+  const emptyService = manifest.registerMainApplicationServices({
+    servicesApi: emptyServicesApi,
+    orderCardsConfig: { sources: [] }
+  });
+  assert.strictEqual(emptyService, appService);
+  assert.strictEqual(emptyServicesApi.orderCards, appService);
+  assert.strictEqual(sources.length, 1, 'empty source config must not create a fallback source');
 
   const handlers = new Map();
   manifest.registerMainIpcHandlers({

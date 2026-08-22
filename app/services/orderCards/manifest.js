@@ -103,21 +103,13 @@ const rendererHandlers = [{
   }
 }];
 
-function resolveWebhookPort(candidate, fallback) {
-  const num = Number(candidate);
-  if (!Number.isFinite(num)) return fallback;
-  const port = Math.trunc(num);
-  if (port <= 0 || port > 65535) return fallback;
-  return port;
-}
-
 function normalizeSourceConfig(src) {
   const normalized = (src && typeof src === 'object' && !Array.isArray(src))
     ? src
-    : { type: typeof src === 'string' ? src : 'webhook' };
+    : { type: typeof src === 'string' ? src : '' };
   return {
     ...normalized,
-    type: normalized.type || 'webhook'
+    type: String(normalized.type || '').trim()
   };
 }
 
@@ -153,18 +145,26 @@ function registerMainApplicationServices(context = {}) {
   const { servicesApi = {} } = context;
   registerOrderCardCommands(servicesApi);
   if (servicesApi.orderCards) return servicesApi.orderCards;
-  const { createOrderCardService, createOrderCardsApplicationService } = require('./index');
+  const {
+    createOrderCardService,
+    createOrderCardsApplicationService,
+    isOrderCardSourceType
+  } = require('./index');
 
   const config = context.orderCardsConfig || loadConfig('../services/orderCards/config/order-cards.json');
-  const sourcesCfg = Array.isArray(config?.sources) && config.sources.length
-    ? config.sources
-    : [{ type: 'webhook' }];
+  const sourcesCfg = Array.isArray(config?.sources) ? config.sources : [];
   const sourceServices = [];
   let applicationService;
 
   for (const src of sourcesCfg) {
     const normalized = normalizeSourceConfig(src);
     const type = normalized.type;
+    if (!isOrderCardSourceType(type)) {
+      const label = type || '<missing>';
+      const warn = typeof context.warn === 'function' ? context.warn : console.warn;
+      warn(`[orderCards] Ignoring unknown source type: ${label}`);
+      continue;
+    }
     const opts = {
       ...normalized,
       type,
@@ -173,11 +173,6 @@ function registerMainApplicationServices(context = {}) {
         applicationService?.ingestRow?.(row, { source: type });
       }
     };
-    if (type === 'webhook') {
-      opts.port = resolveWebhookPort(normalized.port, context.defaultWebhookPort);
-      opts.logFile = path.join(context.logDir || '.', normalized.logFile || 'webhooks.jsonl');
-      opts.truncateOnStart = normalized.truncateOnStart ?? true;
-    }
     sourceServices.push(createOrderCardService(opts));
   }
 

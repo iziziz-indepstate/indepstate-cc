@@ -73,7 +73,6 @@ action buttons to show on each card:
 ```json
 {
   "sources": [
-    { "type": "webhook" },
     { "type": "file", "pathEnvVar": "ORDER_CARDS_PATH", "pollMs": 1000 }
   ],
   "closedCardEventStrategy": "ignore",
@@ -90,7 +89,8 @@ action buttons to show on each card:
 
 Each entry in `sources` is an object with a `type` field and additional options
 depending on the type. Multiple sources can be defined and their orders are
-merged together.
+merged together. Unknown types are ignored with a warning, and an empty array
+starts no source.
 
 Default Risk $ values for regular and level-order cards are configured in
 `order-calculator.json`, including instrument-type defaults and symbol overrides.
@@ -173,9 +173,6 @@ watched card level.
 Override this file in `config/pending-strategies.json` to customize the defaults.
 
 ## Source types
-
-### `webhook`
-Accepts order cards pushed via HTTP webhook. No extra options are required.
 
 ### `file`
 Watches a plain text file for order descriptions. Options:

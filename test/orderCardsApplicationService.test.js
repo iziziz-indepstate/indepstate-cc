@@ -55,7 +55,7 @@ async function run() {
       publish: (channel, payload) => published.push({ channel, payload })
     });
 
-    const row = service.ingestRow({ symbol: 'BTCUSDT.P', event: 'up', time: 2 }, { source: 'webhook' });
+    const row = service.ingestRow({ symbol: 'BTCUSDT.P', event: 'up', time: 2 }, { source: 'file' });
     assert.strictEqual(row.ticker, 'BTCUSDT.P');
     assert.strictEqual(row.symbol, 'BTCUSDT.P');
     assert.strictEqual(row.instrumentType, 'CX');
@@ -63,11 +63,11 @@ async function run() {
     assert.strictEqual(positionInputs.length, 1);
     assert.strictEqual(positionInputs[0].row.ticker, 'BTCUSDT.P');
     assert.strictEqual(positionInputs[0].row.provider, 'ccxt:binance');
-    assert.deepStrictEqual(positionInputs[0].context, { source: 'webhook' });
+    assert.deepStrictEqual(positionInputs[0].context, { source: 'file' });
     assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
     assert.strictEqual(published[0].payload.row.ticker, 'BTCUSDT.P');
-    assert.strictEqual(published[0].payload.source, 'webhook');
+    assert.strictEqual(published[0].payload.source, 'file');
     assert.ok(published[0].payload.eventId);
   }
 
@@ -99,13 +99,13 @@ async function run() {
       publish: (channel, payload) => published.push({ channel, payload })
     });
 
-    const row = service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'webhook' });
+    const row = service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'file' });
     assert.strictEqual(row.cardType, 'unregisteredRenderer');
     assert.strictEqual(positionInputs.length, 1);
     assert.strictEqual(positionInputs[0].cardType, 'unregisteredRenderer');
     assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
-    assert.strictEqual(published[0].payload.source, 'webhook');
+    assert.strictEqual(published[0].payload.source, 'file');
     assert.ok(published[0].payload.eventId);
   }
 

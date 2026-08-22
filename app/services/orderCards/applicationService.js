@@ -144,8 +144,8 @@ function createOrderCardsApplicationService({
     return { ok: true };
   }
 
-  async function list({ rows = 100, source = 'webhooks' } = {}) {
-    if (source !== 'webhooks') {
+  async function list({ rows = 100, source = 'orderCards' } = {}) {
+    if (source !== 'orderCards') {
       throw new Error(`Unknown order-cards source: ${source}`);
     }
     const combined = Array.from(readModel.values());

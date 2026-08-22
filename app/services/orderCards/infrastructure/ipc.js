@@ -1,5 +1,5 @@
 function parseListRequest(arg) {
-  let source = 'webhooks';
+  let source = 'orderCards';
   let rows = 100;
   if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
     throw new Error('order-cards:list request must be an object');
@@ -21,7 +21,7 @@ function registerOrderCardsIpcHandlers({
   }
   ipcMain.handle('order-cards:list', async (_evt, arg) => {
     const { source, rows } = parseListRequest(arg);
-    if (source !== 'webhooks') {
+    if (source !== 'orderCards') {
       throw new Error(`Unknown order-cards source: ${source}`);
     }
 

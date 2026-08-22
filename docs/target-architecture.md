@@ -43,7 +43,7 @@ The snapshot is not a DOM contract. It is an application read model that interfa
 
 Commands request work. Events describe facts that already happened.
 
-- UI, CLI, webhooks, files, and other interfaces send commands.
+- UI, CLI, files, and other enabled platform interfaces send commands.
 - Application services route commands to factories or aggregates.
 - Aggregates validate invariants and return domain events or integration commands.
 - Infrastructure executes integration commands through providers.
@@ -102,11 +102,23 @@ Generic services are open for extension through composition. A card type that ne
 The position application adapter maps incoming rows and order payloads into position commands.
 `positions.createFromInput(row, context)` is the platform entry point that applies
 `rowToCreatePositionCommand` and creates a `Position` snapshot. `orderCards.ingestRow` is a
-source-specific facade that normalizes webhook/file/regular-command rows, delegates to that entry
+source-specific facade that normalizes file/regular-command rows, delegates to that entry
 point, and maintains its compatibility read model. Services can register a `PositionInputAdapter`
 for service-owned ID, card-type, or opening-policy metadata. These adapters belong to
 ingestion/application mapping only; they are not renderer extension points and must not decide
 whether a snapshot or a row owns the UI.
+
+### Inbound Webhook Status
+
+The legacy inbound webhook-to-card flow is disabled. `orderCards` does not host `/webhook`, read
+inbound webhook JSONL logs, or depend on the webhook parser module. Until
+[“Refactor inbound webhooks as platform input module”](future-tickets/refactor-inbound-webhooks.md)
+is implemented, inbound webhook payloads do not create cards or position snapshots.
+
+That future module must own its HTTP endpoint, parser registry, logs, settings, and lifecycle without
+depending on `orderCards`. It must publish platform commands or events. Any future position creation
+must route through a generic `positions.createFromInput` or command-bus boundary, and the ticket must
+define which payloads create positions, only publish events, or feed automation/actions.
 
 Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
 

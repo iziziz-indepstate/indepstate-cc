@@ -10,16 +10,7 @@
         "description": "Source",
         "type": {
           "type": "string",
-          "description": "Source type (webhook, file)"
-        },
-        "port": {
-          "type": "number",
-          "description": "Webhook port (webhook)",
-          "default": 3210
-        },
-        "truncateOnStart": {
-          "type": "boolean",
-          "description": "Truncate webhook log on start"
+          "description": "Source type (file)"
         },
         "pathEnvVar": {
           "type": "string",

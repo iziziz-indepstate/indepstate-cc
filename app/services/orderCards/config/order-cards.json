@@ -1,6 +1,5 @@
 {
   "sources": [
-    { "type": "webhook", "port": 3210, "truncateOnStart": true },
     { "type": "file", "pathEnvVar": "ORDER_CARDS_PATH", "pollMs": 1000 }
   ],
   "closedCardEventStrategy": "ignore",
