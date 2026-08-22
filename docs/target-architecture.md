@@ -108,6 +108,13 @@ for service-owned ID, card-type, or opening-policy metadata. These adapters belo
 ingestion/application mapping only; they are not renderer extension points and must not decide
 whether a snapshot or a row owns the UI.
 
+Sources such as inbound webhooks, file readers, command-line commands, TradingView listeners, and
+future automation inputs should publish platform input events or platform commands. Card and
+position creation should then be resolved through platform registries and adapters, not by calling a
+neighboring card module directly. Module-owned commands should call `positions.createFromInput`
+directly when they create positions; `orderCards.ingestRow` remains only a regular/source
+compatibility facade during the migration.
+
 ### Inbound Webhook Status
 
 The legacy inbound webhook-to-card flow is disabled. `orderCards` does not host `/webhook`, read
@@ -116,9 +123,11 @@ inbound webhook JSONL logs, or depend on the webhook parser module. Until
 is implemented, inbound webhook payloads do not create cards or position snapshots.
 
 That future module must own its HTTP endpoint, parser registry, logs, settings, and lifecycle without
-depending on `orderCards`. It must publish platform commands or events. Any future position creation
-must route through a generic `positions.createFromInput` or command-bus boundary, and the ticket must
-define which payloads create positions, only publish events, or feed automation/actions.
+depending on `orderCards`. Its target flow is `webhook -> platform input/event bus -> registered
+adapter/plugin -> position/action`, not `webhook -> orderCards`. It must publish platform commands
+or events. Any future position creation must route through a generic `positions.createFromInput` or
+command-bus boundary, and the ticket must define which payloads create positions, only publish
+events, or feed automation/actions.
 
 Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
 
@@ -241,6 +250,19 @@ lifecycle payload fields, while modules add provider/card-specific placeholders 
 The current codebase is moving toward this target in slices. The status below records what is already
 true in the code and what remains.
 
+### Current Boundary Status
+
+`orderCards`, `LevelOrder`, and `OptionStrat` have crossed the main isolation boundary. Their
+outgoing dependencies now point at platform services, extension registries, or their own
+service-local code. `orderCards` is no longer the central card creation hub; it is the regular-card
+runtime owner and a compatibility source facade for regular/file-style rows.
+
+The remaining coupling is mostly inbound from older surrounding services. `tvListener` can still use
+`orderCards.ingestRow` for its legacy `last` flow, and `levelTrack` still imports a helper from
+`LevelOrder`. Generic position ingestion also still recognizes built-in pending strategy names
+directly. These are deferred service-refactor tails, not evidence that the card modules themselves
+should regain cross-module responsibilities.
+
 ### Completed
 
 - `LevelOrder` is isolated as an extension-owned service with application logic, renderer handling,
@@ -277,6 +299,16 @@ true in the code and what remains.
 
 - Continue moving order-card and position workflows from `app/main.js` and `app/renderer.js` into
   application/infrastructure/interface modules.
+- Refactor `webhooks` as a platform input publisher that owns its endpoint, parsing, logs, and
+  settings, then emits platform commands or events instead of creating cards directly.
+- Refactor `tvListener` away from `orderCards.ingestRow` by routing TradingView-originated inputs
+  through the same platform input/command boundary.
+- Move pending strategy resolution out of generic position ingestion into a registry owned by the
+  pending-order/service layer.
+- Remove direct cross-service imports such as `levelTrack -> LevelOrder`; shared helpers should move
+  to platform/shared code or be exposed through explicit service registration.
+- Add architecture regression tests for forbidden cross-service imports and for renderer-unsafe
+  service manifest dependencies.
 - Promote mature registries into clearer typed contracts once more modules use them.
 - Apply the same isolation pass to the next module: move provider-specific config, rendering,
   payload mapping, lifecycle handling, settings policy, and automation enrichment into the owning
