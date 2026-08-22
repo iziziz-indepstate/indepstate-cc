@@ -10,6 +10,9 @@ async function run() {
   let renderCount = 0;
 
   Module._load = function(request, parent, isMain) {
+    if (request === './infrastructure/adapter' && String(parent?.filename || '').replace(/\\/g, '/').endsWith('app/services/optionstrat/manifest.js')) {
+      throw new Error('renderer manifest must not load the OptionStrat infrastructure adapter');
+    }
     if (request === './renderer' && String(parent?.filename || '').replace(/\\/g, '/').endsWith('app/services/optionstrat/manifest.js')) {
       return {
         createOptionStratRenderer(deps) {

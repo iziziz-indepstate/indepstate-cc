@@ -9,7 +9,6 @@ const { createOptionStratCloseController } = require('./closeController');
 const { createOptionStratRenderer } = require('./renderer');
 const { createOptionStratExecutionPolicy } = require('./executionPolicy');
 const { createOptionStratLifecycleEnricher } = require('./lifecycleEnricher');
-const { OptionStratAdapter } = require('./infrastructure/adapter');
 
 settings.register(
   'optionstrat',
@@ -74,6 +73,7 @@ function createOrderCardAddHandler(servicesApi = {}) {
 }
 
 function initService(servicesApi = {}) {
+  const { OptionStratAdapter } = require('./infrastructure/adapter');
   servicesApi.brokerage.registerAdapterFactory(
     'optionstrat',
     (cfg = {}, providerName) => new OptionStratAdapter(cfg, providerName)
