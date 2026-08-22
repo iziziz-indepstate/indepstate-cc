@@ -174,6 +174,15 @@ async function run() {
     assert(optionSaved, 'positions:list should contain optionstrat option snapshot');
     assert.strictEqual(optionSaved.instrumentType, 'OPT');
     assert.strictEqual(optionSaved.card.type, 'option');
+    assert.deepStrictEqual(optionSaved.card.actions.map(action => action.id), ['OPEN']);
+    assert.strictEqual(
+      optionSaved.card.actions.some(action => ['BL', 'BC', 'BFB', 'SL', 'SC', 'SFB'].includes(action.id)),
+      false
+    );
+    assert.deepStrictEqual(optionSaved.card.actions[0].payload.legs, [
+      { option: 'CALL', side: 'buy', strike: 755, quantity: 2 },
+      { option: 'CALL', side: 'sell', strike: 756, quantity: 2 }
+    ]);
     assert.strictEqual(optionResult.cardType, optionSaved.card.type);
     assert.strictEqual(optionResult.position.card.type, optionSaved.card.type);
 
