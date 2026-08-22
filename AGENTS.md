@@ -69,5 +69,5 @@
 - Preserve config override behavior; do not edit user/root `config/*.json` unless explicitly requested.
 - When adding service settings, update both default config and `*-settings-descriptor.json`, and register it through the settings service if it should appear in UI/config tools.
 - Add focused Node tests in `test/*.test.js` for new parsing, command, strategy, adapter-registry, settings, or execution behavior.
-- Before finishing code changes, run the smallest relevant test first; use `npm test` when behavior touches shared execution/order flow.
+- Before finishing code changes, run the smallest relevant test first; use `scripts/run-node-test.ps1 test/foo.test.js` for targeted tests and `scripts/run-test-suite.ps1` for the full suite. These wrappers use `node` from `PATH` when available and fall back to the Codex bundled Node runtime, so do not first probe bare `node`/`npm` in the Codex shell unless already known to be available.
 - For GitHub releases, verify `dist/latest.yml` references asset filenames that exactly match the uploaded release assets before publishing; electron-updater depends on those names.
