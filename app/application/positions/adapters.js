@@ -102,9 +102,6 @@ function openingPolicyForInput(value = {}) {
     const policy = adapter.openingPolicyForInput?.(value);
     if (policy) return policy;
   }
-  if (String(value.cardType || value.type || '').trim() === 'levelOrder') {
-    return { kind: 'levelOrder', config: { strategy: value.meta?.strategy || 'limitBidTrade' } };
-  }
   const strategy = value.strategy || value.meta?.strategy;
   if (strategy && ['consolidation', 'falseBreak', 'limitByCurrent'].includes(String(strategy))) {
     return { kind: 'pending', config: { strategy } };

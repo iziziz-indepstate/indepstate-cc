@@ -23,8 +23,6 @@ const {
 const { createLevelOrderPositionInputAdapter } = require('../app/services/levelOrder/positionInputAdapter');
 const { createOptionStratPositionInputAdapter } = require('../app/services/optionstrat/positionInputAdapter');
 
-registerPositionInputAdapter(createLevelOrderPositionInputAdapter());
-
 function eventTypes(result) {
   return (result.events || []).map(event => event.type);
 }
@@ -145,8 +143,16 @@ function runApplicationAndInputAdapterTests() {
   assert.strictEqual(closed.position.state, PositionState.CLOSED);
   assert.strictEqual(closed.position.pnlSnapshot.value, -3);
 
-  const rowCreate = rowToCreatePositionCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
-  assert.strictEqual(rowCreate.openingPolicy.kind, 'levelOrder');
+  const levelRowWithoutAdapter = rowToCreatePositionCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
+  assert.strictEqual(levelRowWithoutAdapter.openingPolicy.kind, 'regular');
+
+  const unregisterLevelOrderAdapter = registerPositionInputAdapter(createLevelOrderPositionInputAdapter());
+  try {
+    const levelRowWithAdapter = rowToCreatePositionCommand({ ticker: 'ES', provider: 'dwx', cardType: 'levelOrder', time: 1 });
+    assert.strictEqual(levelRowWithAdapter.openingPolicy.kind, 'levelOrder');
+  } finally {
+    unregisterLevelOrderAdapter();
+  }
 
   const optionRowWithoutAdapter = rowToCreatePositionCommand({ ticker: 'SPY', provider: 'optionstrat', instrumentType: 'OPT', time: 2 });
   assert.strictEqual(optionRowWithoutAdapter.cardType, 'regular');
