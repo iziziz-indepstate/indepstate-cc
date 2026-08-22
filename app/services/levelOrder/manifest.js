@@ -21,13 +21,13 @@ const levelOrderPositionMonitors = new Map();
 const levelOrderIntentRegistry = new Map();
 let levelOrderService = null;
 
-function createOrderCardAddHandler(servicesApi = {}) {
+function createPositionAddHandler(servicesApi = {}) {
   return (row) => {
-    const orderCards = servicesApi.orderCards;
-    if (typeof orderCards?.ingestRow === 'function') {
-      return orderCards.ingestRow(row, { source: 'commandLine' });
+    const positions = servicesApi.positions;
+    if (typeof positions?.createFromInput === 'function') {
+      return positions.createFromInput(row, { source: 'commandLine' });
     }
-    return { ok: false, error: 'Order cards service unavailable' };
+    return { ok: false, error: 'Position input ingestion unavailable' };
   };
 }
 
@@ -49,7 +49,7 @@ function initService(servicesApi = {}) {
       return resolvers.get(String(name || '').trim());
     }
   };
-  servicesApi.commands.push(new LevelOrderCommand({ onAdd: createOrderCardAddHandler(servicesApi) }));
+  servicesApi.commands.push(new LevelOrderCommand({ onAdd: createPositionAddHandler(servicesApi) }));
   const commandOpts = {
     servicesApi,
     getConfig() {

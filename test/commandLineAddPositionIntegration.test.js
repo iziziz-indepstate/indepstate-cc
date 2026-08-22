@@ -21,29 +21,19 @@ async function run() {
     const orderCardsManifest = require('../app/services/orderCards/manifest');
     const commandLineManifest = require('../app/services/commandLine/manifest');
     const levelOrderManifest = require('../app/services/levelOrder/manifest');
-    const { createOptionStratCommands } = require('../app/services/optionstrat/command');
+    const optionStratManifest = require('../app/services/optionstrat/manifest');
     const { registerPositionsIpcHandlers, createPositionsChangedPublisher } = require('../app/infrastructure/positions');
 
     const positions = positionsManifest.initService(servicesApi);
     levelOrderManifest.initService(servicesApi);
-    servicesApi.commands.push(...createOptionStratCommands({
-      commands: [{
-        enabled: true,
-        command: 'bcs {s1} {s2} {q}',
-        name: 'BCS {s1}/{s2}',
-        ticker: 'SPY',
-        provider: 'optionstrat',
-        expiration: '0DTE',
-        legs: [
-          { option: 'CALL', side: 'buy', strike: '{s1}', quantity: '{q}' },
-          { option: 'CALL', side: 'sell', strike: '{s2}', quantity: '{q}' }
-        ]
-      }]
-    }, {
-      onAdd(row) {
-        return servicesApi.orderCards.ingestRow(row, { source: 'commandLine' });
-      }
-    }));
+    servicesApi.brokerage = {
+      registerAdapterFactory() {},
+      registerExecutionProviderDefaults() {}
+    };
+    servicesApi.executionPayloadPolicies = { register() {} };
+    servicesApi.outboundWebhooks = { registerLifecycleEnricher() {} };
+    servicesApi.events = {};
+    optionStratManifest.initService(servicesApi);
     registerPositionsIpcHandlers({ ipcMain, positionsService: positions });
 
     const sent = [];
@@ -61,6 +51,23 @@ async function run() {
       getMainWindow: () => mainWindow
     });
 
+    commandLineManifest.initService(servicesApi);
+    const runCommand = ipcHandlers.get('cmdline:run');
+    assert.strictEqual(typeof runCommand, 'function');
+    assert.strictEqual(servicesApi.orderCards, undefined);
+
+    const levelResult = await runCommand(null, 'levelOrder ADAUSDT.cfd 0.1995');
+    assert.strictEqual(levelResult.ok, true);
+    assert.strictEqual(levelResult.cardType, 'levelOrder');
+    assert.strictEqual(levelResult.position.ticker, 'ADAUSDT.cfd');
+
+    const optionResult = await runCommand(null, 'bcs 755 756 2');
+    assert.strictEqual(optionResult.ok, true);
+    assert.strictEqual(optionResult.cardType, 'option');
+    assert.strictEqual(optionResult.position.instrumentType, 'OPT');
+    assert.strictEqual(optionResult.position.provider, 'optionstrat');
+    assert.strictEqual(servicesApi.orderCards, undefined);
+
     orderCardsManifest.registerMainApplicationServices({
       servicesApi,
       orderCardsConfig: {
@@ -73,21 +80,25 @@ async function run() {
       resolveProviderName: () => 'simulated',
       publish: () => {}
     });
-    commandLineManifest.initService(servicesApi);
 
-    const runCommand = ipcHandlers.get('cmdline:run');
-    assert.strictEqual(typeof runCommand, 'function');
     const result = await runCommand(null, 'a ADAUSDT.cfd 0.1981');
     assert.strictEqual(result.ok, true);
 
     const listed = await ipcHandlers.get('positions:list')();
-    const saved = listed.find(position => position.ticker === 'ADAUSDT.cfd');
+    const saved = listed.find(position => (
+      position.ticker === 'ADAUSDT.cfd'
+      && position.card?.type === 'regular'
+    ));
     assert(saved, 'positions:list should contain ADAUSDT.cfd');
     assert.strictEqual(saved.card.type, 'regular');
     assert.strictEqual(result.cardType, saved.card.type);
     assert.strictEqual(result.position.card.type, saved.card.type);
 
-    const changed = sent.find(item => item.channel === 'positions:changed' && item.payload.position?.ticker === 'ADAUSDT.cfd');
+    const changed = sent.find(item => (
+      item.channel === 'positions:changed'
+      && item.payload.position?.ticker === 'ADAUSDT.cfd'
+      && item.payload.position?.card?.type === 'regular'
+    ));
     assert(changed, 'positions:changed should be sent for ADAUSDT.cfd');
     assert(changed.savedAtSend, 'saved repository snapshot must exist before positions:changed is observed');
     assert.strictEqual(changed.savedAtSend.id, saved.id);
@@ -97,10 +108,6 @@ async function run() {
     assert.strictEqual(changed.payload.position.card.type, saved.card.type);
     assert.strictEqual(changed.payload.position.card.type, result.cardType);
     assert.strictEqual(changed.payload.position.ticker, saved.ticker);
-
-    const levelResult = await runCommand(null, 'levelOrder ADAUSDT.cfd 0.1995');
-    assert.strictEqual(levelResult.cardType, 'levelOrder');
-    assert.strictEqual(levelResult.ticker, 'ADAUSDT.cfd');
 
     const afterLevel = await ipcHandlers.get('positions:list')();
     const levelSaved = afterLevel.find(position => (
@@ -122,11 +129,6 @@ async function run() {
     assert(levelChanged.savedAtSend, 'levelOrder repository snapshot must exist before positions:changed is observed');
     assert.strictEqual(levelChanged.savedAtSend.card.type, 'levelOrder');
     assert.strictEqual(levelChanged.payload.position.card.type, levelResult.cardType);
-
-    const optionResult = await runCommand(null, 'bcs 755 756 2');
-    assert.strictEqual(optionResult.cardType, 'option');
-    assert.strictEqual(optionResult.instrumentType, 'OPT');
-    assert.strictEqual(optionResult.provider, 'optionstrat');
 
     const afterOption = await ipcHandlers.get('positions:list')();
     const optionSaved = afterOption.find(position => (

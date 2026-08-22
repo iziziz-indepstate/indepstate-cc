@@ -62,13 +62,13 @@ function registerActionFunctions(servicesApi = {}) {
   ].filter(Boolean);
 }
 
-function createOrderCardAddHandler(servicesApi = {}) {
+function createPositionAddHandler(servicesApi = {}) {
   return (row) => {
-    const orderCards = servicesApi.orderCards;
-    if (typeof orderCards?.ingestRow === 'function') {
-      return orderCards.ingestRow(row, { source: 'commandLine' });
+    const positions = servicesApi.positions;
+    if (typeof positions?.createFromInput === 'function') {
+      return positions.createFromInput(row, { source: 'commandLine' });
     }
-    return { ok: false, error: 'Order cards service unavailable' };
+    return { ok: false, error: 'Position input ingestion unavailable' };
   };
 }
 
@@ -97,7 +97,7 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
-  const commandOpts = { onAdd: createOrderCardAddHandler(servicesApi) };
+  const commandOpts = { onAdd: createPositionAddHandler(servicesApi) };
   servicesApi.commands.push(...createOptionStratCommands(cfg, commandOpts));
   settings.onApply('optionstrat', ({ config }) => {
     const commands = createOptionStratCommands(config, commandOpts);

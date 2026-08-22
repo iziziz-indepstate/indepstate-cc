@@ -11,18 +11,18 @@ async function run() {
       { cardType: 'unknownCard', shouldCreateSnapshot: true }
     ];
     for (const item of cases) {
-      const positionCommands = [];
+      const positionInputs = [];
       const published = [];
       const service = createOrderCardsApplicationService({
         positions: {
-          handle(cmd) {
-            positionCommands.push(cmd);
+          createFromInput(row, context) {
+            positionInputs.push({ row, context });
             return {
               ok: true,
               position: {
                 id: `pos-${item.cardType}`,
-                ticker: cmd.ticker,
-                card: { type: cmd.cardType || 'regular' }
+                ticker: row.ticker,
+                card: { type: row.cardType || 'regular' }
               }
             };
           }
@@ -35,21 +35,22 @@ async function run() {
         event: item.cardType,
         time: 1
       }, { source: 'routing-test' });
-      assert.strictEqual(positionCommands.length, 1, `${item.cardType} snapshot routing`);
+      assert.strictEqual(positionInputs.length, 1, `${item.cardType} snapshot routing`);
       assert.strictEqual(published.length, 1, `${item.cardType} published row`);
       assert.strictEqual(published[0].channel, 'order-cards:changed');
       assert.strictEqual(published[0].payload.type, 'upsert');
       assert.strictEqual(result.ok, true);
       assert.strictEqual(result.position.card.type, item.cardType);
-      assert.strictEqual(positionCommands[0].cardType, item.cardType);
+      assert.strictEqual(positionInputs[0].row.cardType, item.cardType);
+      assert.deepStrictEqual(positionInputs[0].context, { source: 'routing-test' });
     }
   }
 
   {
-    const positionCommands = [];
+    const positionInputs = [];
     const published = [];
     const service = createOrderCardsApplicationService({
-      positions: { handle: cmd => positionCommands.push(cmd) },
+      positions: { createFromInput: (row, context) => positionInputs.push({ row, context }) },
       resolveProviderName: ({ instrumentType }) => instrumentType === 'CX' ? 'ccxt:binance' : 'simulated',
       publish: (channel, payload) => published.push({ channel, payload })
     });
@@ -59,9 +60,10 @@ async function run() {
     assert.strictEqual(row.symbol, 'BTCUSDT.P');
     assert.strictEqual(row.instrumentType, 'CX');
     assert.strictEqual(row.provider, 'ccxt:binance');
-    assert.strictEqual(positionCommands.length, 1);
-    assert.strictEqual(positionCommands[0].ticker, 'BTCUSDT.P');
-    assert.strictEqual(positionCommands[0].provider, 'ccxt:binance');
+    assert.strictEqual(positionInputs.length, 1);
+    assert.strictEqual(positionInputs[0].row.ticker, 'BTCUSDT.P');
+    assert.strictEqual(positionInputs[0].row.provider, 'ccxt:binance');
+    assert.deepStrictEqual(positionInputs[0].context, { source: 'webhook' });
     assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
     assert.strictEqual(published[0].payload.row.ticker, 'BTCUSDT.P');
@@ -70,9 +72,9 @@ async function run() {
   }
 
   {
-    const positionCommands = [];
+    const positionInputs = [];
     const service = createOrderCardsApplicationService({
-      positions: { handle: cmd => positionCommands.push(cmd) },
+      positions: { createFromInput: row => positionInputs.push(row) },
       resolveProviderName: () => 'simulated'
     });
 
@@ -85,22 +87,22 @@ async function run() {
       time: 5
     }, { source: 'commandLine' });
     assert.strictEqual(row.provider, 'optionstrat');
-    assert.strictEqual(positionCommands[0].provider, 'optionstrat');
-    assert.strictEqual(positionCommands[0].cardType, 'option');
+    assert.strictEqual(positionInputs[0].provider, 'optionstrat');
+    assert.strictEqual(positionInputs[0].cardType, 'option');
   }
 
   {
-    const positionCommands = [];
+    const positionInputs = [];
     const published = [];
     const service = createOrderCardsApplicationService({
-      positions: { handle: cmd => positionCommands.push(cmd) },
+      positions: { createFromInput: row => positionInputs.push(row) },
       publish: (channel, payload) => published.push({ channel, payload })
     });
 
     const row = service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', event: 'custom', time: 1 }, { source: 'webhook' });
     assert.strictEqual(row.cardType, 'unregisteredRenderer');
-    assert.strictEqual(positionCommands.length, 1);
-    assert.strictEqual(positionCommands[0].card.type, 'unregisteredRenderer');
+    assert.strictEqual(positionInputs.length, 1);
+    assert.strictEqual(positionInputs[0].cardType, 'unregisteredRenderer');
     assert.deepStrictEqual(published.map(item => item.channel), ['order-cards:changed']);
     assert.strictEqual(published[0].payload.type, 'upsert');
     assert.strictEqual(published[0].payload.source, 'webhook');
@@ -114,7 +116,7 @@ async function run() {
     console.warn = (...args) => warnings.push(args.join(' '));
     try {
       const service = createOrderCardsApplicationService({
-        positions: { handle: () => ({ ok: false, error: 'invalid position' }) },
+        positions: { createFromInput: () => ({ ok: false, error: 'invalid position' }) },
         publish: (channel, payload) => published.push({ channel, payload })
       });
       const result = service.ingestRow({ ticker: 'MSFT', event: 'up', time: 3 });
@@ -133,7 +135,7 @@ async function run() {
     console.warn = (...args) => warnings.push(args.join(' '));
     try {
       const service = createOrderCardsApplicationService({
-        positions: { handle: () => { throw new Error('boom'); } },
+        positions: { createFromInput: () => { throw new Error('boom'); } },
         publish: (channel, payload) => published.push({ channel, payload })
       });
       const result = service.ingestRow({ ticker: 'NVDA', event: 'up', time: 4 });
@@ -149,7 +151,7 @@ async function run() {
   {
     const published = [];
     const service = createOrderCardsApplicationService({
-      positions: { handle: () => ({ ok: true }) },
+      positions: { createFromInput: () => ({ ok: true }) },
       publish: (channel, payload) => published.push({ channel, payload })
     });
     service.ingestRow({ cardType: 'unregisteredRenderer', ticker: 'AAPL', producingLineId: 'line-1', time: 1 });
@@ -174,7 +176,7 @@ async function run() {
     };
     const service = createOrderCardsApplicationService({
       getSourceServices: () => [sourceService],
-      positions: { handle: () => ({ ok: true }) },
+      positions: { createFromInput: () => ({ ok: true }) },
       resolveProviderName: ({ row }) => row.provider || 'simulated'
     });
     service.ingestRow({ ticker: 'TSLA', time: 2 });

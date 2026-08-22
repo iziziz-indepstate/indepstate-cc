@@ -25,7 +25,7 @@ This directory contains high-level notes about the codebase.
 - `servicesApi.brokerage.registerAdapterFactory()` and `registerExecutionProviderDefaults()` - public extension APIs for broker/provider modules; `app/services/brokerage/brokerageAdapters.js` remains the internal registry store
 - `app/services/brokerage-adapter-*/comps/*` – execution adapters such as the DWX connector and the CCXT adapter; each can provide `listOpenOrders()` and `listClosedPositions()`
 - `app/services/servicesApi.js` – global object that service manifests extend to expose their APIs (e.g. `servicesApi.brokerage` with adapter helpers)
-- `app/services/commandLine/index.js` and `manifest.js` - parse text commands, wire renderer input/shortcuts, and route card-creating commands through `orderCards.ingestRow`. See [command-line.md](command-line.md).
+- `app/services/commandLine/index.js` and `manifest.js` - parse text commands and wire renderer input/shortcuts; card modules inject either the platform `positions.createFromInput` path or a source-specific facade such as `orderCards.ingestRow`. See [command-line.md](command-line.md).
 - `app/services/actions-bus/*` – automation bus connecting service events to command runners. See [actions-bus.md](actions-bus.md) for configuration and usage details.
 - `app/services/instrumentInfo/*` – shared provider-aware quote and trading-metadata cache. See [instrument-info.md](instrument-info.md).
 - `app/services/orderCalculator.js` – shared service computing stop-loss, take-profit and position size for cards and pending orders.

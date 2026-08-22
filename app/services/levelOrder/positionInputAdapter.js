@@ -14,7 +14,7 @@ function openingPolicyForInput(value = {}) {
   if (!hasLevelOrderRowType(value) && !LEVEL_ORDER_CHILD_STRATEGIES.includes(text(meta.strategy))) return null;
   return {
     kind: 'levelOrder',
-    config: { strategy: meta.strategy || 'limitBidTrade' }
+    config: meta.strategy ? { strategy: meta.strategy } : {}
   };
 }
 

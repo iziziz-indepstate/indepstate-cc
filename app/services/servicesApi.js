@@ -79,6 +79,7 @@ const { orderPayloadPolicyRegistry } = require('../application/execution/orderPa
  * @property {{listConfigs:Function,readConfig:Function,writeConfig:Function,saveAndApplyConfig:Function,getRestartStatus:Function,onApply:Function}} [settings]
  * @property {Array<any>} [executionCardControllers]
  * @property {Array<any>} [executionCloseControllers]
+ * @property {{createFromInput:Function,handle:Function,registerPositionInputAdapter:Function}} [positions]
  * @property {{ingestRow:Function,remove:Function,list:Function,normalizeRow:Function}} [orderCards]
  */
 

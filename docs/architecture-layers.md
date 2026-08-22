@@ -47,6 +47,8 @@ Generic application services should be extended by composition, not by adding ca
 
 - `app/main.js` is being reduced to an Electron composition root.
 - Generic execution use cases live in `app/application/execution`.
+- Generic row-like card ingestion lives in `app/application/positions` behind
+  `servicesApi.positions.createFromInput`; source facades and extension commands delegate to it.
 - Extension-specific execution decisions are registered by service manifests and injected into generic execution use cases through service-local controllers/policies.
 - Execution IPC registration lives in `app/infrastructure/execution`.
 - Generic Electron IPC registration, such as window state and order-list read models, lives in `app/infrastructure/electron`.

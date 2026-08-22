@@ -1,5 +1,4 @@
 const { detectInstrumentType } = require('../instruments');
-const { rowToCreatePositionCommand } = require('../../application/positions');
 const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
@@ -84,8 +83,8 @@ function createOrderCardsApplicationService({
       cardType: normalized.cardType || normalized.type || 'regular',
       route: 'position-snapshot'
     });
-    if (typeof positions?.handle !== 'function') {
-      const error = 'position snapshot handler is unavailable';
+    if (typeof positions?.createFromInput !== 'function') {
+      const error = 'position input ingestion is unavailable';
       debugPositionEvents('orderCards.ingest:position-result', {
         ticker: normalized.ticker,
         cardType: normalized.cardType || normalized.type || 'regular',
@@ -96,7 +95,7 @@ function createOrderCardsApplicationService({
       return { ok: false, error };
     }
     try {
-      const result = positions.handle(rowToCreatePositionCommand(normalized));
+      const result = positions.createFromInput(normalized, context);
       positionResult = result;
       debugPositionEvents('orderCards.ingest:position-result', {
         ok: result?.ok !== false,

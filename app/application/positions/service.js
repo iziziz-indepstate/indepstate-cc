@@ -6,7 +6,7 @@ const {
   createPositionBehaviorRegistry,
   createOpeningPolicyRegistry
 } = require('../../domain/positions');
-const { registerPositionInputAdapter } = require('./adapters');
+const { registerPositionInputAdapter, rowToCreatePositionCommand } = require('./adapters');
 const { debugPositionEvents, positionDebugSummary } = require('../../debugPositionEvents');
 
 function clone(value) {
@@ -126,6 +126,33 @@ class PositionApplicationService {
 
   registerPositionInputAdapter(adapter) {
     return registerPositionInputAdapter(adapter);
+  }
+
+  createFromInput(row = {}, context = {}) {
+    let command;
+    try {
+      command = rowToCreatePositionCommand(row, context);
+      const result = this.handle(command);
+      const cardType = result?.position?.card?.type || command.cardType || 'regular';
+      if (result?.ok === false) {
+        return {
+          ...result,
+          cardType,
+          error: result.error || result.reason || 'Position snapshot creation failed'
+        };
+      }
+      return {
+        ...result,
+        ok: true,
+        cardType
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        cardType: command?.cardType || row?.cardType || 'regular',
+        error: err?.message || String(err)
+      };
+    }
   }
 
   handle(command = {}) {

@@ -12,17 +12,17 @@ function normalizeProvider(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function positionIdSeedForInput(value = {}) {
+function positionIdSeedForInput(value = {}, context = {}) {
   for (const adapter of positionInputAdapters) {
-    const seed = adapter.positionIdSeedForInput?.(value);
+    const seed = adapter.positionIdSeedForInput?.(value, context);
     if (seed) return seed;
   }
   return null;
 }
 
-function cardTypeForInput(value = {}, fallback) {
+function cardTypeForInput(value = {}, fallback, context = {}) {
   for (const adapter of positionInputAdapters) {
-    const cardType = adapter.cardTypeForInput?.(value);
+    const cardType = adapter.cardTypeForInput?.(value, context);
     if (cardType) return cardType;
   }
   return fallback;
@@ -37,10 +37,10 @@ function registerPositionInputAdapter(adapter = {}) {
   };
 }
 
-function rowToCreatePositionCommand(row = {}) {
+function rowToCreatePositionCommand(row = {}, context = {}) {
   const ticker = String(row.ticker || row.symbol || '').trim();
-  const idSeed = positionIdSeedForInput(row) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
-  const cardType = row.cardType || cardTypeForInput(row, 'regular');
+  const idSeed = positionIdSeedForInput(row, context) || row.positionId || row.requestId || row.producingLineId || row.time && `${ticker}:${row.event || ''}:${row.time}`;
+  const cardType = row.cardType || cardTypeForInput(row, 'regular', context);
   return {
     type: PositionCommand.CREATE,
     positionId: idSeed ? hashId('pos', idSeed) : hashId('pos', row),
@@ -55,7 +55,7 @@ function rowToCreatePositionCommand(row = {}) {
       type: cardType,
       actions: row.cardActions || row.actions
     },
-    openingPolicy: openingPolicyForInput(row),
+    openingPolicy: openingPolicyForInput(row, context),
     source: row,
     executionIntent: row
   };
@@ -97,9 +97,9 @@ function orderPayloadToOpenPositionCommand(payload = {}, positionId) {
   };
 }
 
-function openingPolicyForInput(value = {}) {
+function openingPolicyForInput(value = {}, context = {}) {
   for (const adapter of positionInputAdapters) {
-    const policy = adapter.openingPolicyForInput?.(value);
+    const policy = adapter.openingPolicyForInput?.(value, context);
     if (policy) return policy;
   }
   const strategy = value.strategy || value.meta?.strategy;

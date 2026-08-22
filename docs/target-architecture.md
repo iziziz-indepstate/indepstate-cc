@@ -100,10 +100,13 @@ The exact files can evolve, but the dependency direction should not. During the 
 Generic services are open for extension through composition. A card type that needs special execution behavior should provide a small service-local controller/policy and register it from its manifest. `main.js` should inject the accumulated controller registry into the generic application service. The generic execution service should ask those controllers for decisions instead of branching on `card.type`, strategy names, or service-specific metadata.
 
 The position application adapter maps incoming rows and order payloads into position commands.
-`orderCards.ingestRow` uses `rowToCreatePositionCommand` to adapt source rows into `Position`
-snapshots. Services can register a `PositionInputAdapter` for service-owned ID, card-type, or opening
-policy metadata. These adapters belong to ingestion/application mapping only; they are not renderer
-extension points and must not decide whether a snapshot or a row owns the UI.
+`positions.createFromInput(row, context)` is the platform entry point that applies
+`rowToCreatePositionCommand` and creates a `Position` snapshot. `orderCards.ingestRow` is a
+source-specific facade that normalizes webhook/file/regular-command rows, delegates to that entry
+point, and maintains its compatibility read model. Services can register a `PositionInputAdapter`
+for service-owned ID, card-type, or opening-policy metadata. These adapters belong to
+ingestion/application mapping only; they are not renderer extension points and must not decide
+whether a snapshot or a row owns the UI.
 
 Service manifests are loaded by both the main process and the renderer. A manifest must therefore be renderer-safe at top level: do not `require()` Electron main-process modules, provider adapters, filesystem-only infrastructure, or other main-only dependencies while the manifest is being imported. Load those dependencies lazily inside main-only hooks such as `registerMainApplicationServices()` or IPC registration hooks.
 
@@ -230,8 +233,8 @@ true in the code and what remains.
 
 - `LevelOrder` is isolated as an extension-owned service with application logic, renderer handling,
   command registration, and manifest-owned wiring.
-- `commandLine` is manifest-wired and creates snapshot-backed cards through `orderCards.ingestRow`
-  for card-creating commands.
+- `commandLine` is manifest-wired. Module-owned card commands use `positions.createFromInput`, while
+  regular/source-owned commands may use `orderCards.ingestRow` as a compatibility facade.
 - The renderer dispatches snapshot cards through a manifest-populated registry keyed by
   `position.card.type`.
 - The renderer has a shell-owned card runtime with card type, view, control, and shape registries.
@@ -253,8 +256,9 @@ true in the code and what remains.
   supported by descriptor policy.
 - Generic execution orchestration, IPC wiring, and renderer registries now have
   extension points that can be reused by later modules.
-- `orderCards.ingestRow` always adapts source rows through `rowToCreatePositionCommand` and creates a
-  `Position` snapshot. The legacy row renderer, routing split, runtime bridge, presentation adapter,
+- `positions.createFromInput` owns row-to-command adaptation and snapshot creation.
+  `orderCards.ingestRow` delegates to it after source normalization and only owns its compatibility
+  read model/event. The legacy row renderer, routing split, runtime bridge, presentation adapter,
   and renderer guards have been removed.
 
 ### Remaining
@@ -269,7 +273,10 @@ true in the code and what remains.
 
 ## Regression Coverage
 
-- `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
+- `test/commandLineAddPositionIntegration.test.js` covers module commands without `orderCards`, the
+  regular `orderCards` facade, and positions IPC publishing.
+- `test/positionsInputIngestion.test.js` covers platform ingestion for regular, level-order, and
+  OptionStrat inputs.
 - `test/positionsRenderer.test.js` covers renderer dispatch by `position.card.type`.
 - `test/orderCardsApplicationService.test.js` covers unconditional snapshot creation, including an
   unknown renderer type.

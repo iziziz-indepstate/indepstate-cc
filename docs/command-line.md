@@ -14,9 +14,12 @@ The service manifest exports `hookRenderer(ipcRenderer)` which the renderer call
 
 ## Card-Creating Commands
 
-Card-creating commands call an injected `onAdd(row)` handler. In the running app that handler calls
-`servicesApi.orderCards.ingestRow(row, { source: 'commandLine' })`, so these commands create the
-same position snapshots and order-card read models as webhook/file sources.
+Card-creating commands call an injected `onAdd(row)` handler. Module-owned card commands such as
+`levelOrder` and configured OptionStrat commands call
+`servicesApi.positions.createFromInput(row, { source: 'commandLine' })` directly. Regular `add` and
+the `tvListener`-owned `last` flow keep using `orderCards.ingestRow` as a source facade, which
+normalizes the row before delegating to the same positions ingestion path and updating the legacy
+order-card read model.
 
 The command result contract is important: commands that create cards should return the actual
 `onAdd` result. They should not replace it with a synthetic `{ ok: true }`, because the caller and

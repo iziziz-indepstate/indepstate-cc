@@ -10,12 +10,12 @@ The main-process application service is registered from `manifest.js` during the
 
 Flow:
 
-1. A source emits a row from a webhook, watched file, command-line command, or another service.
+1. A regular-card source emits a row from a webhook, watched file, `add` command, or another legacy
+   source adapter.
 2. `orderCards.ingestRow(row, context)` normalizes `ticker`/`symbol`, detects
    `instrumentType`, and resolves the execution provider.
-3. Every normalized row is adapted into a `PositionCommand.CREATE` command through
-   `rowToCreatePositionCommand` and sent to the positions application service, which creates the
-   `Position` snapshot.
+3. The facade calls `positions.createFromInput(row, context)`, which applies registered
+   `PositionInputAdapter`s, adapts the row into `PositionCommand.CREATE`, and creates the snapshot.
 4. After successful position creation, the row read model is updated and `order-cards:changed` is
    published for source compatibility and diagnostics.
 5. Position creation/update publishes `positions:changed`; the renderer chooses the card UI by
@@ -44,7 +44,8 @@ renderer bootstrap in `manifest.js` registers:
 - card-state refresh hooks.
 
 Module-specific card renderers should be registered by their owning service manifests. They should
-not be hard-coded in `app/renderer.js`.
+not be hard-coded in `app/renderer.js`. Module commands can also call `positions.createFromInput`
+directly; they do not depend on the `orderCards` service.
 
 ## Configuration
 
@@ -61,7 +62,8 @@ Each entry declares a `type` and options.
 
 ## Regression Coverage
 
-- `test/commandLineAddPositionIntegration.test.js` covers `commandLine` -> `orderCards.ingestRow` -> positions -> IPC publishing.
+- `test/commandLineAddPositionIntegration.test.js` covers module command ingestion without
+  `orderCards`, plus the regular compatibility facade and positions IPC publishing.
 - `test/orderCardsApplicationService.test.js` covers unconditional snapshot creation, including an
   unregistered renderer type.
 

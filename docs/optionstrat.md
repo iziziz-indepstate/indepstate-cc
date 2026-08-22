@@ -29,6 +29,10 @@ The OptionStrat manifest also registers a `PositionInputAdapter`. It maps Option
 rows and order payloads to stable position ID seeds and `card.type: "option"` metadata before the
 generic positions application service creates the snapshot.
 
+Configured OptionStrat commands submit their row-like input through
+`positions.createFromInput`. They do not depend on `orderCards`; the OptionStrat manifest continues
+to own both `option` and `optionstrat` renderer registrations in the shell card runtime.
+
 The same API fields are also exposed in the `OptionStrat` settings section:
 
 - `cookie`: full `Cookie` header value from an authorized OptionStrat session.

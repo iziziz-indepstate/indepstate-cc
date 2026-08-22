@@ -10,7 +10,11 @@ lo {ticker} {level}
 lo {ticker} {level} props=key:value;key2:value2
 ```
 
-The command creates a row with `cardType: "levelOrder"`, the trimmed ticker, the level, `event: "levelOrder"`, and the current timestamp. Ticker letter case is preserved. In the current flow, `commandLine` passes that row to `orderCards.ingestRow`, which adapts it through `rowToCreatePositionCommand` and creates a position snapshot with `card.type: "levelOrder"`. The level-order manifest registers its `PositionInputAdapter` to supply the level-order opening policy.
+The command creates a row with `cardType: "levelOrder"`, the trimmed ticker, the level,
+`event: "levelOrder"`, and the current timestamp. Ticker letter case is preserved. The level-order
+manifest registers its `PositionInputAdapter` and then wires the command to
+`positions.createFromInput`, which creates a position snapshot with `card.type: "levelOrder"` and
+the module-owned opening policy. Card creation does not require the `orderCards` service.
 
 The optional `props=` argument attaches custom string properties to the created card row. It accepts
 semicolon-delimited `key:value` pairs without spaces. Core row fields such as `ticker`, `level`,
