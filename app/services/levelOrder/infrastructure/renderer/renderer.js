@@ -364,11 +364,11 @@ function createLevelOrderRenderer({
     return card;
   }
 
-  function dispatchPositionAction(position = {}, action = {}, base = {}) {
+  function buildPositionActionPayload(position = {}, action = {}, base = {}) {
     const id = String(action.id || action.label || '').toUpperCase();
     const data = position.card?.data || {};
     const requestId = base.requestId || `${now()}_${random().toString(36).slice(2, 8)}`;
-    return ipcRenderer.invoke('level-order:place', {
+    return {
       ...base,
       action: id || base.action,
       level: Number(base.level ?? data.level),
@@ -386,7 +386,14 @@ function createLevelOrderRenderer({
         : Number(base.pointSize ?? data.pointSize),
       requestId,
       strategyId: `${requestId}_${String(id || base.action || '').toLowerCase()}`
-    });
+    };
+  }
+
+  async function dispatchPositionAction(position = {}, action = {}, base = {}) {
+    const payload = buildPositionActionPayload(position, action, base);
+    const preview = await ipcRenderer.invoke('level-order:preview-place', payload);
+    if (preview?.ok === false || preview?.status === 'rejected') return preview;
+    return ipcRenderer.invoke('level-order:place', payload);
   }
 
   function createPositionActionDispatcher({
@@ -426,7 +433,7 @@ function createLevelOrderRenderer({
           requestId,
           strategyId
         });
-        if (!res || res.status === 'rejected' || res.status === 'error') {
+        if (!res || res.ok === false || res.status === 'rejected' || res.status === 'error') {
           pendingState.clearPendingRequest(requestId);
           setCardState(key, null);
           toast(`x ${title}: ${res?.reason || 'Rejected'}`);

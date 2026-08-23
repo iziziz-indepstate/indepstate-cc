@@ -163,6 +163,7 @@ async function run() {
         if (payload.symbol === 'MSFT') return { quote: { bid: 99.9, ask: 100.1 }, metadata: { tickSize: 1 }, provider: payload.provider, symbol: payload.symbol };
         return { quote: { bid: 0.163, ask: 0.165 }, metadata: { tickSize: 0.001 }, provider: payload.provider, symbol: payload.symbol };
       }
+      if (ch === 'level-order:preview-place') return { ok: true, status: 'ok' };
       if (ch === 'level-order:place') return { status: 'ok', providerOrderId: 'level:test' };
       if (ch === 'execution:cancel-order') return { status: 'ok', ticket: payload.ticket, symbol: payload.symbol };
       if (ch === 'execution:close-position') return { status: 'ok', ticket: payload.ticket, symbol: payload.symbol };

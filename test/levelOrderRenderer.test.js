@@ -67,6 +67,7 @@ async function run() {
   const handlers = {};
   const calls = [];
   let instrumentGetCalls = 0;
+  let previewPlaceResult = { ok: true, status: 'ok' };
   const initialPosition = levelOrderSnapshot();
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
@@ -87,6 +88,7 @@ async function run() {
         if (instrumentGetCalls === 1) return { quote: {}, metadata: { tickSize: 0.5 }, provider: payload.provider, symbol: payload.symbol };
         return { quote: { bid: 101, ask: 102, price: 101.5 }, metadata: { tickSize: 0.5 }, provider: payload.provider, symbol: payload.symbol };
       }
+      if (ch === 'level-order:preview-place') return previewPlaceResult;
       if (ch === 'level-order:place') return {
         status: 'ok',
         provider: 'simulated',
@@ -153,8 +155,12 @@ async function run() {
   lb.click();
   await new Promise(resolve => setTimeout(resolve, 20));
 
+  const previewCall = calls.find(c => c.ch === 'level-order:preview-place');
   const call = calls.find(c => c.ch === 'level-order:place');
+  assert(previewCall);
   assert(call);
+  assert(calls.indexOf(previewCall) < calls.indexOf(call));
+  assert.deepStrictEqual(previewCall.payload, call.payload);
   assert.strictEqual(call.payload.positionId, 'pos-level-1');
   assert.strictEqual(call.payload.action, 'LB');
   assert.strictEqual(call.payload.level, 100);
@@ -162,10 +168,34 @@ async function run() {
   assert.strictEqual(call.payload.stopOffsetPts, 4);
   assert.strictEqual(call.payload.maxLot, 3);
   assert.strictEqual(call.payload.takeProfitPts, 12);
+  assert.strictEqual(previewCall.payload.requestId, call.payload.requestId);
+  assert.strictEqual(previewCall.payload.strategyId, call.payload.strategyId);
 
   const parentRequestId = call.payload.requestId;
   assert.strictEqual(t.cardStateApi.getCardState(key), 'pending-exec');
   assert.strictEqual(t.cardStateApi.getPendingExecLabel(key), 'LB');
+
+  const rejectedPosition = levelOrderSnapshot('pos-level-rejected');
+  handlers['positions:changed'](null, { event: { type: 'position.created' }, position: rejectedPosition });
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const rejectedKey = 'position|pos-level-rejected';
+  const rejectedCard = t.cardByKey(rejectedKey);
+  assert(rejectedCard);
+  previewPlaceResult = { ok: false, status: 'rejected', reason: 'Preview denied' };
+  rejectedCard.querySelector('button.btn[data-kind="LB"]').click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const rejectedPreviewCall = calls.find(c => c.ch === 'level-order:preview-place' && c.payload.positionId === 'pos-level-rejected');
+  assert(rejectedPreviewCall);
+  assert.strictEqual(calls.some(c => c.ch === 'level-order:place' && c.payload.positionId === 'pos-level-rejected'), false);
+  assert.strictEqual(t.cardStateApi.resolvePendingKey(rejectedPreviewCall.payload.requestId), undefined);
+  assert.strictEqual(t.cardStateApi.getCardState(rejectedKey), undefined);
+  assert.strictEqual(t.cardStateApi.getPendingExecLabel(rejectedKey), undefined);
+  assert.strictEqual(rejectedCard.classList.contains('card--shake'), true);
+  assert.notStrictEqual(t.cardByKey(rejectedKey), rejectedCard);
+  assert.strictEqual(t.cardByKey(rejectedKey).querySelector('.card__status').style.display, 'none');
+  assert.strictEqual(t.cardByKey(rejectedKey).querySelector('button.btn[data-kind="LB"]').disabled, false);
+  assert.strictEqual(document.getElementById('toast').textContent, 'x TST: Preview denied');
 
   const placedSnapshot = levelOrderSnapshot('pos-level-1', {
     state: 'placed',
