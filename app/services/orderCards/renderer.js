@@ -694,6 +694,16 @@ async function place(kind, row, v, instrumentType, btnLabel) {
   };
   if (row.positionId || row.meta?.positionId) baseMeta.positionId = row.positionId || row.meta.positionId;
 
+  const payload = isPendingExec ? null : {
+    ticker: row.ticker,
+    event: row.event,
+    price: Number(priceVal),
+    kind,
+    instrumentType: instrumentType,
+    tickSize: tick,
+    meta: baseMeta,
+  };
+
   let res;
   try {
     if (isPendingExec) {
@@ -710,15 +720,15 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       };
       res = await ipcRenderer.invoke('queue-place-pending', pendPayload);
     } else {
-      const payload = {
-        ticker: row.ticker,
-        event: row.event,
-        price: Number(priceVal),
-        kind,
-        instrumentType: instrumentType,
-        tickSize: tick,
-        meta: baseMeta,
-      };
+      const preview = await ipcRenderer.invoke('execution:preview-place-order', payload);
+      if (preview?.ok === false || preview?.status === 'rejected') {
+        const reason = preview?.reason || preview?.errors?.[0]?.message || 'Rejected';
+        setCardState(key, null);
+        toast(`✖ ${row.ticker}: ${reason}`);
+        shakeCard(key);
+        render();
+        return;
+      }
       res = await ipcRenderer.invoke('queue-place-order', payload);
     }
     if (res && typeof res.providerOrderId === 'string' && res.providerOrderId.startsWith('pending:')) {

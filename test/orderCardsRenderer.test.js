@@ -93,6 +93,7 @@ async function run() {
       ipcRenderer: {
         invoke: async (ch, payload) => {
           calls.push({ ch, payload });
+          if (ch === 'execution:preview-place-order') return { ok: true, status: 'ok' };
           return { status: 'ok', providerOrderId: 'ticket-1' };
         }
       },
@@ -140,9 +141,18 @@ async function run() {
     )), true);
     card.querySelector('button.btn').click();
     await new Promise(resolve => setTimeout(resolve, 0));
-    assert.strictEqual(calls[0].ch, 'queue-place-order');
+    assert.deepStrictEqual(calls.map(call => call.ch), [
+      'execution:preview-place-order',
+      'queue-place-order'
+    ]);
     assert.strictEqual(calls[0].payload.ticker, 'MSFT');
+    assert.strictEqual(calls[0].payload.kind, 'BL');
+    assert.strictEqual(calls[0].payload.instrumentType, 'EQ');
+    assert.strictEqual(calls[0].payload.tickSize, 0.01);
+    assert.strictEqual(typeof calls[0].payload.meta.requestId, 'string');
+    assert.strictEqual(calls[0].payload.meta.requestId.length > 0, true);
     assert.strictEqual(calls[0].payload.meta.positionId, 'pos-reg-1');
+    assert.strictEqual(calls[0].payload, calls[1].payload);
     assert.strictEqual(states[0].key, 'position|pos-reg-1');
 
     const closed = domRenderer.createRegularPositionCard({
@@ -222,6 +232,87 @@ async function run() {
     assert.strictEqual(cancelled.classList.contains('card--mini'), false);
     assert.strictEqual(cancelled.querySelector('.card__status').style.display, 'none');
     assert.deepStrictEqual(Array.from(cancelled.querySelectorAll('button.btn')).map(btn => btn.dataset.kind), ['BL']);
+  }
+
+  {
+    const calls = [];
+    const states = [];
+    const toasts = [];
+    const shakes = [];
+    let renderCount = 0;
+    const rejectedRenderer = createRenderer({
+      ipcRenderer: {
+        invoke: async (ch, payload) => {
+          calls.push({ ch, payload });
+          return {
+            ok: false,
+            status: 'rejected',
+            errors: [{ message: 'Qty step mismatch' }]
+          };
+        }
+      },
+      setCardState: (key, state) => states.push({ key, state }),
+      toast: message => toasts.push(message),
+      shakeCard: key => shakes.push(key),
+      render: () => { renderCount += 1; },
+      now: () => 20,
+      random: () => 0.25
+    });
+
+    await rejectedRenderer.place('BL', {
+      __positionKey: 'position|pos-rejected',
+      positionId: 'pos-rejected',
+      ticker: 'AAPL',
+      event: 'up'
+    }, {
+      valid: true,
+      type: 'equities',
+      qtyInt: 2,
+      pr: 100,
+      sl: 1,
+      tp: 3,
+      risk: 10
+    }, 'EQ', 'BL');
+
+    assert.deepStrictEqual(calls.map(call => call.ch), ['execution:preview-place-order']);
+    assert.deepStrictEqual(states.at(-1), { key: 'position|pos-rejected', state: null });
+    assert.deepStrictEqual(toasts, ['✖ AAPL: Qty step mismatch']);
+    assert.deepStrictEqual(shakes, ['position|pos-rejected']);
+    assert.strictEqual(renderCount, 1);
+  }
+
+  {
+    const calls = [];
+    const pendingRenderer = createRenderer({
+      pendingActionInfo: kind => kind === 'PBL'
+        ? { side: 'long', strategy: 'consolidation' }
+        : null,
+      ipcRenderer: {
+        invoke: async (ch, payload) => {
+          calls.push({ ch, payload });
+          return { status: 'ok', providerOrderId: 'pending:pending-1' };
+        }
+      }
+    });
+
+    await pendingRenderer.place('PBL', {
+      __positionKey: 'position|pos-pending',
+      positionId: 'pos-pending',
+      ticker: 'NVDA',
+      provider: 'simulated',
+      event: 'up'
+    }, {
+      valid: true,
+      type: 'equities',
+      qtyInt: 1,
+      pr: 120,
+      sl: 2,
+      tp: 6,
+      risk: 10
+    }, 'EQ', 'Pending BL');
+
+    assert.deepStrictEqual(calls.map(call => call.ch), ['queue-place-pending']);
+    assert.strictEqual(calls[0].payload.meta.positionId, 'pos-pending');
   }
 
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'renderer.js'), 'utf8');
