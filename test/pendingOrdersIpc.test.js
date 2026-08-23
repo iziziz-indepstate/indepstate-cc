@@ -10,6 +10,10 @@ async function run() {
   };
   const calls = [];
   const pendingHub = {
+    previewPlacePending(payload) {
+      calls.push(['previewPlacePending', payload]);
+      return { ok: true, status: 'ok', provider: 'simulated', pending: payload, errors: [] };
+    },
     queuePlacePending(payload) {
       calls.push(['queuePlacePending', payload]);
       return { status: 'ok', providerOrderId: 'pending:1' };
@@ -30,13 +34,26 @@ async function run() {
   });
 
   assert.strictEqual(handlers.has('queue-place-order'), true);
+  assert.strictEqual(handlers.has('pending:preview-place'), true);
   assert.strictEqual(handlers.has('queue-place-pending'), true);
   assert.strictEqual(handlers.has('pending:cancel'), true);
 
   assert.deepStrictEqual(await handlers.get('queue-place-order')(null, { symbol: 'AAPL' }), { status: 'ok', providerOrderId: 'ticket-1' });
+  assert.deepStrictEqual(await handlers.get('pending:preview-place')(null, { symbol: 'AAPL' }), {
+    ok: true,
+    status: 'ok',
+    provider: 'simulated',
+    pending: { symbol: 'AAPL' },
+    errors: []
+  });
   assert.deepStrictEqual(await handlers.get('queue-place-pending')(null, { symbol: 'AAPL' }), { status: 'ok', providerOrderId: 'pending:1' });
   assert.deepStrictEqual(await handlers.get('pending:cancel')(null, 'pending-1'), { status: 'ok' });
-  assert.deepStrictEqual(calls.map(call => call[0]), ['queuePlaceOrder', 'queuePlacePending', 'cancelPending']);
+  assert.deepStrictEqual(calls.map(call => call[0]), [
+    'queuePlaceOrder',
+    'previewPlacePending',
+    'queuePlacePending',
+    'cancelPending'
+  ]);
 
   console.log('pendingOrdersIpc tests passed');
 }

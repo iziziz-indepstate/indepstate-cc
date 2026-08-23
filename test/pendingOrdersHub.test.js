@@ -50,15 +50,29 @@ async function run() {
     strategyConfig: {}
   });
 
-  const queued = hub.queuePlacePending({
+  const pendingPayload = {
     ticker: 'TEST',
     price: 100,
     side: 'long',
     instrumentType: 'EQ',
     tickSize: 1,
     meta: { qty: 3, riskUsd: 0 }
-  });
+  };
+  const validPreview = hub.previewPlacePending(pendingPayload);
+  assert.strictEqual(validPreview.ok, true);
+  assert.strictEqual(validPreview.status, 'ok');
+  assert.strictEqual(validPreview.provider, 'j2t');
+  assert.strictEqual(validPreview.pending.symbol, 'TEST');
+  assert.strictEqual(validPreview.pending.strategy, 'consolidation');
+  assert.deepStrictEqual(validPreview.errors, []);
+  assert.strictEqual(hub.services.size, 0);
+  assert.strictEqual(hub.subscriptions.size, 0);
+  assert.strictEqual(hub.pendingIndex.size, 0);
+  assert.strictEqual(pendingPayload.meta.requestId, undefined);
+
+  const queued = hub.queuePlacePending(pendingPayload);
   assert.strictEqual(queued.provider, 'j2t');
+  assert.strictEqual(typeof pendingPayload.meta.requestId, 'string');
 
   const bars = [
     { open: 99, high: 101, low: 98, close: 100.5 },
@@ -162,16 +176,56 @@ async function run() {
   assert.strictEqual(placed.meta.stopPts, 6);
   assert.strictEqual(placed.qty, 4); // $12 / (6 pts * $0.50)
 
-  const invalidLevelOffset = levelOffsetHub.queuePlacePending({
+  let invalidSubscribeCalls = 0;
+  let invalidWireCalls = 0;
+  let invalidAdapterCalls = 0;
+  const invalidLevelOffsetHub = new PendingOrderHub({
+    queuePlaceOrder: async () => {},
+    subscribe: () => { invalidSubscribeCalls += 1; },
+    wireAdapter: () => { invalidWireCalls += 1; },
+    getAdapter: () => {
+      invalidAdapterCalls += 1;
+      return {};
+    },
+    resolveProvider: resolver.resolveProvider,
+    strategyConfig: {
+      consolidation: { bars: 1, stoppLossRule: 'LEVEL_OFFSET' }
+    }
+  });
+  const invalidPayload = {
     ticker: 'TEST',
     price: 100,
     side: 'long',
     instrumentType: 'EQ',
     tickSize: 0.5,
     meta: { qty: 1, riskUsd: 12 }
-  });
+  };
+  const invalidPreview = invalidLevelOffsetHub.previewPlacePending(invalidPayload);
+  assert.strictEqual(invalidPreview.ok, false);
+  assert.strictEqual(invalidPreview.status, 'rejected');
+  assert.match(invalidPreview.reason, /stopOffsetPts > 0/);
+  assert.deepStrictEqual(invalidPreview.errors, [{
+    code: 'INVALID_STRATEGY',
+    field: 'strategy',
+    message: invalidPreview.reason
+  }]);
+  assert.strictEqual(invalidPayload.meta.requestId, undefined);
+  assert.strictEqual(invalidLevelOffsetHub.services.size, 0);
+  assert.strictEqual(invalidLevelOffsetHub.subscriptions.size, 0);
+  assert.strictEqual(invalidLevelOffsetHub.pendingIndex.size, 0);
+  assert.strictEqual(invalidAdapterCalls, 0);
+  assert.strictEqual(invalidWireCalls, 0);
+  assert.strictEqual(invalidSubscribeCalls, 0);
+
+  const invalidLevelOffset = invalidLevelOffsetHub.queuePlacePending(invalidPayload);
   assert.strictEqual(invalidLevelOffset.status, 'rejected');
   assert.match(invalidLevelOffset.reason, /stopOffsetPts > 0/);
+  assert.strictEqual(invalidLevelOffsetHub.services.size, 0);
+  assert.strictEqual(invalidLevelOffsetHub.subscriptions.size, 0);
+  assert.strictEqual(invalidLevelOffsetHub.pendingIndex.size, 0);
+  assert.strictEqual(invalidAdapterCalls, 0);
+  assert.strictEqual(invalidWireCalls, 0);
+  assert.strictEqual(invalidSubscribeCalls, 0);
   console.log('pendingOrdersHub tests passed');
 }
 

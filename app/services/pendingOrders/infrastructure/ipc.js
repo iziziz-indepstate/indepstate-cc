@@ -12,6 +12,7 @@ function registerPendingOrdersIpcHandlers({
   if (typeof queuePlaceOrder === 'function') {
     ipcMain.handle('queue-place-order', async (_evt, payload) => queuePlaceOrder(payload));
   }
+  ipcMain.handle('pending:preview-place', async (_evt, payload = {}) => pendingHub.previewPlacePending(payload));
   ipcMain.handle('queue-place-pending', async (_evt, payload) => pendingHub.queuePlacePending(payload));
   ipcMain.handle('pending:cancel', async (_evt, pendingId) => pendingHub.cancelPending(pendingId));
 }

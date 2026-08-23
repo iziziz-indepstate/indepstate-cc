@@ -687,6 +687,16 @@ async function place(kind, row, v, instrumentType, btnLabel) {
         tickSize: tick,
         meta: baseMeta,
       };
+      const preview = await ipcRenderer.invoke('pending:preview-place', pendPayload);
+      if (preview?.ok === false || preview?.status === 'rejected') {
+        const reason = preview?.reason || preview?.errors?.[0]?.message || 'Rejected';
+        executionState.clearPendingRequest?.(requestId);
+        setCardState(key, null);
+        toast(`✖ ${row.ticker}: ${reason}`);
+        shakeCard(key);
+        render();
+        return;
+      }
       res = await ipcRenderer.invoke('queue-place-pending', pendPayload);
     } else {
       const preview = await ipcRenderer.invoke('execution:preview-place-order', payload);

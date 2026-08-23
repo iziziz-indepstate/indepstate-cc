@@ -309,6 +309,7 @@ async function run() {
       ipcRenderer: {
         invoke: async (ch, payload) => {
           calls.push({ ch, payload });
+          if (ch === 'pending:preview-place') return { ok: true, status: 'ok' };
           return { status: 'ok', providerOrderId: 'pending:pending-1' };
         }
       }
@@ -330,8 +331,78 @@ async function run() {
       risk: 10
     }, 'EQ', 'Pending BL');
 
-    assert.deepStrictEqual(calls.map(call => call.ch), ['queue-place-pending']);
+    assert.deepStrictEqual(calls.map(call => call.ch), [
+      'pending:preview-place',
+      'queue-place-pending'
+    ]);
     assert.strictEqual(calls[0].payload.meta.positionId, 'pos-pending');
+    assert.strictEqual(calls[0].payload, calls[1].payload);
+  }
+
+  {
+    const calls = [];
+    const states = [];
+    const toasts = [];
+    const shakes = [];
+    const pendingMarks = [];
+    const pendingClears = [];
+    let renderCount = 0;
+    const rejectedPendingRenderer = createRenderer({
+      pendingActionInfo: kind => kind === 'PBL'
+        ? { side: 'long', strategy: 'consolidation' }
+        : null,
+      ipcRenderer: {
+        invoke: async (ch, payload) => {
+          calls.push({ ch, payload });
+          return {
+            ok: false,
+            status: 'rejected',
+            reason: 'LEVEL_OFFSET requires stopOffsetPts > 0',
+            errors: [{
+              code: 'INVALID_STRATEGY',
+              field: 'strategy',
+              message: 'LEVEL_OFFSET requires stopOffsetPts > 0'
+            }]
+          };
+        }
+      },
+      orderStateApi: {
+        markPendingRequest: (requestId, key, options) => pendingMarks.push({ requestId, key, options }),
+        clearPendingRequest: requestId => pendingClears.push(requestId),
+        setPendingExecLabel: () => true,
+        setPendingId: () => true
+      },
+      setCardState: (key, state) => states.push({ key, state }),
+      toast: message => toasts.push(message),
+      shakeCard: key => shakes.push(key),
+      render: () => { renderCount += 1; },
+      now: () => 30,
+      random: () => 0.75
+    });
+
+    await rejectedPendingRenderer.place('PBL', {
+      __positionKey: 'position|pos-pending-rejected',
+      positionId: 'pos-pending-rejected',
+      ticker: 'NVDA',
+      provider: 'simulated',
+      event: 'up'
+    }, {
+      valid: true,
+      type: 'equities',
+      qtyInt: 1,
+      pr: 120,
+      sl: 2,
+      tp: 6,
+      risk: 10
+    }, 'EQ', 'Pending BL');
+
+    assert.deepStrictEqual(calls.map(call => call.ch), ['pending:preview-place']);
+    assert.strictEqual(pendingMarks.length, 1);
+    assert.deepStrictEqual(pendingClears, [pendingMarks[0].requestId]);
+    assert.deepStrictEqual(states.at(-1), { key: 'position|pos-pending-rejected', state: null });
+    assert.deepStrictEqual(toasts, ['✖ NVDA: LEVEL_OFFSET requires stopOffsetPts > 0']);
+    assert.deepStrictEqual(shakes, ['position|pos-pending-rejected']);
+    assert.strictEqual(renderCount, 1);
   }
 
   const rendererSource = fs.readFileSync(path.join(__dirname, '..', 'app', 'renderer.js'), 'utf8');

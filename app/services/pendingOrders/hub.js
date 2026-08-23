@@ -8,12 +8,61 @@ const tradeRules = require('../tradeRules');
 const orderCalc = servicesApi.orderCalculator || require('../orderCalculator');
 const { resolveProvider: defaultResolveProvider } = require('../brokerage/providerResolver');
 const { createInstrumentInfoService } = require('../instrumentInfo');
+const { validationError } = require('../../application/previewContract');
 
 const userData = require('electron')?.app?.getPath('userData') || path.join(__dirname, '..', '..');
 const LOG_DIR = path.join(userData, 'logs');
 const EXEC_LOG = path.join(LOG_DIR, 'executions.jsonl');
 
 function nowTs() { return Date.now(); }
+
+function rejectedPendingPreview({ provider, pending, reason, errors, quote, instrument } = {}) {
+  return {
+    ok: false,
+    status: 'rejected',
+    ...(provider ? { provider } : {}),
+    ...(pending ? { pending } : {}),
+    reason,
+    errors,
+    ...(quote !== undefined ? { quote } : {}),
+    ...(instrument ? { instrument } : {})
+  };
+}
+
+function pendingOrderOptions(pending, runtime = {}) {
+  return {
+    price: pending.price,
+    side: pending.side,
+    strategy: pending.strategy,
+    tickSize: pending.tickSize,
+    stopOffsetPts: pending.meta?.stopPts,
+    bars: pending.bars,
+    priceSource: pending.priceSource,
+    historyBars: pending.historyBars,
+    historyTimeframe: pending.historyTimeframe,
+    historyLoader: runtime.historyLoader,
+    getQuote: runtime.getQuote,
+    symbol: pending.symbol
+  };
+}
+
+function pendingStrategyParams(options) {
+  const params = { price: options.price, side: options.side };
+  for (const field of [
+    'tickSize',
+    'bars',
+    'stopOffsetPts',
+    'priceSource',
+    'historyBars',
+    'historyTimeframe',
+    'historyLoader',
+    'getQuote',
+    'symbol'
+  ]) {
+    if (options[field] != null) params[field] = options[field];
+  }
+  return params;
+}
 
 function appendJsonl(file, obj) {
   try { fs.appendFileSync(file, JSON.stringify(obj) + '\n'); }
@@ -137,25 +186,110 @@ class PendingOrderHub {
     return `${provider}:${symbol}:${localId}`;
   }
 
-  queuePlacePending(payload) {
-    const symbol = String(payload.ticker || payload.symbol || '');
-    const providerName = this.resolveProvider({
-      provider: payload.provider,
-      payload,
+  previewPlacePending(payload = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      const reason = 'Invalid pending order payload';
+      return rejectedPendingPreview({
+        reason,
+        errors: [validationError('INVALID_PAYLOAD', 'pending', reason)]
+      });
+    }
+
+    const symbol = String(payload.ticker || payload.symbol || '').trim();
+    const price = Number(payload.price);
+    const side = String(payload.side || '').trim().toLowerCase();
+    const strategy = payload.strategy == null
+      ? 'consolidation'
+      : String(payload.strategy).trim();
+    const pending = {
+      ...payload,
       symbol,
-      instrumentType: payload.instrumentType,
-      meta: payload.meta
-    }).provider;
+      ticker: symbol,
+      price,
+      side,
+      strategy,
+      meta: payload.meta && typeof payload.meta === 'object' && !Array.isArray(payload.meta)
+        ? { ...payload.meta }
+        : {}
+    };
+
+    const errors = [];
+    if (!symbol) errors.push(validationError('SYMBOL_REQUIRED', 'symbol', 'Symbol required'));
+    if (!Number.isFinite(price) || price <= 0) {
+      errors.push(validationError('INVALID_PRICE', 'price', 'Price must be greater than 0'));
+    }
+    if (side !== 'long' && side !== 'short') {
+      errors.push(validationError('INVALID_SIDE', 'side', 'Side must be long or short'));
+    }
+    if (!strategy) errors.push(validationError('STRATEGY_REQUIRED', 'strategy', 'Strategy required'));
+    if (errors.length) {
+      return rejectedPendingPreview({ pending, reason: errors[0].message, errors });
+    }
+
+    let providerName;
+    try {
+      const resolution = this.resolveProvider({
+        provider: pending.provider,
+        payload: pending,
+        symbol,
+        instrumentType: pending.instrumentType,
+        meta: pending.meta
+      });
+      providerName = String(resolution?.provider || '').trim().toLowerCase();
+      if (!providerName) throw new Error('Provider resolution returned no provider');
+      pending.provider = providerName;
+    } catch (err) {
+      const reason = err?.message || 'Provider resolution failed';
+      return rejectedPendingPreview({
+        pending,
+        reason,
+        errors: [validationError('PROVIDER_RESOLUTION_FAILED', 'provider', reason)]
+      });
+    }
+
+    try {
+      const options = pendingOrderOptions(pending, { getQuote: async () => null });
+      const strategyInstance = this.createStrategy(options.strategy, pendingStrategyParams(options));
+      if (!strategyInstance || typeof strategyInstance.onBar !== 'function') {
+        throw new Error(`Invalid pending strategy: ${strategy}`);
+      }
+    } catch (err) {
+      const reason = err?.message || 'Pending strategy could not be constructed';
+      return rejectedPendingPreview({
+        provider: providerName,
+        pending,
+        reason,
+        errors: [validationError('INVALID_STRATEGY', 'strategy', reason)]
+      });
+    }
+
+    return {
+      ok: true,
+      status: 'ok',
+      provider: providerName,
+      pending,
+      errors: []
+    };
+  }
+
+  queuePlacePending(payload = {}) {
+    const preview = this.previewPlacePending(payload);
+    if (!preview.ok) return preview;
+
+    const pending = preview.pending;
+    const symbol = pending.symbol;
+    const providerName = preview.provider;
     const adapter = this.getAdapter(providerName);
     try { this.wireAdapter?.(adapter, providerName); } catch {}
 
     const ts = nowTs();
-    const reqId = payload?.meta?.requestId || `${ts}_${Math.random().toString(36).slice(2,8)}`;
-    if (!payload.meta) payload.meta = {};
+    const reqId = pending.meta?.requestId || `${ts}_${Math.random().toString(36).slice(2,8)}`;
+    pending.meta.requestId = reqId;
+    if (!payload.meta || typeof payload.meta !== 'object' || Array.isArray(payload.meta)) payload.meta = {};
     payload.meta.requestId = reqId;
 
-    const historyBars = payload.historyBars;
-    const historyTimeframe = payload.historyTimeframe;
+    const historyBars = pending.historyBars;
+    const historyTimeframe = pending.historyTimeframe;
     const historyLoader = adapter
       ? async ({ limit, timeframe } = {}) => fetchAdapterHistory(
         adapter,
@@ -169,8 +303,8 @@ class PendingOrderHub {
         return await this.instrumentInfo?.get({
           provider: providerName,
           symbol,
-          instrumentType: payload.instrumentType,
-          payload
+          instrumentType: pending.instrumentType,
+          payload: pending
         }, options);
       } catch (err) {
         console.error('pending: instrument info failed', err);
@@ -190,31 +324,20 @@ class PendingOrderHub {
     let pendingId;
     try {
       pendingId = this.addOrder(providerName, symbol, {
-        price: Number(payload.price),
-        side: payload.side,
-        strategy: payload.strategy,
-        tickSize: payload.tickSize,
-        stopOffsetPts: payload.meta?.stopPts,
-        bars: payload.bars,
-        priceSource: payload.priceSource,
-        historyBars,
-        historyTimeframe,
-        historyLoader,
-        getQuote,
-        symbol,
+        ...pendingOrderOptions(pending, { historyLoader, getQuote }),
         onExecute: async ({ limitPrice, stopLoss, takeProfit }) => {
           this.pendingIndex.delete(pendingId);
 
           const instrumentSnapshot = await getInstrumentSnapshot({ forceQuote: true });
           const effectiveTickSize = this.instrumentInfo?.resolveTickSize(
-            { provider: providerName, symbol, instrumentType: payload.instrumentType, payload },
-            { explicitTickSize: payload.tickSize }
+            { provider: providerName, symbol, instrumentType: pending.instrumentType, payload: pending },
+            { explicitTickSize: pending.tickSize }
           ) || instrumentSnapshot?.metadata?.tickSize;
 
           let stopPts;
           let takePts;
           let qty;
-          const risk = Number(payload.meta?.riskUsd);
+          const risk = Number(pending.meta?.riskUsd);
 
           if (Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
             stopPts = orderCalc.stopPts({
@@ -222,7 +345,7 @@ class PendingOrderHub {
               symbol,
               entryPrice: limitPrice,
               stopPrice: stopLoss,
-              instrumentType: payload.instrumentType
+              instrumentType: pending.instrumentType
             });
             takePts = orderCalc.takePts(stopPts);
             if (Number.isFinite(risk) && risk > 0) {
@@ -230,17 +353,17 @@ class PendingOrderHub {
                 riskUsd: risk,
                 stopPts,
                 tickSize: effectiveTickSize,
-                lot: payload.lot,
-                instrumentType: payload.instrumentType,
+                lot: pending.lot,
+                instrumentType: pending.instrumentType,
                 quantityStep: instrumentSnapshot?.metadata?.quantityStep
               });
             } else {
-              qty = Number(payload.meta?.qty || payload.qty || 0);
+              qty = Number(pending.meta?.qty || pending.qty || 0);
             }
           } else {
-            stopPts = Number(payload.meta?.stopPts ?? payload.sl);
-            takePts = Number(payload.meta?.takePts ?? payload.tp);
-            qty = Number(payload.meta?.qty || payload.qty || 0);
+            stopPts = Number(pending.meta?.stopPts ?? pending.sl);
+            takePts = Number(pending.meta?.takePts ?? pending.tp);
+            qty = Number(pending.meta?.qty || pending.qty || 0);
           }
 
           const hasStopPts = Number.isFinite(stopPts) && stopPts > 0;
@@ -252,11 +375,11 @@ class PendingOrderHub {
 
           const finalPayload = {
             symbol,
-            side: payload.side === 'long' ? 'buy' : 'sell',
+            side: pending.side === 'long' ? 'buy' : 'sell',
             type: 'limit',
             price: limitPrice,
             provider: providerName,
-            instrumentType: payload.instrumentType,
+            instrumentType: pending.instrumentType,
             tickSize: effectiveTickSize,
             qty,
             sl: hasStopPts ? stopPts : undefined,
@@ -264,9 +387,9 @@ class PendingOrderHub {
             stopLossPrice: hasStopPts ? undefined : stopLossPrice,
             takeProfitPrice: Number.isFinite(takePts) && takePts > 0 ? undefined : (Number.isFinite(Number(takeProfit)) ? Number(takeProfit) : undefined),
             meta: {
-              ...payload.meta,
+              ...pending.meta,
               ...(Number(instrumentSnapshot?.metadata?.quantityStep) > 0 ? { quantityStep: Number(instrumentSnapshot.metadata.quantityStep) } : {}),
-              riskUsd: Number.isFinite(risk) ? risk : payload.meta?.riskUsd,
+              riskUsd: Number.isFinite(risk) ? risk : pending.meta?.riskUsd,
               ...(hasStopPts ? { stopPts } : {}),
               ...(Number.isFinite(takePts) && takePts > 0 ? { takePts } : {}),
               ...(!Number.isFinite(effectiveTickSize) || effectiveTickSize <= 0 ? { riskBasedQtyPending: true } : {})
@@ -286,27 +409,32 @@ class PendingOrderHub {
             reqId,
             provider: providerName,
             pendingId,
-            order: { symbol, side: payload.side, strategy: payload.strategy || 'falseBreak' }
+            order: { symbol, side: pending.side, strategy: pending.strategy }
           });
           if (this.mainWindow && !this.mainWindow.isDestroyed()) {
             this.mainWindow.webContents.send('execution:result', {
               status: 'rejected',
               reason: 'trigger not satisfied',
               reqId,
-              order: { symbol, side: payload.side, meta: payload.meta }
+              order: { symbol, side: pending.side, meta: pending.meta }
             });
           }
         }
       });
     } catch (err) {
       const reason = err?.message || String(err);
-      const rejected = { status: 'rejected', provider: providerName, reason };
+      const rejected = rejectedPendingPreview({
+        provider: providerName,
+        pending,
+        reason,
+        errors: [validationError('PENDING_REGISTRATION_FAILED', 'pending', reason)]
+      });
       appendJsonl(EXEC_LOG, {
         t: ts,
         kind: 'pending-rejected',
         reqId,
         provider: providerName,
-        order: { symbol, side: payload.side, strategy: payload.strategy || 'consolidation' },
+        order: { symbol, side: pending.side, strategy: pending.strategy },
         result: rejected
       });
       return rejected;
@@ -318,10 +446,10 @@ class PendingOrderHub {
       reqId,
       provider: providerName,
       pendingId,
-      order: { symbol, side: payload.side, strategy: payload.strategy || 'consolidation' }
+      order: { symbol, side: pending.side, strategy: pending.strategy }
     });
 
-    this.pendingIndex.set(pendingId, { reqId, provider: providerName, symbol, side: payload.side });
+    this.pendingIndex.set(pendingId, { reqId, provider: providerName, symbol, side: pending.side });
 
     if (this.mainWindow && !this.mainWindow.isDestroyed()) {
       this.mainWindow.webContents.send('execution:pending', {
