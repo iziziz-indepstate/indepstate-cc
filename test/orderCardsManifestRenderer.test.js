@@ -31,7 +31,6 @@ function run() {
     isSL: () => true,
     tickSize: () => 1,
     instrumentInfoFor: () => ({}),
-    tradeRules: { validate: () => ({ ok: true }) },
     markTouched: () => {},
     detectInstrumentType: () => 'EQ',
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`,

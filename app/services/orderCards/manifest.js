@@ -54,7 +54,6 @@ const rendererHandlers = [{
       tickSize: context.tickSize,
       ensureInstrument: context.ensureInstrument,
       instrumentInfoFor: context.instrumentInfoFor,
-      tradeRules: context.tradeRules,
       markTouched: context.markTouched,
       detectInstrumentType: context.detectInstrumentType,
       rowKey,

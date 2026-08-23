@@ -22,7 +22,6 @@ function createRenderer(overrides = {}) {
     isSL: value => Number.isFinite(value) && value > 0,
     tickSize: () => 0.01,
     instrumentInfoFor: () => ({}),
-    tradeRules: { validate: () => ({ ok: true }) },
     markTouched: () => {},
     detectInstrumentType: () => 'EQ',
     rowKey: row => `${row.ticker}|${row.event}|${row.time}|${row.price}`,
@@ -80,6 +79,7 @@ async function run() {
         }
       }
     };
+    let legacyTradeRulesCalls = 0;
     const domRenderer = createRenderer({
       el: domEl,
       inputNumber: (ph, cls) => {
@@ -90,6 +90,12 @@ async function run() {
         return input;
       },
       uiState,
+      tradeRules: {
+        validate: () => {
+          legacyTradeRulesCalls += 1;
+          return { ok: false, reason: 'Qty step mismatch' };
+        }
+      },
       ipcRenderer: {
         invoke: async (ch, payload) => {
           calls.push({ ch, payload });
@@ -145,6 +151,7 @@ async function run() {
       'execution:preview-place-order',
       'queue-place-order'
     ]);
+    assert.strictEqual(legacyTradeRulesCalls, 0);
     assert.strictEqual(calls[0].payload.ticker, 'MSFT');
     assert.strictEqual(calls[0].payload.kind, 'BL');
     assert.strictEqual(calls[0].payload.instrumentType, 'EQ');
