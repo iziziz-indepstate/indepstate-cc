@@ -239,6 +239,8 @@ async function run() {
     const states = [];
     const toasts = [];
     const shakes = [];
+    const pendingMarks = [];
+    const pendingClears = [];
     let renderCount = 0;
     const rejectedRenderer = createRenderer({
       ipcRenderer: {
@@ -250,6 +252,12 @@ async function run() {
             errors: [{ message: 'Qty step mismatch' }]
           };
         }
+      },
+      orderStateApi: {
+        markPendingRequest: (requestId, key, options) => pendingMarks.push({ requestId, key, options }),
+        clearPendingRequest: requestId => pendingClears.push(requestId),
+        setPendingExecLabel: () => true,
+        setPendingId: () => true
       },
       setCardState: (key, state) => states.push({ key, state }),
       toast: message => toasts.push(message),
@@ -275,6 +283,10 @@ async function run() {
     }, 'EQ', 'BL');
 
     assert.deepStrictEqual(calls.map(call => call.ch), ['execution:preview-place-order']);
+    assert.strictEqual(pendingMarks.length, 1);
+    assert.strictEqual(pendingMarks[0].key, 'position|pos-rejected');
+    assert.deepStrictEqual(pendingMarks[0].options, { retryCount: 0 });
+    assert.deepStrictEqual(pendingClears, [pendingMarks[0].requestId]);
     assert.deepStrictEqual(states.at(-1), { key: 'position|pos-rejected', state: null });
     assert.deepStrictEqual(toasts, ['✖ AAPL: Qty step mismatch']);
     assert.deepStrictEqual(shakes, ['position|pos-rejected']);

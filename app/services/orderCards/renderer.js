@@ -723,6 +723,7 @@ async function place(kind, row, v, instrumentType, btnLabel) {
       const preview = await ipcRenderer.invoke('execution:preview-place-order', payload);
       if (preview?.ok === false || preview?.status === 'rejected') {
         const reason = preview?.reason || preview?.errors?.[0]?.message || 'Rejected';
+        executionState.clearPendingRequest?.(requestId);
         setCardState(key, null);
         toast(`✖ ${row.ticker}: ${reason}`);
         shakeCard(key);
