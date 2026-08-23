@@ -4,7 +4,6 @@ const path = require('path');
 const loadConfig = require('./config/load');
 const settingsRuntime = require('./services/settings');
 const servicesApi = require('./services/servicesApi');
-const tradeRules = servicesApi.tradeRules || require('./services/tradeRules');
 const {detectInstrumentType} = require("./services/instruments");
 const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumentInfo/points');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
@@ -664,7 +663,6 @@ loadRendererHandlers({
   markTouched,
   uiState,
   orderCalc,
-  tradeRules,
   detectInstrumentType,
   createPositionDataGrid,
   ipcRenderer,
