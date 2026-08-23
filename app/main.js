@@ -329,6 +329,7 @@ function setupIpc() {
 
   servicesApi.execution = {
     queuePlaceOrder: (payload) => executionService.queuePlaceOrder(payload),
+    previewPlaceOrder: (payload, options) => executionService.previewPlaceOrder(payload, options),
     pickProviderName: (instrumentType) => executionService.pickProviderName(instrumentType)
   };
 
@@ -374,6 +375,7 @@ function setupIpc() {
 
   registerExecutionIpcHandlers({
     ipcMain,
+    executionService,
     getAdapter,
     wireAdapter,
     appendJsonl,

@@ -32,6 +32,9 @@ async function run() {
   }));
   const startedMonitors = [];
   const placed = [];
+  const adapterGetCalls = [];
+  const wireCalls = [];
+  let levelQuote = { bid: 100, ask: 101 };
   let releaseFirstPlacement;
   let firstPlacementBlocked = false;
   const runtime = createLevelOrderRuntime({
@@ -46,10 +49,13 @@ async function run() {
   runtime.startLevelOrderPositionMonitor = (payload) => startedMonitors.push(payload);
 
   const service = createLevelOrderApplicationService({
-    getAdapter: () => ({ listOpenPositions: async () => [] }),
-    wireAdapter: () => {},
+    getAdapter: (provider) => {
+      adapterGetCalls.push(provider);
+      return { listOpenPositions: async () => [] };
+    },
+    wireAdapter: (...args) => wireCalls.push(args),
     instrumentInfo: {
-      get: async () => ({ quote: { bid: 100, ask: 101 }, metadata: { quantityStep: 1 } }),
+      get: async () => ({ quote: levelQuote, metadata: { quantityStep: 1, contractSize: 10 } }),
       resolveTickSize: () => 1
     },
     orderCalc: {
@@ -89,6 +95,63 @@ async function run() {
     instrumentType: 'EQ',
     positionId: createdPosition.position.id
   };
+
+  const positionsBeforePreview = positions.snapshot();
+  const preview = await service.previewLevelOrder(payload);
+  assert.strictEqual(preview.ok, true);
+  assert.strictEqual(preview.status, 'ok');
+  assert.strictEqual(preview.provider, 'simulated');
+  assert.strictEqual(preview.plan.ok, true);
+  assert.deepStrictEqual(preview.plan.childQtys, [5, 5, 2]);
+  assert.deepStrictEqual(preview.quote, { bid: 100, ask: 101, price: 100.5 });
+  assert.deepStrictEqual(preview.instrument, {
+    symbol: 'ADAUSDT',
+    instrumentType: 'EQ',
+    tickSize: 1,
+    quantityStep: 1,
+    contractSize: 10
+  });
+  assert.deepStrictEqual(preview.errors, []);
+  assert.deepStrictEqual(positions.snapshot(), positionsBeforePreview);
+  assert.strictEqual(adapterGetCalls.length, 0);
+  assert.strictEqual(wireCalls.length, 0);
+  assert.strictEqual(placed.length, 0);
+  assert.strictEqual(startedMonitors.length, 0);
+  assert.strictEqual(logs.length, 0);
+
+  const sellPreview = await service.previewLevelOrder({ ...payload, action: 'LS' });
+  assert.strictEqual(sellPreview.ok, true);
+  assert.strictEqual(sellPreview.plan.orderKind, 'SL');
+  assert.deepStrictEqual(sellPreview.plan.childQtys, [5, 5, 2]);
+  assert.deepStrictEqual(positions.snapshot(), positionsBeforePreview);
+  assert.strictEqual(placed.length, 0);
+  assert.strictEqual(logs.length, 0);
+
+  levelQuote = { ask: 101 };
+  const missingQuote = await service.previewLevelOrder(payload);
+  assert.strictEqual(missingQuote.ok, false);
+  assert.strictEqual(missingQuote.reason, 'Bid quote required');
+  assert.deepStrictEqual(missingQuote.errors, [{ code: 'QUOTE_UNAVAILABLE', field: 'quote.bid', message: 'Bid quote required' }]);
+  assert.deepStrictEqual(positions.snapshot(), positionsBeforePreview);
+  assert.strictEqual(adapterGetCalls.length, 0);
+  assert.strictEqual(wireCalls.length, 0);
+  assert.strictEqual(placed.length, 0);
+  assert.strictEqual(logs.length, 0);
+
+  levelQuote = { bid: 100, ask: 101 };
+  const invalidShape = await service.previewLevelOrder({ ...payload, action: 'XX' });
+  assert.strictEqual(invalidShape.ok, false);
+  assert.deepStrictEqual(invalidShape.errors, [{ code: 'INVALID_ACTION', field: 'action', message: 'Unsupported level order action' }]);
+  assert.deepStrictEqual(positions.snapshot(), positionsBeforePreview);
+  assert.strictEqual(placed.length, 0);
+  assert.strictEqual(logs.length, 0);
+
+  const originalPreviewLevelOrder = service.previewLevelOrder.bind(service);
+  let queuePreviewCalls = 0;
+  service.previewLevelOrder = async (...args) => {
+    queuePreviewCalls += 1;
+    return originalPreviewLevelOrder(...args);
+  };
   const firstPromise = service.queueLevelOrder(payload);
   await waitFor(() => placed.length === 1 && releaseFirstPlacement);
   const secondPromise = service.queueLevelOrder({ ...payload, requestId: 'parent-2', strategyId: 'strategy-2' });
@@ -97,6 +160,7 @@ async function run() {
   const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
   assert.strictEqual(first.status, 'ok');
+  assert.strictEqual(queuePreviewCalls, 2);
   assert.deepStrictEqual(second, first);
   assert.strictEqual(placed.length, 3);
   assert.deepStrictEqual(placed.map(item => item.meta.qty), [5, 5, 2]);

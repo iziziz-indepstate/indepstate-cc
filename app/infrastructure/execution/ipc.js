@@ -1,5 +1,6 @@
 function registerExecutionIpcHandlers({
   ipcMain,
+  executionService,
   getAdapter,
   wireAdapter,
   appendJsonl,
@@ -12,6 +13,10 @@ function registerExecutionIpcHandlers({
   resolveProviderName
 } = {}) {
   const lifecycleControllers = Array.isArray(closeControllers) ? closeControllers.filter(Boolean) : [];
+
+  if (typeof executionService?.previewPlaceOrder === 'function') {
+    ipcMain.handle('execution:preview-place-order', async (_evt, payload = {}) => executionService.previewPlaceOrder(payload));
+  }
 
   function notifyCloseControllers(context) {
     for (const controller of lifecycleControllers) {

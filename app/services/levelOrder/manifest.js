@@ -110,6 +110,7 @@ function registerMainApplicationServices({
     runtime
   });
   servicesApi.execution.queueLevelOrder = (payload) => levelOrderService.queueLevelOrder(payload);
+  servicesApi.execution.previewLevelOrder = (payload) => levelOrderService.previewLevelOrder(payload);
   servicesApi.levelOrder = {
     ...(servicesApi.levelOrder || {}),
     applicationService: levelOrderService
@@ -130,6 +131,7 @@ function registerMainIpcHandlers({
   }
 
   ipcMain.handle('level-order:place', async (_evt, payload = {}) => service.queueLevelOrder(payload));
+  ipcMain.handle('level-order:preview-place', async (_evt, payload = {}) => service.previewLevelOrder(payload));
   ipcMain.handle('execution:stop-retry', async (_evt, reqId) => service.stopRetry(reqId));
   ipcMain.handle('execution:close-level-order-positions', async (_evt, payload = {}) => service.closeLevelOrderPositions(payload));
 }

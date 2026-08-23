@@ -8,20 +8,25 @@ async function run() {
   const emitted = [];
   const placedOrders = [];
   const positionCalls = [];
+  const adapterGetCalls = [];
+  const wireCalls = [];
   const pendingIndex = new Map();
   let placeResult = { status: 'ok', provider: 'simulated', providerOrderId: 'ticket-1' };
   let quote = { price: 100, bid: 99, ask: 101 };
 
   const service = createExecutionApplicationService({
-    getAdapter: () => ({
+    getAdapter: (provider) => {
+      adapterGetCalls.push(provider);
+      return {
       placeOrder: async (order) => {
         placedOrders.push(order);
         return placeResult;
       }
-    }),
-    wireAdapter: () => {},
+      };
+    },
+    wireAdapter: (...args) => wireCalls.push(args),
     instrumentInfo: {
-      get: async () => ({ quote, metadata: { quantityStep: 1 } }),
+      get: async () => ({ quote, metadata: { quantityStep: 1, contractSize: 10 } }),
       getTickSizeResolution: () => ({ tickSize: 1, source: 'test' })
     },
     orderCalc: {
@@ -54,6 +59,49 @@ async function run() {
     ]
   });
 
+  const previewPayload = {
+    ticker: 'ADAUSDT',
+    kind: 'BL',
+    price: 100,
+    instrumentType: 'EQ',
+    meta: { qty: 1, riskUsd: 10, stopPts: 5 }
+  };
+  const preview = await service.previewPlaceOrder(previewPayload);
+  assert.strictEqual(preview.ok, true);
+  assert.strictEqual(preview.status, 'ok');
+  assert.strictEqual(preview.provider, 'simulated');
+  assert.strictEqual(preview.order.side, 'buy');
+  assert.strictEqual(preview.order.type, 'limit');
+  assert.strictEqual(preview.order.qty, 2);
+  assert.strictEqual(preview.order.tickSize, 1);
+  assert.strictEqual(preview.order.meta.quantityStep, 1);
+  assert.strictEqual(preview.order.meta.requestId, undefined);
+  assert.strictEqual(preview.order.meta.cid, undefined);
+  assert.strictEqual(preview.order.clientOrderId, undefined);
+  assert.deepStrictEqual(preview.quote, { price: 100, bid: 99, ask: 101 });
+  assert.deepStrictEqual(preview.instrument, {
+    symbol: 'ADAUSDT',
+    instrumentType: 'EQ',
+    tickSize: 1,
+    quantityStep: 1,
+    contractSize: 10
+  });
+  assert.deepStrictEqual(preview.errors, []);
+  assert.deepStrictEqual(previewPayload.meta, { qty: 1, riskUsd: 10, stopPts: 5 });
+  assert.strictEqual(adapterGetCalls.length, 0);
+  assert.strictEqual(wireCalls.length, 0);
+  assert.strictEqual(placedOrders.length, 0);
+  assert.strictEqual(positionCalls.length, 0);
+  assert.strictEqual(renderer.length, 0);
+  assert.strictEqual(emitted.length, 0);
+  assert.strictEqual(logs.length, 0);
+
+  const originalPreviewPlaceOrder = service.previewPlaceOrder.bind(service);
+  let queuePreviewCalls = 0;
+  service.previewPlaceOrder = async (...args) => {
+    queuePreviewCalls += 1;
+    return originalPreviewPlaceOrder(...args);
+  };
   const ok = await service.queuePlaceOrder({
     ticker: 'ADAUSDT',
     kind: 'BL',
@@ -61,6 +109,7 @@ async function run() {
     instrumentType: 'EQ',
     meta: { requestId: 'req-1', cid: 'cid-1', qty: 1, riskUsd: 10, stopPts: 5 }
   });
+  assert.strictEqual(queuePreviewCalls, 1);
   assert.strictEqual(ok.status, 'ok');
   assert.strictEqual(placedOrders.length, 1);
   assert.strictEqual(placedOrders[0].symbol, 'ADAUSDT');
@@ -89,6 +138,31 @@ async function run() {
 
   quote = null;
   placedOrders.length = 0;
+  const sideEffectsBeforeRejectedPreview = {
+    adapters: adapterGetCalls.length,
+    wired: wireCalls.length,
+    positions: positionCalls.length,
+    renderer: renderer.length,
+    emitted: emitted.length,
+    logs: logs.length
+  };
+  const noQuotePreview = await service.previewPlaceOrder({
+    ticker: 'ADAUSDT',
+    kind: 'BL',
+    price: 100,
+    instrumentType: 'EQ',
+    meta: { qty: 1, riskUsd: 10, stopPts: 5 }
+  });
+  assert.strictEqual(noQuotePreview.ok, false);
+  assert.strictEqual(noQuotePreview.status, 'rejected');
+  assert.strictEqual(noQuotePreview.reason, 'No quote');
+  assert.deepStrictEqual(noQuotePreview.errors, [{ code: 'QUOTE_UNAVAILABLE', field: 'quote', message: 'No quote' }]);
+  assert.strictEqual(adapterGetCalls.length, sideEffectsBeforeRejectedPreview.adapters);
+  assert.strictEqual(wireCalls.length, sideEffectsBeforeRejectedPreview.wired);
+  assert.strictEqual(positionCalls.length, sideEffectsBeforeRejectedPreview.positions);
+  assert.strictEqual(renderer.length, sideEffectsBeforeRejectedPreview.renderer);
+  assert.strictEqual(emitted.length, sideEffectsBeforeRejectedPreview.emitted);
+  assert.strictEqual(logs.length, sideEffectsBeforeRejectedPreview.logs);
   const noQuote = await service.queuePlaceOrder({
     ticker: 'ADAUSDT',
     kind: 'BL',
@@ -98,6 +172,7 @@ async function run() {
   });
   assert.strictEqual(noQuote.status, 'rejected');
   assert.strictEqual(noQuote.reason, 'No quote');
+  assert.strictEqual(noQuote.errors[0].code, 'QUOTE_UNAVAILABLE');
   assert.strictEqual(placedOrders.length, 0);
 
   quote = { price: 100 };
@@ -215,6 +290,14 @@ async function run() {
       })
     }]
   });
+  const policyPreview = await policyService.previewPlaceOrder({ event: 'policy-test', ticker: 'PLUGIN' });
+  assert.strictEqual(policyPreview.ok, true);
+  assert.strictEqual(policyPreview.order.qty, 1);
+  assert.strictEqual(policyInstrumentForceQuote, false);
+  assert.strictEqual(policyOrderCalcCalls, 0);
+  assert.strictEqual(policyTradeRuleCalls, 0);
+  assert.strictEqual(policyPlacedOrders.length, 0);
+
   const policyResult = await policyService.queuePlaceOrder({ event: 'policy-test', ticker: 'PLUGIN' });
   assert.strictEqual(policyResult.status, 'ok');
   assert.strictEqual(policyInstrumentForceQuote, false);

@@ -7,9 +7,42 @@ const {
   normalizeOrderPayload,
   validateOrder,
   executionOptionsForOrder,
-  normalizeQuoteForValidation,
   normalizeEquityOrderForExecution
 } = require('./orderPayload');
+const {
+  buildInstrumentPreview,
+  normalizePreviewQuote,
+  validationError
+} = require('../previewContract');
+
+function normalizeValidationErrors(errors, fallback) {
+  if (!Array.isArray(errors) || !errors.length) return [fallback];
+  return errors.map(error => validationError(
+    error?.code || fallback.code,
+    error?.field || fallback.field,
+    error?.message || fallback.message
+  ));
+}
+
+function rejectedPlacePreview({
+  provider,
+  order,
+  reason,
+  errors,
+  quote,
+  instrument
+} = {}) {
+  return {
+    ok: false,
+    status: 'rejected',
+    ...(provider ? { provider } : {}),
+    ...(order ? { order } : {}),
+    reason,
+    errors,
+    ...(quote !== undefined ? { quote } : {}),
+    ...(instrument ? { instrument } : {})
+  };
+}
 
 class ExecutionApplicationService {
   constructor({
@@ -58,18 +91,212 @@ class ExecutionApplicationService {
     return this.resolveProviderName({ instrumentType });
   }
 
-  async queuePlaceOrder(payload) {
+  async previewPlaceOrder(payload = {}, options = {}) {
     const policyContext = { orderPayloadPolicies: this.orderPayloadPolicies };
-    const order = normalizeOrderPayload(payload, policyContext);
-
-    const v = validateOrder(order, policyContext);
-    if (!v.ok) {
-      const rej = { status: 'rejected', reason: v.reason };
-      this.#append({ t: this.nowTs(), kind: 'place', valid: false, order, result: rej });
-      return rej;
+    let order;
+    try {
+      const normalizedOrder = normalizeOrderPayload(payload, policyContext);
+      order = {
+        ...normalizedOrder,
+        meta: { ...(normalizedOrder?.meta || {}) }
+      };
+      if (order.meta.requestId == null && payload?.requestId != null) order.meta.requestId = payload.requestId;
+      if (order.meta.cid == null && payload?.cid != null) order.meta.cid = payload.cid;
+      if (order.clientOrderId == null && payload?.clientOrderId != null) order.clientOrderId = payload.clientOrderId;
+      if (order.cid == null && payload?.cid != null) order.cid = payload.cid;
+    } catch (err) {
+      const reason = err?.message || 'Invalid order payload';
+      return rejectedPlacePreview({
+        reason,
+        errors: [validationError('INVALID_PAYLOAD', 'order', reason)]
+      });
     }
 
-    const providerName = this.resolveOrderProviderName(order);
+    let providerName;
+    try {
+      providerName = this.resolveOrderProviderName(order);
+    } catch (err) {
+      const reason = err?.message || 'Provider resolution failed';
+      return rejectedPlacePreview({
+        order,
+        reason,
+        errors: [validationError('PROVIDER_RESOLUTION_FAILED', 'provider', reason)]
+      });
+    }
+
+    let validation;
+    try {
+      validation = validateOrder(order, policyContext);
+    } catch (err) {
+      const reason = err?.message || 'Order validation failed';
+      return rejectedPlacePreview({
+        provider: providerName,
+        order,
+        reason,
+        errors: [validationError('INVALID_ORDER', 'order', reason)]
+      });
+    }
+    if (!validation?.ok) {
+      const reason = validation?.reason || 'Invalid order';
+      return rejectedPlacePreview({
+        provider: providerName,
+        order,
+        reason,
+        errors: normalizeValidationErrors(validation?.errors, validationError('INVALID_ORDER', 'order', reason))
+      });
+    }
+
+    let execOrder = order;
+    let quote;
+    let instrument;
+    try {
+      execOrder = normalizeEquityOrderForExecution(order);
+      execOrder = {
+        ...execOrder,
+        meta: { ...(execOrder?.meta || {}) }
+      };
+      const executionOptions = executionOptionsForOrder(execOrder, {
+        ...policyContext,
+        providerName,
+        order,
+        execOrder
+      });
+      const requiresQuote = executionOptions.requiresQuote !== false;
+      const usesRiskSizing = executionOptions.usesRiskSizing !== false;
+      const usesTradeRules = executionOptions.usesTradeRules !== false;
+      const isHedgeMarket = requiresQuote
+        && execOrder.meta?.hedge === true
+        && String(execOrder.type || '').toLowerCase() === 'market';
+      const instrumentContext = {
+        provider: providerName,
+        symbol: execOrder.symbol,
+        instrumentType: execOrder.instrumentType,
+        payload: execOrder
+      };
+      const instrumentSnapshot = await this.instrumentInfo.get(instrumentContext, {
+        forceQuote: options.forceQuote ?? requiresQuote
+      });
+      quote = normalizePreviewQuote(instrumentSnapshot?.quote);
+      const tickResolution = this.instrumentInfo.getTickSizeResolution(instrumentContext, {
+        explicitTickSize: execOrder.tickSize
+      });
+      const effectiveTickSize = tickResolution.tickSize;
+      const metadataQuantityStep = Number(instrumentSnapshot?.metadata?.quantityStep);
+      if (Number.isFinite(metadataQuantityStep) && metadataQuantityStep > 0) {
+        execOrder.meta.quantityStep = execOrder.meta.quantityStep || metadataQuantityStep;
+      }
+      instrument = buildInstrumentPreview(instrumentSnapshot, {
+        symbol: execOrder.symbol,
+        instrumentType: execOrder.instrumentType,
+        tickSize: effectiveTickSize,
+        quantityStep: execOrder.meta.quantityStep,
+        contractSize: execOrder.meta.contractSize
+      });
+
+      if (requiresQuote && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
+        const reason = 'No quote';
+        return rejectedPlacePreview({
+          provider: providerName,
+          order: execOrder,
+          reason,
+          errors: [validationError('QUOTE_UNAVAILABLE', 'quote', reason)],
+          quote,
+          instrument
+        });
+      }
+
+      const riskUsd = Number(execOrder.meta?.riskUsd);
+      const stopPts = Number(execOrder.sl);
+      const isFixedQty = execOrder.meta?.fixedQty === true;
+      const isRiskBased = !isFixedQty && Number.isFinite(riskUsd) && riskUsd > 0 && Number.isFinite(stopPts) && stopPts > 0;
+
+      if (usesRiskSizing && Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
+        execOrder.tickSize = effectiveTickSize;
+        if (isRiskBased) {
+          execOrder.qty = this.orderCalc.qty({
+            riskUsd,
+            stopPts,
+            tickSize: effectiveTickSize,
+            lot: execOrder.lot || order.lot || 1,
+            instrumentType: execOrder.instrumentType,
+            quantityStep: execOrder.meta?.quantityStep
+          });
+        }
+      } else if (usesRiskSizing && isRiskBased) {
+        const adapter = options.adapter || this.getAdapter?.(providerName);
+        if (!this.providerCanResolveRiskQty?.(providerName, adapter)) {
+          const reason = `No tickSize for ${execOrder.symbol}; cannot calculate risk-based qty for provider ${providerName}`;
+          return rejectedPlacePreview({
+            provider: providerName,
+            order: execOrder,
+            reason,
+            errors: [validationError('TICK_SIZE_UNAVAILABLE', 'tickSize', reason)],
+            quote,
+            instrument
+          });
+        }
+        execOrder.meta.riskBasedQtyPending = true;
+        execOrder.meta.riskUsd = riskUsd;
+        execOrder.meta.stopPts = stopPts;
+      }
+
+      if (usesTradeRules) {
+        const quoteForRules = isHedgeMarket && (!quote || !Number.isFinite(quote.price)) ? { price: 1 } : quote;
+        const ruleOrder = execOrder.meta?.hedge === true
+          ? { ...execOrder, sl: Number.isFinite(Number(execOrder.sl)) && Number(execOrder.sl) > 0 ? execOrder.sl : Number.POSITIVE_INFINITY }
+          : execOrder;
+        const rule = this.tradeRules.validate(ruleOrder, quoteForRules);
+        if (!rule.ok) {
+          const reason = rule.reason || 'Trade rules rejected order';
+          return rejectedPlacePreview({
+            provider: providerName,
+            order: execOrder,
+            reason,
+            errors: normalizeValidationErrors(rule.errors, validationError('TRADE_RULE_REJECTED', 'order', reason)),
+            quote,
+            instrument
+          });
+        }
+      }
+
+      return {
+        ok: true,
+        status: 'ok',
+        provider: providerName,
+        order: execOrder,
+        errors: [],
+        quote,
+        instrument
+      };
+    } catch (err) {
+      const reason = err?.message || 'Order preview failed';
+      return rejectedPlacePreview({
+        provider: providerName,
+        order: execOrder,
+        reason,
+        errors: [validationError('PREVIEW_FAILED', 'order', reason)],
+        quote,
+        instrument
+      });
+    }
+  }
+
+  async queuePlaceOrder(payload) {
+    const preview = await this.previewPlaceOrder(payload);
+    const order = preview.order;
+    if (!preview.ok) {
+      this.#append({
+        t: this.nowTs(),
+        kind: 'place',
+        valid: preview.errors?.[0]?.code !== 'INVALID_ORDER' && preview.errors?.[0]?.code !== 'INVALID_PAYLOAD',
+        provider: preview.provider,
+        order,
+        result: preview
+      });
+      return preview;
+    }
+
+    const providerName = preview.provider;
     let execOrder;
     let cid = '';
     let tracksStandalonePosition = true;
@@ -92,13 +319,7 @@ class ExecutionApplicationService {
         qty: order.qty
       });
 
-      execOrder = normalizeEquityOrderForExecution(order);
-      const executionOptions = executionOptionsForOrder(execOrder, {
-        ...policyContext,
-        providerName,
-        order,
-        execOrder
-      });
+      execOrder = order;
       execOrder.comment = ensureCommentHasCid(execOrder.comment, cid);
       if (!execOrder.meta) execOrder.meta = {};
       execOrder.meta.cid = cid;
@@ -135,78 +356,9 @@ class ExecutionApplicationService {
       const adapter = this.getAdapter(providerName);
       this.wireAdapter(adapter, providerName);
 
-      const requiresQuote = executionOptions.requiresQuote !== false;
-      const usesRiskSizing = executionOptions.usesRiskSizing !== false;
-      const usesTradeRules = executionOptions.usesTradeRules !== false;
-      const isHedgeMarket = requiresQuote
-        && execOrder.meta?.hedge === true
-        && String(execOrder.type || '').toLowerCase() === 'market';
-      const instrumentSnapshot = await this.instrumentInfo.get({
-        provider: providerName,
-        symbol: execOrder.symbol,
-        instrumentType: execOrder.instrumentType,
-        payload: execOrder
-      }, { forceQuote: requiresQuote });
-      const quote = normalizeQuoteForValidation(instrumentSnapshot?.quote);
-      if (requiresQuote && !isHedgeMarket && (!quote || !Number.isFinite(quote.price))) {
-        const rej = { status: 'rejected', provider: providerName, reason: 'No quote' };
-        this.#append({ t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-        return rej;
-      }
-
-      const riskUsd = Number(order?.meta?.riskUsd);
+      const riskUsd = Number(execOrder.meta?.riskUsd);
       const stopPts = Number(execOrder.sl);
-      const isFixedQty = order?.meta?.fixedQty === true;
-      const isRiskBased = !isFixedQty && Number.isFinite(riskUsd) && riskUsd > 0 && Number.isFinite(stopPts) && stopPts > 0;
-      const tickResolution = this.instrumentInfo.getTickSizeResolution({
-        provider: providerName,
-        symbol: execOrder.symbol,
-        instrumentType: execOrder.instrumentType,
-        payload: execOrder
-      }, { explicitTickSize: execOrder.tickSize });
-      const effectiveTickSize = tickResolution.tickSize;
-      const metadataQuantityStep = Number(instrumentSnapshot?.metadata?.quantityStep);
-      if (Number.isFinite(metadataQuantityStep) && metadataQuantityStep > 0) {
-        execOrder.meta = { ...(execOrder.meta || {}), quantityStep: execOrder.meta?.quantityStep || metadataQuantityStep };
-      }
-
-      if (usesRiskSizing && Number.isFinite(effectiveTickSize) && effectiveTickSize > 0) {
-        execOrder.tickSize = effectiveTickSize;
-        if (isRiskBased) {
-          execOrder.qty = this.orderCalc.qty({
-            riskUsd,
-            stopPts,
-            tickSize: effectiveTickSize,
-            lot: execOrder.lot || order.lot || 1,
-            instrumentType: execOrder.instrumentType,
-            quantityStep: execOrder.meta?.quantityStep
-          });
-        }
-      } else if (usesRiskSizing && isRiskBased) {
-        if (!this.providerCanResolveRiskQty(providerName, adapter)) {
-          const rej = { status: 'rejected', provider: providerName, reason: `No tickSize for ${execOrder.symbol}; cannot calculate risk-based qty for provider ${providerName}` };
-          this.#append({ t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-          return rej;
-        }
-        execOrder.meta.riskBasedQtyPending = true;
-        execOrder.meta.riskUsd = riskUsd;
-        execOrder.meta.stopPts = stopPts;
-      }
-
-      console.log('[EXEC][SIZE]', { symbol: execOrder.symbol, price: execOrder.price, riskUsd, stopPts, tickSize: execOrder.tickSize, lot: execOrder.lot, qty: execOrder.qty, tickSource: tickResolution.source });
-
-      if (usesTradeRules) {
-        const quoteForRules = isHedgeMarket && (!quote || !Number.isFinite(quote.price)) ? { price: 1 } : quote;
-        const ruleOrder = execOrder.meta?.hedge === true
-          ? { ...execOrder, sl: Number.isFinite(Number(execOrder.sl)) && Number(execOrder.sl) > 0 ? execOrder.sl : Number.POSITIVE_INFINITY }
-          : execOrder;
-        const rule = this.tradeRules.validate(ruleOrder, quoteForRules);
-        if (!rule.ok) {
-          const rej = { status: 'rejected', provider: providerName, reason: rule.reason };
-          this.#append({ t: ts, kind: 'place', valid: true, reqId, cid, provider: providerName, order: execOrder, result: rej });
-          return rej;
-        }
-      }
+      console.log('[EXEC][SIZE]', { symbol: execOrder.symbol, price: execOrder.price, riskUsd, stopPts, tickSize: execOrder.tickSize, lot: execOrder.lot, qty: execOrder.qty });
 
       console.log('[EXEC][REQ]', { provider: providerName, reqId, cid, symbol: execOrder.symbol, action: order.side, side: execOrder.side, type: execOrder.type, qty: execOrder.qty, price: execOrder.price, sl: execOrder.sl, tp: execOrder.tp });
 

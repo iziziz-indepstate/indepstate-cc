@@ -13,6 +13,10 @@ async function run() {
   };
   const calls = [];
   const levelOrderService = {
+    previewLevelOrder: async (payload) => {
+      calls.push(['previewLevelOrder', payload]);
+      return { ok: true, status: 'ok', plan: { ticker: payload.ticker } };
+    },
     queueLevelOrder: async (payload) => {
       calls.push(['queueLevelOrder', payload]);
       return { status: 'ok', providerOrderId: 'level:test' };
@@ -37,9 +41,14 @@ async function run() {
   });
 
   assert.strictEqual(handlers.has('level-order:place'), true);
+  assert.strictEqual(handlers.has('level-order:preview-place'), true);
   assert.strictEqual(handlers.has('execution:stop-retry'), true);
   assert.strictEqual(handlers.has('execution:close-level-order-positions'), true);
 
+  assert.deepStrictEqual(
+    await handlers.get('level-order:preview-place')(null, { ticker: 'ADAUSDT' }),
+    { ok: true, status: 'ok', plan: { ticker: 'ADAUSDT' } }
+  );
   assert.deepStrictEqual(
     await handlers.get('level-order:place')(null, { ticker: 'ADAUSDT' }),
     { status: 'ok', providerOrderId: 'level:test' }
@@ -53,6 +62,7 @@ async function run() {
     { status: 'ok', closed: 1 }
   );
   assert.deepStrictEqual(calls, [
+    ['previewLevelOrder', { ticker: 'ADAUSDT' }],
     ['queueLevelOrder', { ticker: 'ADAUSDT' }],
     ['stopRetry', 'req-1'],
     ['closeLevelOrderPositions', { symbol: 'ADAUSDT' }]
@@ -85,6 +95,7 @@ async function run() {
 
   assert.strictEqual(servicesApi.levelOrder.applicationService, applicationService);
   assert.strictEqual(typeof servicesApi.execution.queueLevelOrder, 'function');
+  assert.strictEqual(typeof servicesApi.execution.previewLevelOrder, 'function');
 
   console.log('levelOrderManifestIpc tests passed');
 }

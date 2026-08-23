@@ -4,10 +4,42 @@ const { calculateLimitBidTradePlan } = require('../domain/strategy');
 const { collectRetryStopEntries, getRetryStopParentIds } = require('../domain/retryStop');
 const { generateCid } = require('../../../application/execution/orderPayload');
 const {
+  buildInstrumentPreview,
+  normalizePreviewQuote,
+  validationError
+} = require('../../../application/previewContract');
+const {
   buildLevelOrderIntentKey,
   cloneJson,
   findLevelOrderTerminalTickets
 } = require('./levelOrderRuntime');
+
+function rejectedLevelOrderPreview({ provider, reason, errors, quote, instrument } = {}) {
+  return {
+    ok: false,
+    status: 'rejected',
+    ...(provider ? { provider } : {}),
+    reason,
+    errors,
+    ...(quote !== undefined ? { quote } : {}),
+    ...(instrument ? { instrument } : {})
+  };
+}
+
+function levelOrderPlanError(reason) {
+  const message = reason || 'Invalid level order';
+  if (message === 'Unsupported level order action') return validationError('INVALID_ACTION', 'action', message);
+  if (message === 'Level > 0 required') return validationError('INVALID_LEVEL', 'level', message);
+  if (message === 'Tick size required') return validationError('TICK_SIZE_UNAVAILABLE', 'tickSize', message);
+  if (message === 'Risk $ > 0 required') return validationError('INVALID_RISK', 'riskUsd', message);
+  if (message === 'Stop offset pts > 0 required') return validationError('INVALID_STOP_OFFSET', 'stopOffsetPts', message);
+  if (message === 'Ask quote required') return validationError('QUOTE_UNAVAILABLE', 'quote.ask', message);
+  if (message === 'Bid/Ask quote required') return validationError('QUOTE_UNAVAILABLE', 'quote', message);
+  if (message === 'Bid quote required') return validationError('QUOTE_UNAVAILABLE', 'quote.bid', message);
+  if (message === 'Calculated quantity is 0') return validationError('INVALID_QUANTITY', 'qty', message);
+  if (/^Cannot (?:buy|sell) when /.test(message)) return validationError('LEVEL_CONDITION_FAILED', 'level', message);
+  return validationError('INVALID_LEVEL_ORDER', 'order', message);
+}
 
 class LevelOrderApplicationService {
   constructor({
@@ -55,24 +87,47 @@ class LevelOrderApplicationService {
     return null;
   }
 
-  async queueLevelOrder(payload = {}) {
+  async previewLevelOrder(payload = {}) {
+    payload = payload && typeof payload === 'object' ? payload : {};
     const symbol = String(payload.ticker || payload.symbol || '').trim();
     const instrumentType = payload.instrumentType || detectInstrumentType(symbol);
-    const providerName = this.resolveProviderName({ payload, symbol, instrumentType, meta: payload.meta });
-    const strategyId = payload.strategyId || generateCid();
-    const requestId = payload.requestId || `${this.nowTs()}_${Math.random().toString(36).slice(2, 8)}`;
+    if (!symbol) {
+      const reason = 'Symbol required';
+      return rejectedLevelOrderPreview({
+        reason,
+        errors: [validationError('SYMBOL_REQUIRED', 'ticker', reason)]
+      });
+    }
 
+    let providerName;
     try {
-      const adapter = this.getAdapter(providerName);
-      this.wireAdapter(adapter, providerName);
+      providerName = this.resolveProviderName({ payload, symbol, instrumentType, meta: payload.meta });
+    } catch (err) {
+      const reason = err?.message || 'Provider resolution failed';
+      return rejectedLevelOrderPreview({
+        reason,
+        errors: [validationError('PROVIDER_RESOLUTION_FAILED', 'provider', reason)]
+      });
+    }
+
+    let quote;
+    let instrument;
+    try {
       const instrumentSnapshot = await this.instrumentInfo.get({ provider: providerName, symbol, instrumentType, payload }, { forceQuote: true });
-      const quote = instrumentSnapshot?.quote;
+      quote = normalizePreviewQuote(instrumentSnapshot?.quote);
       const bid = Number(quote?.bid);
       const ask = Number(quote?.ask);
       const tickSize = this.instrumentInfo.resolveTickSize(
         { provider: providerName, symbol, instrumentType, payload },
         { explicitTickSize: payload.tickSize }
       );
+      instrument = buildInstrumentPreview(instrumentSnapshot, {
+        symbol,
+        instrumentType,
+        tickSize,
+        quantityStep: payload.minLot,
+        contractSize: payload.contractSize
+      });
       const plan = calculateLimitBidTradePlan({
         action: payload.action,
         ticker: symbol,
@@ -92,11 +147,61 @@ class LevelOrderApplicationService {
         orderCalculator: this.orderCalc
       });
       if (!plan.ok) {
-        const rej = { status: 'rejected', provider: providerName, reason: plan.reason };
-        this.#append({ t: this.nowTs(), kind: 'level-order', valid: false, reqId: requestId, provider: providerName, payload, quote, result: rej });
-        return rej;
+        return rejectedLevelOrderPreview({
+          provider: providerName,
+          reason: plan.reason,
+          errors: [levelOrderPlanError(plan.reason)],
+          quote,
+          instrument
+        });
       }
 
+      return {
+        ok: true,
+        status: 'ok',
+        provider: providerName,
+        plan,
+        errors: [],
+        quote,
+        instrument
+      };
+    } catch (err) {
+      const reason = err?.message || 'Level order preview failed';
+      return rejectedLevelOrderPreview({
+        provider: providerName,
+        reason,
+        errors: [validationError('PREVIEW_FAILED', 'order', reason)],
+        quote,
+        instrument
+      });
+    }
+  }
+
+  async queueLevelOrder(payload = {}) {
+    payload = payload && typeof payload === 'object' ? payload : {};
+    const preview = await this.previewLevelOrder(payload);
+    if (!preview.ok) {
+      this.#append({
+        t: this.nowTs(),
+        kind: 'level-order',
+        valid: false,
+        reqId: payload.requestId,
+        provider: preview.provider,
+        payload,
+        quote: preview.quote,
+        result: preview
+      });
+      return preview;
+    }
+
+    const symbol = preview.instrument?.symbol || String(payload.ticker || payload.symbol || '').trim();
+    const instrumentType = preview.instrument?.instrumentType || payload.instrumentType || detectInstrumentType(symbol);
+    const providerName = preview.provider;
+    const plan = preview.plan;
+    const strategyId = payload.strategyId || generateCid();
+    const requestId = payload.requestId || `${this.nowTs()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    try {
       const intentKey = buildLevelOrderIntentKey({ providerName, symbol, instrumentType, payload, plan });
       const existingIntent = this.getActiveLevelOrderIntent(intentKey);
       if (existingIntent) {
@@ -113,6 +218,8 @@ class LevelOrderApplicationService {
         return cloneJson(existingIntent.result);
       }
 
+      const adapter = this.getAdapter(providerName);
+      this.wireAdapter(adapter, providerName);
       const intentRecord = { status: 'placing', updatedAt: this.nowTs(), result: null, promise: null };
       this.levelOrderIntentRegistry.set(intentKey, intentRecord);
       this.positions?.handle?.({

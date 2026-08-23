@@ -25,6 +25,7 @@ async function run() {
     }]
   ]);
   const closeControllerCalls = [];
+  const previewCalls = [];
   const emitted = [];
   const events = {
     emit(name, payload) {
@@ -34,6 +35,12 @@ async function run() {
 
   registerExecutionIpcHandlers({
     ipcMain,
+    executionService: {
+      previewPlaceOrder: async (payload) => {
+        previewCalls.push(payload);
+        return { ok: true, status: 'ok', order: payload };
+      }
+    },
     getAdapter: (provider) => adapters.get(provider),
     wireAdapter: () => {},
     appendJsonl: () => {},
@@ -54,12 +61,17 @@ async function run() {
   assert.strictEqual(handlers.has('level-order:place'), false);
   assert.strictEqual(handlers.has('execution:stop-retry'), false);
   assert.strictEqual(handlers.has('execution:close-level-order-positions'), false);
+  assert.strictEqual(handlers.has('execution:preview-place-order'), true);
   assert.strictEqual(handlers.has('execution:cancel-order'), true);
   assert.strictEqual(handlers.has('execution:close-position'), true);
   assert.strictEqual(handlers.has('optionstrat:button-event'), false);
   assert.strictEqual(handlers.has('optionstrat:estimate'), false);
   assert.strictEqual(handlers.has('optionstrat:valuation'), false);
   assert.strictEqual(handlers.has('instrument:get'), true);
+
+  const preview = await handlers.get('execution:preview-place-order')(null, { symbol: 'AAPL' });
+  assert.deepStrictEqual(preview, { ok: true, status: 'ok', order: { symbol: 'AAPL' } });
+  assert.deepStrictEqual(previewCalls, [{ symbol: 'AAPL' }]);
 
   const cancel = await handlers.get('execution:cancel-order')(null, { provider: 'simulated', ticket: 't1', symbol: 'ADAUSDT' });
   assert.strictEqual(cancel.status, 'ok');
