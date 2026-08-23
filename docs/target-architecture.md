@@ -39,6 +39,19 @@ Each position exposes a snapshot for read models and UI rendering:
 
 The snapshot is not a DOM contract. It is an application read model that interface adapters can map into renderer view models.
 
+Trading validation is part of the application/read-model contract, not renderer ownership. UI
+adapters may keep local draft strings and perform shallow UX checks such as missing values,
+non-numeric values, or malformed input, but they must not be the source of truth for whether a
+trade action is allowed. Decisions that depend on quotes, tick size, provider metadata, risk
+calculation, trade rules, or aggregate invariants must be exposed through snapshots, action preview
+responses, or command validation results.
+
+Action availability should therefore be represented as read-model data, for example through
+`card.validation`, field errors, and `card.actions[].enabled` / `disabledReason`. Quote and
+instrument metadata such as bid, ask, price, spread, tick size, quantity step, and contract size
+should reach renderer components as display/read-model information after application-layer
+resolution. Renderer components display those decisions; they do not own them.
+
 ## Command And Event Flow
 
 Commands request work. Events describe facts that already happened.
@@ -185,6 +198,10 @@ position snapshots and application read models into shell cards.
   and removal/reconciliation handlers into renderer registries.
 - Controls do not mutate lifecycle state locally. They send commands.
 - Renderer state can cache view details, but aggregate snapshots are the source of lifecycle truth.
+- Renderer controls may validate draft input shape for immediate UX feedback, but trading
+  validation belongs to application/read-model code. A card renderer should display validation
+  errors and disabled action reasons supplied by snapshots or preview responses instead of calling
+  trading rule validators directly.
 
 Compact snapshot cards may render only identity and lifecycle status without action controls. For regular cards, missing compact-mode buttons does not violate `card.actions` as long as actions remain present in the snapshot and an expanded/full-card path or other control surface exists for invoking them.
 
@@ -196,6 +213,13 @@ truth; reconciliation comes from `Position` snapshots.
 added in service-local renderer modules and registered from the owning service manifest through
 dependency injection from the shell. Do not add new level-order-only helpers, action flows, or
 snapshot filters directly to `app/renderer.js`.
+
+The current renderer-side instrument-info runtime, including helpers such as `instrumentInfoFor`,
+`tickSize`, and quote/spread formatting, is a migration compatibility adapter. Its role should
+narrow over time: first guard submits with application-level action preview/validation, then enrich
+position snapshots with quote/instrument/validation display data, then remove UI-level trading
+validation from card renderers. New renderer behavior should not deepen dependency on this adapter
+for business decisions.
 
 ## Target Execution Extension Points
 

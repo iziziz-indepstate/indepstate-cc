@@ -27,6 +27,12 @@ The context also injects helpers such as `ipcRenderer`, `btn`, `render`, `toast`
 settings, instrument helpers, and transient card-state APIs. Services should not import
 `app/renderer.js`.
 
+Instrument helpers such as `instrumentInfoFor`, `ensureInstrument`, `tickSize`, and quote/spread
+formatters are migration compatibility APIs for existing renderers. New renderer extensions should
+not use them to make business decisions. Quote-derived action availability, tick-size-dependent
+validation, provider metadata checks, risk checks, and trade-rule errors should come from snapshots
+or action preview/validation responses.
+
 The shell does not expose renderer row providers, row render layers, or legacy renderer guards.
 `order-cards:changed` is not a card creation extension point.
 
@@ -64,6 +70,11 @@ matching or row lifecycle callbacks.
 - Prefer service-local renderer modules for module UI and action mapping.
 - Register every snapshot card through a card type plus named view, controls, and shape.
 - Treat `Position` snapshots as lifecycle truth.
+- Treat application/read-model validation as action truth. Renderer code may do shallow UX checks on
+  local draft input, but it must display trading validation errors and disabled action reasons from
+  `card.validation`, `card.actions`, or preview responses.
+- Do not add new direct renderer dependencies on trading rule validators or new quote/tick/provider
+  metadata checks that decide whether a business action is allowed.
 
 ## Troubleshooting
 
