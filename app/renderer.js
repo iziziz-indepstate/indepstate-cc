@@ -10,6 +10,7 @@ const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge')
 const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumentInfo/points');
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('./services/levelOrder/strategy');
+const { NEAREST_TRACKED_LEVEL_PLACEHOLDER, normalizeLevelPlaceholder } = require('./services/levelOrder/provider');
 let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let levelOrderCfg = loadConfig('../services/levelOrder/config/level-order.json');
 
@@ -1919,6 +1920,7 @@ function createLevelOrderBody(row, key, $pointSize) {
   line.style.gap = line.style.gap || '8px';
 
   const $level = inputNumber('Level', 'level');
+  $level.type = 'text';
   const $risk = inputNumber('Risk $', 'risk');
   const $stopOffset = inputNumber('Stop off', 'sl');
   const $maxLot = inputNumber('Max lot', 'qty');
@@ -1958,6 +1960,8 @@ function createLevelOrderBody(row, key, $pointSize) {
     },
     validate(actionForValidation) {
       const level = _normNum($level.value);
+      const levelPlaceholder = normalizeLevelPlaceholder($level.value);
+      const levelValue = levelPlaceholder || level;
       const risk = _normNum($risk.value);
       const stopOffsetPts = _normNum($stopOffset.value);
       const maxLot = _normNum($maxLot.value);
@@ -1977,7 +1981,8 @@ function createLevelOrderBody(row, key, $pointSize) {
       const minLotOk = Number.isFinite(minLot) && minLot > 0;
       const tpOk = $tp.value === '' || (Number.isFinite(takeProfitPts) && takeProfitPts > 0);
       const maxLotOk = Number.isFinite(maxLot) && maxLot >= 0;
-      const commonValid = isPos(level) && isPos(risk) && isSL(stopOffsetPts) && maxLotOk && minLotOk && tpOk && pointSizeOk && tickOk;
+      const levelOk = isPos(level) || levelPlaceholder === NEAREST_TRACKED_LEVEL_PLACEHOLDER;
+      const commonValid = levelOk && isPos(risk) && isSL(stopOffsetPts) && maxLotOk && minLotOk && tpOk && pointSizeOk && tickOk;
       const quoteByAction = {
         LB: quoteForAction('LB'),
         LS: quoteForAction('LS')
@@ -1989,14 +1994,14 @@ function createLevelOrderBody(row, key, $pointSize) {
 
       line.classList.toggle('card--invalid', !valid);
       const setErr = (inp, bad) => inp.classList.toggle('input--error', !!bad);
-      setErr($level, !isPos(level));
+      setErr($level, !levelOk);
       setErr($risk, !isPos(risk));
       setErr($stopOffset, !isSL(stopOffsetPts));
       setErr($maxLot, !maxLotOk);
       setErr($tp, !tpOk);
       if ($pointSize) setErr($pointSize, !pointSizeOk);
 
-      const commonReason = !isPos(level) ? 'Level > 0'
+      const commonReason = !levelOk ? 'Level > 0 or nearestTrackedLevel'
         : !isPos(risk) ? 'Risk $ > 0'
           : !isSL(stopOffsetPts) ? 'Stop offset pts > 0'
             : !maxLotOk ? 'Max lot >= 0'
@@ -2027,7 +2032,7 @@ function createLevelOrderBody(row, key, $pointSize) {
       return {
         valid,
         type: 'levelOrder',
-        level,
+        level: levelValue,
         risk,
         stopOffsetPts,
         maxLot,

@@ -38,6 +38,10 @@ function normalizeGroup(group = {}) {
   };
 }
 
+function sameTicker(left, right) {
+  return normalizeTicker(left).toUpperCase() === normalizeTicker(right).toUpperCase();
+}
+
 function normalizeConfig(config = {}) {
   const groups = Array.isArray(config.groups)
     ? config.groups.map(normalizeGroup).filter(group => group.key && group.ticker)
@@ -243,6 +247,84 @@ function createLevelTrackService({
     return { ok: true, level: result.level };
   }
 
+  async function resolveNearestTrackedLevel({ ticker, placeholder } = {}) {
+    const normalizedTicker = normalizeTicker(ticker);
+    const matches = cfg.groups.filter(group => group.enabled !== false && sameTicker(group.ticker, normalizedTicker));
+    if (!matches.length) {
+      return {
+        ok: false,
+        error: `No LevelTrack groups for ${normalizedTicker || 'ticker'}`,
+        source: { placeholder, provider: 'levelTrack', ticker: normalizedTicker }
+      };
+    }
+
+    const results = [];
+    for (const group of matches) {
+      try {
+        const result = await refreshGroup(group.key);
+        results.push({ group, result, state: result?.state });
+      } catch (err) {
+        results.push({
+          group,
+          result: { ok: false, error: err?.message || String(err) },
+          state: null
+        });
+      }
+    }
+
+    const active = results
+      .filter(item => item.result?.ok && Number.isFinite(parseNumber(item.result.level)))
+      .sort((a, b) => {
+        const aDistance = parseNumber(a.state?.distance);
+        const bDistance = parseNumber(b.state?.distance);
+        if (Number.isFinite(aDistance) && Number.isFinite(bDistance)) return aDistance - bDistance;
+        if (Number.isFinite(aDistance)) return -1;
+        if (Number.isFinite(bDistance)) return 1;
+        return 0;
+      })[0];
+
+    if (!active) {
+      const reasons = results
+        .map(item => item.result?.error || item.state?.reason)
+        .filter(Boolean);
+      const error = reasons.length
+        ? `No active LevelTrack level for ${normalizedTicker}: ${Array.from(new Set(reasons)).join('; ')}`
+        : `No active LevelTrack level for ${normalizedTicker}`;
+      return {
+        ok: false,
+        error,
+        source: {
+          placeholder,
+          provider: 'levelTrack',
+          ticker: normalizedTicker,
+          candidates: results.map(item => ({
+            key: item.group.key,
+            status: item.state?.status || null,
+            nearestLevel: item.state?.nearestLevel ?? null,
+            distance: item.state?.distance ?? null,
+            reason: item.result?.error || item.state?.reason || null
+          }))
+        }
+      };
+    }
+
+    return {
+      ok: true,
+      level: active.result.level,
+      source: {
+        placeholder,
+        provider: 'levelTrack',
+        ticker: normalizedTicker,
+        key: active.group.key,
+        price: active.state?.price ?? null,
+        distance: active.state?.distance ?? null,
+        nearestLevel: active.state?.nearestLevel ?? null,
+        activeLevel: active.state?.activeLevel ?? active.result.level,
+        reason: active.state?.reason || null
+      }
+    };
+  }
+
   function on(eventName, handler) {
     emitter.on(eventName, handler);
     return () => emitter.off(eventName, handler);
@@ -254,6 +336,7 @@ function createLevelTrackService({
     refreshAll,
     refreshGroup,
     resolveLevel,
+    resolveNearestTrackedLevel,
     getGroup,
     getState,
     snapshot,

@@ -22,6 +22,7 @@ Examples:
 ```text
 levelOrder ADAUSDT.cfd 0.164
 lo ES.cfd 6500
+lo SPX nearestTrackedLevel
 lo ES.cfd 6500 props=producingLineId:tv-line-123
 ```
 
@@ -32,7 +33,12 @@ lo-ls SPX f:levelTrack:spx-main 10 500
 ```
 
 The `levelTrack` service resolves `spx-main` to its current active level immediately before queuing
-the grouped level order. Card-creating `lo {ticker} {level}` remains numeric-only.
+the grouped level order.
+
+Card-creating `lo {ticker} {level}` also accepts `nearestTrackedLevel`. This creates a card whose
+level is resolved at button-click time from `LevelTrack`: the app refreshes enabled groups with the
+same ticker, chooses the nearest active level, and uses that numeric level for the normal order math.
+If no matching active level exists, placement is rejected and the card remains editable.
 
 ## Settings
 
@@ -98,6 +104,9 @@ A level-order card shows:
 
 `Pt` is optional. When blank, the app uses the normal tick-size resolution path. When set, it overrides the point price for this card. For example, `Pt = 0.001` means `3` points equals `0.003`.
 
+`Level` accepts either a positive number or `nearestTrackedLevel`. The placeholder is resolved only
+when `LB` or `LS` is clicked, so it uses the latest active `LevelTrack` state and quote.
+
 Buttons:
 
 - `LB`: limit buy at the configured buy price source. Default: current bid.
@@ -109,19 +118,20 @@ The renderer sends `level-order:place` to the main process. The main process run
 
 1. Resolve provider through regular execution routing.
 2. Get quote through `adapter.getQuote(symbol)`.
-3. Resolve the button's configured quote source: `bid`, `ask`, or `mid`.
-4. Require the selected quote side. `mid` requires both bid and ask.
-5. For `LB`, reject when the selected price is below level.
-6. For `LS`, reject when the selected price is above level.
-7. Compute level distance in points: `abs(selectedPrice - level) / tickSize`.
-8. Add `stopOffsetPts` to get the full stop distance.
-9. Compute stop price:
+3. Resolve `nearestTrackedLevel`, when used, through the registered `levelTrack` level provider.
+4. Resolve the button's configured quote source: `bid`, `ask`, or `mid`.
+5. Require the selected quote side. `mid` requires both bid and ask.
+6. For `LB`, reject when the selected price is below level.
+7. For `LS`, reject when the selected price is above level.
+8. Compute level distance in points: `abs(selectedPrice - level) / tickSize`.
+9. Add `stopOffsetPts` to get the full stop distance.
+10. Compute stop price:
    - buy: `level - stopOffsetPts * tickSize`
    - sell: `level + stopOffsetPts * tickSize`
-10. Size total quantity from `riskUsd` and full stop distance.
-11. Round total quantity down to the configured `minLot` step.
-12. Split total quantity by `maxLot` when `maxLot > 0`, preserving the final remainder at the same `minLot` step.
-13. Submit every child order through the existing `queue-place-order` normalization path.
+11. Size total quantity from `riskUsd` and full stop distance.
+12. Round total quantity down to the configured `minLot` step.
+13. Split total quantity by `maxLot` when `maxLot > 0`, preserving the final remainder at the same `minLot` step.
+14. Submit every child order through the existing `queue-place-order` normalization path.
 
 Each child order is a limit order at the selected quote price. Metadata includes `strategy: "limitBidTrade"`, `strategyId`, `parentRequestId`, `childIndex`, `childCount`, `fixedQty: true`, `bid`, `ask`, `priceSource`, and `referencePrice`.
 

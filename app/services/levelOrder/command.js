@@ -1,5 +1,6 @@
 const { Command } = require('../commands/base');
 const { resolveLevelOrderDefaults } = require('./strategy');
+const { normalizeLevelPlaceholder, parseLevelNumber } = require('./provider');
 
 const RESERVED_ROW_PROPS = new Set(['cardType', 'ticker', 'level', 'event', 'time']);
 const PROPS_USAGE = 'Usage: levelOrder {ticker} {level} [props=key:value;key2:value2]';
@@ -11,8 +12,7 @@ function normalizeTicker(ticker) {
 }
 
 function parseNumber(value) {
-  const n = Number(String(value ?? '').trim().replace(',', '.'));
-  return Number.isFinite(n) ? n : null;
+  return parseLevelNumber(value);
 }
 
 function parseLevelFunction(value) {
@@ -50,7 +50,8 @@ function buildLevelOrderRow(args, now = Date.now()) {
   const [tickerRaw, levelRaw, ...rest] = args || [];
   const ticker = normalizeTicker(tickerRaw);
   const level = parseNumber(levelRaw);
-  if (!ticker || !Number.isFinite(level) || level <= 0) {
+  const placeholder = normalizeLevelPlaceholder(levelRaw);
+  if (!ticker || ((!Number.isFinite(level) || level <= 0) && !placeholder)) {
     return { ok: false, error: PROPS_USAGE };
   }
   let props = {};
@@ -66,7 +67,7 @@ function buildLevelOrderRow(args, now = Date.now()) {
       ...props,
       cardType: 'levelOrder',
       ticker,
-      level,
+      level: placeholder || level,
       event: 'levelOrder',
       time: now
     }

@@ -80,6 +80,9 @@ function initService(servicesApi = {}) {
 
   servicesApi.levelTrack = service;
   servicesApi.levelOrder?.registerLevelResolver?.('levelTrack', args => service.resolveLevel(args));
+  servicesApi.levelOrder?.registerLevelProvider?.('levelTrack', {
+    resolveLevel: args => service.resolveNearestTrackedLevel(args)
+  });
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
   servicesApi.commands.push(new LevelTrackCommand(openWindow));
 

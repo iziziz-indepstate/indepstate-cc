@@ -1,6 +1,7 @@
 const path = require('path');
 const settings = require('../settings');
 const { LevelOrderCommand, LevelOrderPlaceCommand } = require('./command');
+const { createLevelProviderRegistry } = require('./provider');
 
 settings.register(
   'level-order',
@@ -11,6 +12,7 @@ settings.register(
 function initService(servicesApi = {}) {
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
   const resolvers = new Map();
+  const providerRegistry = createLevelProviderRegistry();
   servicesApi.levelOrder = {
     registerLevelResolver(name, fn) {
       const key = String(name || '').trim();
@@ -20,7 +22,9 @@ function initService(servicesApi = {}) {
     },
     getLevelResolver(name) {
       return resolvers.get(String(name || '').trim());
-    }
+    },
+    registerLevelProvider: providerRegistry.registerLevelProvider,
+    getLevelProvider: providerRegistry.getLevelProvider
   };
   servicesApi.commands.push(new LevelOrderCommand());
   const commandOpts = {

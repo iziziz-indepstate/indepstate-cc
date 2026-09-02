@@ -1,6 +1,11 @@
 const assert = require('assert');
 const { LevelOrderCommand, LevelOrderPlaceCommand, buildLevelOrderRow } = require('../app/services/levelOrder/command');
 const {
+  NEAREST_TRACKED_LEVEL_PLACEHOLDER,
+  createLevelProviderRegistry,
+  resolveLevelInput
+} = require('../app/services/levelOrder/provider');
+const {
   resolveLevelOrderDefaults,
   splitQuantity,
   roundQtyToStep,
@@ -28,6 +33,72 @@ const orderCalculator = {
   });
   assert.strictEqual(buildLevelOrderRow(['SPX']).ok, false);
 })();
+
+(function testPlaceholderCommand() {
+  let row;
+  const cmd = new LevelOrderCommand({ now: () => 124, onAdd: r => { row = r; } });
+  let res = cmd.run(['SPX', NEAREST_TRACKED_LEVEL_PLACEHOLDER]);
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(row, {
+    cardType: 'levelOrder',
+    ticker: 'SPX',
+    level: NEAREST_TRACKED_LEVEL_PLACEHOLDER,
+    event: 'levelOrder',
+    time: 124
+  });
+
+  res = buildLevelOrderRow(['SPX', 'notAPlaceholder']);
+  assert.strictEqual(res.ok, false);
+})();
+
+(function testLevelProviderRegistry() {
+  const registry = createLevelProviderRegistry();
+  const provider = { resolveLevel: async () => ({ ok: true, level: 123 }) };
+  assert.strictEqual(registry.registerLevelProvider('', provider), false);
+  assert.strictEqual(registry.registerLevelProvider('bad', {}), false);
+  const unregister = registry.registerLevelProvider('levelTrack', provider);
+  assert.strictEqual(typeof unregister, 'function');
+  assert.strictEqual(registry.getLevelProvider('levelTrack'), provider);
+  unregister();
+  assert.strictEqual(registry.getLevelProvider('levelTrack'), undefined);
+})();
+
+(async function testResolveLevelInput() {
+  let res = await resolveLevelInput('100', {});
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.level, 100);
+
+  res = await resolveLevelInput(NEAREST_TRACKED_LEVEL_PLACEHOLDER, {
+    ticker: 'SPX',
+    action: 'LB',
+    servicesApi: {
+      levelOrder: {
+        getLevelProvider(name) {
+          assert.strictEqual(name, 'levelTrack');
+          return {
+            async resolveLevel(args) {
+              assert.strictEqual(args.ticker, 'SPX');
+              assert.strictEqual(args.action, 'LB');
+              assert.strictEqual(args.placeholder, NEAREST_TRACKED_LEVEL_PLACEHOLDER);
+              return { ok: true, level: '7500', source: { key: 'spx-main' } };
+            }
+          };
+        }
+      }
+    }
+  });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.level, 7500);
+  assert.strictEqual(res.source.provider, 'levelTrack');
+  assert.strictEqual(res.source.key, 'spx-main');
+
+  res = await resolveLevelInput(NEAREST_TRACKED_LEVEL_PLACEHOLDER, { servicesApi: {} });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, 'Level provider is not registered: levelTrack');
+})().catch(err => {
+  console.error(err);
+  process.exit(1);
+});
 
 (function testCommandProps() {
   let row;

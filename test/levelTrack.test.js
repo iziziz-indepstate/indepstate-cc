@@ -94,9 +94,68 @@ async function testServiceSave() {
   assert.strictEqual(service.getGroup('mnq').ticker, 'mnq');
 }
 
+async function testNearestTrackedLevelProvider() {
+  const service = createLevelTrackService({
+    config: {
+      groups: [
+        { key: 'far', enabled: true, ticker: 'SPX', levels: [100], maxOffset: 10 },
+        { key: 'near', enabled: true, ticker: 'spx', levels: [104], maxOffset: 10 },
+        { key: 'disabled', enabled: false, ticker: 'SPX', levels: [105], maxOffset: 10 },
+        { key: 'other', enabled: true, ticker: 'NDX', levels: [106], maxOffset: 10 }
+      ]
+    },
+    instrumentInfo: {
+      async get(context) {
+        assert.strictEqual(String(context.ticker).toUpperCase(), 'SPX');
+        return { provider: 'simulated', quote: { bid: 102, ask: 104 } };
+      }
+    }
+  });
+
+  const res = await service.resolveNearestTrackedLevel({ ticker: 'SPX', placeholder: 'nearestTrackedLevel' });
+  assert.strictEqual(res.ok, true);
+  assert.strictEqual(res.level, 104);
+  assert.strictEqual(res.source.key, 'near');
+  assert.strictEqual(res.source.distance, 1);
+}
+
+async function testNearestTrackedLevelNoActive() {
+  const service = createLevelTrackService({
+    config: {
+      groups: [
+        { key: 'spx-main', enabled: true, ticker: 'SPX', levels: [100], maxOffset: 1 }
+      ]
+    },
+    instrumentInfo: {
+      async get() {
+        return { provider: 'simulated', quote: { bid: 109, ask: 111 } };
+      }
+    }
+  });
+
+  const res = await service.resolveNearestTrackedLevel({ ticker: 'SPX', placeholder: 'nearestTrackedLevel' });
+  assert.strictEqual(res.ok, false);
+  assert.match(res.error, /No active LevelTrack level for SPX/);
+  assert.strictEqual(res.source.candidates[0].key, 'spx-main');
+  assert.strictEqual(res.source.candidates[0].nearestLevel, 100);
+}
+
+async function testNearestTrackedLevelNoGroups() {
+  const service = createLevelTrackService({
+    config: { groups: [{ key: 'ndx', enabled: true, ticker: 'NDX', levels: [100], maxOffset: 1 }] }
+  });
+
+  const res = await service.resolveNearestTrackedLevel({ ticker: 'SPX', placeholder: 'nearestTrackedLevel' });
+  assert.strictEqual(res.ok, false);
+  assert.strictEqual(res.error, 'No LevelTrack groups for SPX');
+}
+
 async function run() {
   await testServiceResolverUsesFreshQuote();
   await testServiceSave();
+  await testNearestTrackedLevelProvider();
+  await testNearestTrackedLevelNoActive();
+  await testNearestTrackedLevelNoGroups();
   console.log('levelTrack tests passed');
 }
 

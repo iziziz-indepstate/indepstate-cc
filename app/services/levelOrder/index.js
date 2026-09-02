@@ -1,4 +1,5 @@
 module.exports = {
   ...require('./command'),
-  ...require('./strategy')
+  ...require('./strategy'),
+  ...require('./provider')
 };

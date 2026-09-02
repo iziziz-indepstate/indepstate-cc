@@ -19,6 +19,7 @@ const orderCalc = servicesApi.orderCalculator || require('./services/orderCalcul
 const { buildOptionStratHedgePayload } = require('./services/optionstrat/hedge');
 const { GroupedOrderLifecycleRegistry } = require('./services/brokerage/comps/groupedOrderLifecycle');
 const { calculateLimitBidTradePlan } = require('./services/levelOrder/strategy');
+const { resolveLevelInput } = require('./services/levelOrder/provider');
 const { collectRetryStopEntries, getRetryStopParentIds } = require('./services/levelOrder/retryStop');
 const { normalizeOrderQty, isValidOrderQty } = require('./services/executionQuantity');
 const orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
@@ -1270,6 +1271,18 @@ function setupIpc(orderSvc) {
       const quote = instrumentSnapshot?.quote;
       const bid = Number(quote?.bid);
       const ask = Number(quote?.ask);
+      const levelResult = await resolveLevelInput(payload.level, {
+        ticker: symbol,
+        action: payload.action,
+        servicesApi,
+        context: { payload, providerName, instrumentType, quote }
+      });
+      if (!levelResult.ok) {
+        const rej = { status: 'rejected', provider: providerName, reason: levelResult.error };
+        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: false, reqId: requestId, provider: providerName, payload, quote, levelSource: levelResult.source, result: rej });
+        return rej;
+      }
+      const levelSource = levelResult.source;
       const tickSize = instrumentInfo.resolveTickSize(
         { provider: providerName, symbol, instrumentType, payload },
         { explicitTickSize: payload.tickSize }
@@ -1278,7 +1291,7 @@ function setupIpc(orderSvc) {
         action: payload.action,
         ticker: symbol,
         instrumentType,
-        level: payload.level,
+        level: levelResult.level,
         riskUsd: payload.riskUsd,
         stopOffsetPts: payload.stopOffsetPts,
         maxLot: payload.maxLot,
@@ -1294,7 +1307,7 @@ function setupIpc(orderSvc) {
       });
       if (!plan.ok) {
         const rej = { status: 'rejected', provider: providerName, reason: plan.reason };
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: false, reqId: requestId, provider: providerName, payload, quote, result: rej });
+        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: false, reqId: requestId, provider: providerName, payload, quote, levelSource, result: rej });
         return rej;
       }
 
@@ -1341,6 +1354,7 @@ function setupIpc(orderSvc) {
               childIndex: i + 1,
               childCount: plan.childQtys.length,
               level: plan.level,
+              levelSource,
               bid: plan.bid,
               ask: plan.ask,
               priceSource: plan.priceSource,
@@ -1365,13 +1379,13 @@ function setupIpc(orderSvc) {
                   providerOrderId: `level:${strategyId}`,
                   strategyId,
                   partial: true,
-                  raw: { plan, results }
+                  raw: { plan, results, levelSource }
                 }
               : {
                   status: 'rejected',
                   provider: providerName,
                   reason: res?.reason || 'Level order child rejected',
-                  raw: { plan, results }
+                  raw: { plan, results, levelSource }
                 };
             if (accepted.length) {
               startLevelOrderPositionMonitor({
@@ -1383,7 +1397,7 @@ function setupIpc(orderSvc) {
                 children: results
               });
             }
-            appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result });
+            appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, levelSource, plan, result });
             return result;
           }
         }
@@ -1393,7 +1407,7 @@ function setupIpc(orderSvc) {
           provider: providerName,
           providerOrderId: `level:${strategyId}`,
           strategyId,
-          raw: { plan, results }
+          raw: { plan, results, levelSource }
         };
         startLevelOrderPositionMonitor({
           adapter,
@@ -1403,7 +1417,7 @@ function setupIpc(orderSvc) {
           symbol,
           children: results
         });
-        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, plan, result: ok });
+        appendJsonl(EXEC_LOG, { t: nowTs(), kind: 'level-order', valid: true, reqId: requestId, provider: providerName, strategyId, intentKey, levelSource, plan, result: ok });
         return ok;
       })();
       intentRecord.promise = placementPromise;

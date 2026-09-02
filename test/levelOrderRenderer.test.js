@@ -105,6 +105,20 @@ async function run() {
   assert.strictEqual(call.payload.pointSize, 0.001);
   assert.strictEqual(call.payload.tickSize, 0.001);
 
+  const placeholderRow = { cardType: 'levelOrder', ticker: 'TSTPLACE', event: 'levelOrder', time: 5, level: 'nearestTrackedLevel', provider: 'simulated', instrumentType: 'EQ' };
+  handlers['orders:new'](null, placeholderRow);
+  t.instrumentInfo.set('TSTPLACE', { bid: 101, ask: 102, price: 101.5, tickSize: 0.5 });
+  t.render();
+  const placeholderCard = t.cardByKey(t.rowKey(placeholderRow));
+  const placeholderButtons = Array.from(placeholderCard.querySelectorAll('button.btn'));
+  assert.strictEqual(placeholderCard.querySelector('.level-order-line input.level').value, 'nearestTrackedLevel');
+  assert.strictEqual(placeholderButtons[0].disabled, false);
+  placeholderButtons[0].click();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const placeholderCall = calls.filter(c => c.ch === 'level-order:place' && c.payload.ticker === 'TSTPLACE').at(-1);
+  assert(placeholderCall);
+  assert.strictEqual(placeholderCall.payload.level, 'nearestTrackedLevel');
+
   const symbolRow = { cardType: 'levelOrder', ticker: 'TSTSYMBOL', event: 'levelOrder', time: 2, level: 100, provider: 'simulated', instrumentType: 'EQ' };
   handlers['orders:new'](null, symbolRow);
   let symbolCard = t.cardByKey(t.rowKey(symbolRow));
