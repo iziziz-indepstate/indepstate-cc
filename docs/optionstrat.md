@@ -71,6 +71,12 @@ If `instantExecution` is `true`, the renderer opens the OptionStrat position imm
 
 `root` is optional. When present, the live option chain request uses `root` as `symbol`, while the `series` query value and strategy symbols still use `ticker`. For example `ticker: "SPXW"` and `root: "SPX"` fetches `/quote/chain/live?symbol=SPX&series=SPXW260531` but creates legs like `.SPXW260531C755`.
 
+## Attach Existing Strategy
+
+Use `optionstrat attach {id}` to attach a saved OptionStrat strategy by code without creating a new strategy. The command calls `GET /strategy/{id}`, stores the returned strategy in the adapter cache, creates an `OPT` card, and shows it immediately as placed.
+
+Attached cards use the same live valuation and close paths as newly opened cards. Closing an attached card calls `PUT /strategy/{id}` with current close prices; attach itself does not call `POST /strategy`.
+
 ## Expiration And Pricing
 
 `expiration` uses `{n}DTE` format. `0DTE` resolves to today's UTC expiration, `1DTE` to tomorrow, and so on. If the live chain does not contain the target expiration, the order is rejected with a clear reason.

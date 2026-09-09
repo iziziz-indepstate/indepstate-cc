@@ -90,7 +90,14 @@ function createCommandService(opts = {}) {
     for (let i = list.length - 1; i >= 2; i -= 1) {
       if (predicate(list[i])) list.splice(i, 1);
     }
-    list.push(...commands);
+    list.push(...commands.map(c => {
+      if (c && typeof c === 'object') {
+        if (c.onAdd == null) c.onAdd = opts.onAdd;
+        if (c.onRemove == null) c.onRemove = opts.onRemove;
+        if (c.executionApi == null) c.executionApi = opts.executionApi;
+      }
+      return c;
+    }));
   }
 
   return { run, configure, replaceCommands };

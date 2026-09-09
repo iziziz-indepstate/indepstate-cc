@@ -10,7 +10,7 @@ const {
   calculateStrategyValuation,
   buildOpenStrategyPayload
 } = require('../app/services/brokerage-adapter-optionstrat/comps/optionstrat');
-const { buildOptionStratRow } = require('../app/services/optionstrat/command');
+const { OptionStratAttachCommand, buildOptionStratRow, buildAttachedOptionStratRow } = require('../app/services/optionstrat/command');
 const { buildOptionStratHedgePayload } = require('../app/services/optionstrat/hedge');
 
 function encodeProtectedJson(obj) {
@@ -269,6 +269,69 @@ async function run() {
   assert.strictEqual(builtRangeAliasesAsCommandArgs.row.legs[0].strike, 755);
   assert.strictEqual(builtRangeAliasesAsCommandArgs.row.legs[1].strike, 756);
 
+  const attachedRaw = {
+    code: 'deal-attach',
+    name: 'Attached BCS',
+    description: 'already saved',
+    isCustomName: true,
+    strategy: {
+      isCashSecured: true,
+      symbol: 'SPX',
+      items: [
+        { revision: 0, enabled: true, symbol: '.SPXW260531C755', basis: 4.1, quantity: 10 },
+        { revision: 0, enabled: true, symbol: '.SPXW260531C756', basis: 2.2, quantity: -10 }
+      ]
+    }
+  };
+  const attachedRow = buildAttachedOptionStratRow({
+    id: 'deal-attach',
+    provider: 'optionstrat',
+    raw: attachedRaw,
+    now: 999
+  });
+  assert.strictEqual(attachedRow.providerOrderId, 'deal-attach');
+  assert.strictEqual(attachedRow.ticker, 'SPXW');
+  assert.strictEqual(attachedRow.root, 'SPX');
+  assert.strictEqual(attachedRow.expirationDte, '260531');
+  assert.strictEqual(attachedRow.strategyCommand, 'attach');
+  assert.strictEqual(attachedRow.attached, true);
+  assert.deepStrictEqual(attachedRow.legs.map(leg => [leg.option, leg.side, leg.strike, leg.quantity]), [
+    ['CALL', 'buy', 755, 10],
+    ['CALL', 'sell', 756, 10]
+  ]);
+
+  const commandRows = [];
+  const attachCommand = new OptionStratAttachCommand({
+    executionApi: {
+      brokerage: {
+        getAdapter(provider) {
+          assert.strictEqual(provider, 'optionstrat');
+          return {
+            async attachStrategy(id) {
+              assert.strictEqual(id, 'deal-attach');
+              return {
+                status: 'ok',
+                provider: 'optionstrat',
+                providerOrderId: id,
+                payoff: { maxProfit: 1, maxLoss: 2 },
+                valuation: { initialValue: 1, currentValue: 1, change: 0, changePct: 0 },
+                raw: attachedRaw
+              };
+            }
+          };
+        }
+      }
+    },
+    onAdd: row => commandRows.push(row),
+    now: () => 1000
+  });
+  assert.deepStrictEqual(await attachCommand.run([]), { ok: false, error: 'Usage: optionstrat attach {id}' });
+  const attachCommandResult = await attachCommand.run(['attach', 'deal-attach']);
+  assert.strictEqual(attachCommandResult.ok, true);
+  assert.strictEqual(commandRows.length, 1);
+  assert.strictEqual(commandRows[0].providerOrderId, 'deal-attach');
+  assert.strictEqual(commandRows[0].payoff.maxProfit, 1);
+
   const noRootCalls = [];
   const noRootAdapter = new OptionStratAdapter({
     account: 'acct-1',
@@ -338,6 +401,44 @@ async function run() {
     ]
   });
   assert.strictEqual(noRootCalls[0].url.endsWith('/quote/chain/live?symbol=SPY&series=SPY260531'), true);
+
+  const attachCalls = [];
+  let attachQuoteCalls = 0;
+  const attachAdapter = new OptionStratAdapter({
+    account: 'acct-1',
+    cookie: 'session=abc',
+    useRuntimeSettings: false,
+    now: () => new Date(Date.UTC(2026, 4, 31)),
+    fetch: async (url, opts = {}) => {
+      attachCalls.push({ url, opts });
+      assert.strictEqual(opts.headers.Cookie, 'session=abc');
+      if (url.endsWith('/strategy/deal-attach') && !opts.method) {
+        return response(attachedRaw);
+      }
+      if (url.endsWith('/quote/chain/live?symbol=SPX&series=SPXW260531')) {
+        attachQuoteCalls += 1;
+        return response(attachQuoteCalls === 2 ? rootCloseChainSample() : rootChainSample());
+      }
+      if (url.endsWith('/strategy/deal-attach') && opts.method === 'PUT') {
+        const body = JSON.parse(opts.body);
+        assert.strictEqual(body.strategy.items[0].close, 4.5);
+        return response({ ...body, code: 'deal-attach' });
+      }
+      throw new Error(`Unexpected attach request ${url}`);
+    }
+  }, 'optionstrat');
+  const attached = await attachAdapter.attachStrategy('deal-attach');
+  assert.strictEqual(attached.status, 'ok');
+  assert.strictEqual(attached.providerOrderId, 'deal-attach');
+  assert.strictEqual(attached.raw.root, 'SPX');
+  assert.strictEqual(attached.payoff.maxLoss, 1900);
+  const attachedLiveValuation = await attachAdapter.getStrategyValuation('deal-attach', 'SPXW');
+  assert.strictEqual(attachedLiveValuation.status, 'ok');
+  assert.strictEqual(attachedLiveValuation.valuation.initialValue, 1900);
+  const attachedClosed = await attachAdapter.cancelOrder('deal-attach', 'SPXW');
+  assert.strictEqual(attachedClosed.status, 'ok');
+  assert.strictEqual(attachedClosed.valuation.change, 600);
+  assert.strictEqual(attachCalls.length, 4);
 
   const calls = [];
   let rootQuoteCalls = 0;

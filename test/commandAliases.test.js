@@ -78,4 +78,19 @@ function createService(aliases) {
   assert.strictEqual(cmd.row.level, 28900);
 })();
 
+(function testReplaceCommandsInjectsCallbacks() {
+  let row;
+  const service = createCommandService({ onAdd: r => { row = r; } });
+  service.replaceCommands(() => false, [{
+    name: 'custom-replaced',
+    run() {
+      this.onAdd({ ticker: 'SPY' });
+      return { ok: true };
+    }
+  }]);
+  const res = service.run('custom-replaced');
+  assert.strictEqual(res.ok, true);
+  assert.deepStrictEqual(row, { ticker: 'SPY' });
+})();
+
 console.log('commandAliases tests passed');

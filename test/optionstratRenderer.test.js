@@ -165,6 +165,32 @@ async function run() {
   assert(detailsText.indexOf('Opened ') < detailsText.indexOf('Closed '));
   assert.strictEqual(t.placedOrderByKey.has(key), false);
 
+  const attachedRow = {
+    ...row,
+    time: 2,
+    name: 'Attached BCS 755/756',
+    providerOrderId: 'deal-attached',
+    strategyCommand: 'attach',
+    attached: true,
+    openedAt: Date.UTC(2026, 5, 13, 11, 0),
+    payoff,
+    valuation: {
+      initialValue: 900,
+      currentValue: 940,
+      change: 40,
+      changePct: 4.44
+    }
+  };
+  handlers['orders:new'](null, attachedRow);
+  await new Promise(resolve => setImmediate(resolve));
+  const attachedKey = t.rowKey(attachedRow);
+  const attachedCard = t.cardByKey(attachedKey);
+  assert.strictEqual(t.cardStates.get(attachedKey), 'placed');
+  assert.strictEqual(t.placedOrderByKey.get(attachedKey).ticket, 'deal-attached');
+  assert.strictEqual(t.placedOrderByKey.get(attachedKey).symbol, 'SPY');
+  assert.strictEqual(attachedCard.querySelector('button.btn').textContent, 'CLOSE');
+  assert(attachedCard.textContent.includes('P/L $40'));
+
   t.setCardState(key, 'profit');
   card = t.cardByKey(key);
   assert.strictEqual(card.querySelector('.btns').style.display, 'none');

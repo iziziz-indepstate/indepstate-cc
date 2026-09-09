@@ -28,15 +28,16 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   if (!Array.isArray(servicesApi.commands)) servicesApi.commands = [];
-  servicesApi.commands.push(...createOptionStratCommands(cfg));
+  const commandOpts = { executionApi: servicesApi };
+  servicesApi.commands.push(...createOptionStratCommands(cfg, commandOpts));
   settings.onApply('optionstrat', ({ config }) => {
-    const commands = createOptionStratCommands(config);
+    const commands = createOptionStratCommands(config, commandOpts);
     for (let i = servicesApi.commands.length - 1; i >= 0; i -= 1) {
-      if (servicesApi.commands[i]?.constructor?.name === 'OptionStratCommand') servicesApi.commands.splice(i, 1);
+      if (servicesApi.commands[i]?.isOptionStratCommand) servicesApi.commands.splice(i, 1);
     }
     servicesApi.commands.push(...commands);
     servicesApi.commandLine?.replaceCommands?.(
-      command => command?.constructor?.name === 'OptionStratCommand',
+      command => command?.isOptionStratCommand,
       commands
     );
   });

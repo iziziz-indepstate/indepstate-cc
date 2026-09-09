@@ -305,6 +305,30 @@ function calculateStrategyPayoffSummary(strategy, opts = {}) {
   return calculatePayoffSummary(strategy?.items || [], opts);
 }
 
+function normalizeStrategyRecord(record, id) {
+  const raw = record && typeof record === 'object' ? { ...record } : {};
+  const code = String(raw.code || raw.id || id || '').trim();
+  if (!code) {
+    throw new Error('OptionStrat strategy response did not include code');
+  }
+  if (!raw.strategy || typeof raw.strategy !== 'object') {
+    throw new Error('OptionStrat strategy response did not include strategy');
+  }
+  raw.code = code;
+  const firstItem = raw.strategy.items?.find?.(item => item?.symbol);
+  if (firstItem) {
+    const parsed = parseOptionSymbol(firstItem.symbol);
+    raw.ticker = raw.ticker || parsed.ticker;
+    raw.expiration = raw.expiration || parsed.expiration;
+  }
+  if (raw.strategy.symbol) {
+    const strategySymbol = String(raw.strategy.symbol).toUpperCase();
+    raw.chainRoot = raw.chainRoot || strategySymbol;
+    if (raw.ticker && strategySymbol !== String(raw.ticker).toUpperCase()) raw.root = raw.root || strategySymbol;
+  }
+  return raw;
+}
+
 function calculateStrategyValuation(strategy, rows, { multiplier = 100, currentField = null } = {}) {
   const items = Array.isArray(strategy?.items) ? strategy.items : [];
   if (!items.length) throw new Error('OptionStrat strategy has no items');
@@ -518,6 +542,33 @@ class OptionStratAdapter extends ExecutionAdapter {
     }
   }
 
+  async attachStrategy(dealId) {
+    try {
+      const id = String(dealId || '').trim();
+      if (!id) {
+        return { status: 'rejected', provider: this.provider, reason: 'OptionStrat strategy id is required.' };
+      }
+      const fetched = await this._request(`/strategy/${encodeURIComponent(id)}`);
+      const created = normalizeStrategyRecord(fetched, id);
+      const payoff = calculateStrategyPayoffSummary(created.strategy);
+      const valuation = calculateStrategyValuation(created.strategy, []);
+      created.payoff = created.payoff || payoff;
+      created.estimatedPayoff = created.estimatedPayoff || payoff;
+      created.valuation = created.valuation || valuation;
+      this.createdStrategies.set(id, created);
+      return {
+        status: 'ok',
+        provider: this.provider,
+        providerOrderId: id,
+        payoff: created.payoff,
+        valuation: created.valuation,
+        raw: created
+      };
+    } catch (err) {
+      return { status: 'rejected', provider: this.provider, reason: err?.message || String(err) };
+    }
+  }
+
   async getStrategyValuation(dealId, symbol) {
     try {
       const id = String(dealId || '').trim();
@@ -605,6 +656,7 @@ module.exports = {
   calculateStrategyValuation,
   buildOpenStrategyPayload,
   buildCloseStrategyPayload,
+  normalizeStrategyRecord,
   findQuoteMid,
   signedLegQuantity
 };

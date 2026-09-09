@@ -3364,10 +3364,32 @@ function scheduleInstantExecution(row) {
   }, 0);
 }
 
+function registerAttachedOptionRow(row) {
+  if (!row || row.instrumentType !== 'OPT' || !row.providerOrderId) return false;
+  const key = rowKey(row);
+  const ticket = String(row.providerOrderId);
+  const openedAt = row.openedAt || Date.now();
+  row.openedAt = row.openedAt || openedAt;
+  placedOrderByKey.set(key, {
+    provider: row.provider || 'optionstrat',
+    ticket,
+    symbol: row.symbol || row.ticker || '',
+    strategyCommand: row.strategyCommand,
+    name: row.name,
+    payoff: row.payoff || row.estimatedPayoff,
+    valuation: row.valuation,
+    openedAt
+  });
+  ticketToKey.set(ticket, key);
+  setCardState(key, 'placed');
+  return true;
+}
+
 // ======= IPC wiring =======
 ipcRenderer.invoke('orders:list', 100).then(rows => {
   state.rows = Array.isArray(rows) ? rows : [];
   render();
+  state.rows.forEach(registerAttachedOptionRow);
 }).catch(() => {
 });
 
@@ -3534,7 +3556,7 @@ ipcRenderer.on('orders:new', (_evt, row) => {
     state.rows.unshift(row);
     if (state.rows.length > 500) state.rows.length = 500;
     render();
-    scheduleInstantExecution(row);
+    if (!registerAttachedOptionRow(row)) scheduleInstantExecution(row);
     return;
   }
   // карточка для тикера уже есть
@@ -3590,6 +3612,7 @@ ipcRenderer.on('orders:new', (_evt, row) => {
 
   if (state.rows.length > 500) state.rows.length = 500;
   render();
+  registerAttachedOptionRow(updated);
 });
 
 // Результат исполнения: закрыть или подсветить карточку
