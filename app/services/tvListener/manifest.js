@@ -49,8 +49,15 @@ function initService(servicesApi = {}) {
     cfg = {};
   }
   const tvProxy = servicesApi.tvProxy;
+  // ISCC_CANDLE_RENDERER_ADDON_V1
+  const candleRenderer = require('../candleLevelRenderer').attach({
+    servicesApi, settings, root: require('../../config/load').USER_ROOT,
+    getEnabled: () => cfg.enabled !== false && (typeof tvProxy?.getStatus !== 'function' || tvProxy.getStatus().enabled !== false)
+  });
+  require('electron').app?.on('before-quit', () => candleRenderer.stop());
   if (tvProxy && typeof tvProxy.addListener === 'function') {
     tvProxy.addListener((rec) => {
+      if (rec?.event === 'candle_bars') { candleRenderer.acceptBars(rec); return; }
       if (cfg.enabled === false) return;
       if (cfg.webhook?.enabled === true && rec?.event === 'message' && typeof rec.text === 'string' && rec.text.includes('@ATR')) {
         let webhookUrl = typeof cfg.webhook.url === 'string' ? cfg.webhook.url : null;
@@ -75,6 +82,7 @@ function initService(servicesApi = {}) {
 
         Object.entries(sources).forEach(([sourceId, src]) => {
           const sourceKey = sourceId != null && sourceId !== '' ? String(sourceId) : null;
+          if (candleRenderer.acceptSource(sourceKey, src, { local: rec.event === 'http_request' && rec.dir === 'out' })) return;
           if (src && src.state?.type === 'LineToolHorzLine') {
             const symbol = normalizeSymbol(src.symbol);
             const price = Number(src.state?.points?.[0]?.price);

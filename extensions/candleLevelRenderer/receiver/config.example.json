@@ -1,0 +1,7 @@
+{
+  "terminalPath": "",
+  "expectedDataPath": "",
+  "brokerUtcOffsetSeconds": null,
+  "brokerClockModel": "fixed-offset",
+  "brokerClockHours": null
+}

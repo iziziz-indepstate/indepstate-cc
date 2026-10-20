@@ -31,6 +31,7 @@ function normalizeGroup(group = {}) {
   const key = normalizeKey(group.key);
   return {
     key,
+    ...(group.source === 'tv-mt5-candles' ? { source: group.source } : {}),
     enabled: group.enabled !== false,
     ticker: normalizeTicker(group.ticker || group.symbol),
     levels: normalizeLevels(group.levels),
@@ -219,7 +220,15 @@ function createLevelTrackService({
     return { ok: true, results, ...snapshot() };
   }
 
-  async function save(nextConfig = {}) {
+  // Serialize saves and addon transforms so they read the latest manual edits.
+  let candleRendererSaveQueue = Promise.resolve();
+  function update(transform) {
+    const next = candleRendererSaveQueue.then(() => commit(transform(snapshot().config)));
+    candleRendererSaveQueue = next.catch(() => {});
+    return next;
+  }
+  function save(nextConfig = {}) { return update(() => nextConfig); }
+  async function commit(nextConfig = {}) {
     const normalized = normalizeConfig(nextConfig);
     if (typeof saveConfig === 'function') {
       const result = await saveConfig(normalized);
@@ -251,6 +260,7 @@ function createLevelTrackService({
   return {
     configure,
     save,
+    update,
     refreshAll,
     refreshGroup,
     resolveLevel,

@@ -1,0 +1,17 @@
+{
+  "properties": { "group": "data-source", "name": "Отрисовщик уровней" },
+  "options": {
+    "enabled": { "description": "Включить после настройки и проверки пары ТВ → MT5", "type": "boolean" },
+    "publishToLT": { "description": "Передавать подтверждённые цены в ЛТ", "type": "boolean" },
+    "adapterMode": { "description": "Приёмник: iscc или stdio", "type": "string" },
+    "readerCommand": { "description": "Локальная команда приёмника: программа и аргументы", "item": { "type": "string" } },
+    "mappings": {
+      "description": "Точные пары символов TradingView → MT5",
+      "item": {
+        "enabled": { "type": "boolean", "description": "Включена" },
+        "sourceSymbol": { "type": "string", "description": "Полный символ TradingView" },
+        "mt5Symbol": { "type": "string", "description": "Точное имя MT5" }
+      }
+    }
+  }
+}

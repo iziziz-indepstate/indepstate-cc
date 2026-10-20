@@ -1,0 +1,27 @@
+name: Candle renderer
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: '3.12'
+      - name: JavaScript unit tests
+        run: node --test test/candleRendererCore.test.js test/candleRendererAddon.test.js
+      - name: Python unit tests
+        run: python -m unittest discover -s test/candle-renderer-python -p 'test_*.py'
+      - name: Addon indicator chart policy
+        env:
+          CANDLE_INDICATOR_SOURCE: extensions/candleLevelRenderer/mt5/ISCC Addon Levels.mq5
+        run: python -m unittest discover -s test/candle-renderer-python -p 'test_chart_policy.py'
