@@ -19,6 +19,7 @@ async function run() {
       if (ch === 'settings:list') return [];
       if (ch === 'settings:set') return true;
       if (ch === 'actions-bus:list') return [];
+      if (ch === 'level-track:list') return { config: { groups: [{ key: 'initial', ticker: 'TSTPLACE' }] }, states: [{ key: 'initial', status: 'active', price: 101, activeLevel: 99, distance: 2 }] };
       if (ch === 'actions-bus:set-enabled') return [];
       if (ch === 'instrument:get') return { bid: 101, ask: 102, price: 101.5, tickSize: 0.5 };
       if (ch === 'level-order:place') return {
@@ -67,7 +68,7 @@ async function run() {
     symbols: [{ ticker: 'TSTMID', buyPriceSource: 'mid', sellPriceSource: 'bid' }]
   });
 
-  const row = { cardType: 'levelOrder', ticker: 'TST', event: 'levelOrder', time: 0, level: 100, provider: 'simulated', instrumentType: 'EQ' };
+  const row = { cardType: 'levelOrder', ticker: 'TST', event: 'levelOrder', time: 0, level: 100, pointSize: 0.001, provider: 'simulated', instrumentType: 'EQ' };
   handlers['orders:new'](null, row);
   const key = t.rowKey(row);
   let card = t.cardByKey(key);
@@ -82,12 +83,9 @@ async function run() {
   buttons = Array.from(card.querySelectorAll('button.btn'));
   assert.strictEqual(buttons[0].disabled, false);
   const pointSizeInput = card.querySelector('input.point-size');
-  assert(pointSizeInput);
-  assert.strictEqual(pointSizeInput.value, '');
+  assert.strictEqual(pointSizeInput, null);
   const inputs = Array.from(card.querySelectorAll('.level-order-line input.num'));
   assert.deepStrictEqual(inputs.map(i => i.value), ['100', '50', '4', '3', '12']);
-  pointSizeInput.value = '0.001';
-  pointSizeInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
 
   buttons[0].click();
   await new Promise(resolve => setTimeout(resolve, 20));
@@ -102,8 +100,8 @@ async function run() {
   assert.strictEqual(call.payload.takeProfitPts, 12);
   assert.strictEqual(call.payload.buyPriceSource, 'bid');
   assert.strictEqual(call.payload.sellPriceSource, 'bid');
-  assert.strictEqual(call.payload.pointSize, 0.001);
-  assert.strictEqual(call.payload.tickSize, 0.001);
+  assert.strictEqual('pointSize' in call.payload, false);
+  assert.strictEqual(call.payload.tickSize, 0.5);
 
   const placeholderRow = { cardType: 'levelOrder', ticker: 'TSTPLACE', event: 'levelOrder', time: 5, level: 'nearestTrackedLevel', provider: 'simulated', instrumentType: 'EQ' };
   handlers['orders:new'](null, placeholderRow);
@@ -113,7 +111,61 @@ async function run() {
   const placeholderButtons = Array.from(placeholderCard.querySelectorAll('button.btn'));
   assert.strictEqual(placeholderCard.querySelector('.level-order-line input.level').value, 'nearestTrackedLevel');
   assert.strictEqual(placeholderButtons[0].disabled, false);
-  placeholderButtons[0].click();
+  const indicator = placeholderCard.querySelector('.card__tracked-level');
+  assert.strictEqual(indicator.textContent, '101.00 · 99 · активен');
+  assert.strictEqual(card.querySelector('.card__tracked-level').hidden, true);
+  const pushTracking = (states, groups = [{ key: 'main', ticker: 'tstplace' }]) =>
+    handlers['level-track:state'](null, { config: { groups }, states });
+  pushTracking([{ key: 'main', status: 'idle' }]);
+  assert.strictEqual(indicator.textContent, 'Уровень: ожидание');
+  pushTracking([{ key: 'main', status: 'active', price: 101, activeLevel: 100, distance: 1 }]);
+  assert.strictEqual(indicator.textContent, '101.00 · 100 · активен');
+  assert.strictEqual(indicator.title, 'main');
+  pushTracking([{ key: 'main', status: 'inactive', price: 101, nearestLevel: 110, distance: 9, reason: 'No active level' }]);
+  assert.strictEqual(indicator.textContent, '101.00 · 110 · неактивен');
+  assert.match(indicator.title, /main: No active level/);
+  pushTracking([{ key: 'main', status: 'error', reason: 'Quote failed' }]);
+  assert.strictEqual(indicator.textContent, 'Уровень недоступен');
+  assert.match(indicator.title, /Quote failed/);
+  pushTracking([], [{ key: 'main', ticker: 'TSTPLACE', enabled: false }]);
+  assert.strictEqual(indicator.textContent, 'Нет отслеживаемых уровней');
+  const levelInput = placeholderCard.querySelector('input.level');
+  levelInput.value = '100';
+  levelInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.strictEqual(indicator.hidden, true);
+  levelInput.value = 'nearestTrackedLevel';
+  levelInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.strictEqual(indicator.hidden, false);
+  // A second visible card receives the same update without a full render.
+  const duplicate = placeholderCard.cloneNode(true);
+  document.getElementById('grid').appendChild(duplicate);
+  pushTracking([{ key: 'main', status: 'active', price: 105, activeLevel: 105, distance: 0 }]);
+  assert.strictEqual(indicator.textContent, '105.00 · 105 · активен');
+  assert.strictEqual(duplicate.querySelector('.card__tracked-level').textContent, indicator.textContent);
+  pushTracking([{ key: 'main', status: 'active', activeLevel: 105, distance: 0 }]);
+  assert.strictEqual(indicator.textContent, '— · 105 · активен');
+  pushTracking([{ key: 'main', status: 'active', price: 105, activeLevel: 105.12356789, distance: 0 }]);
+  assert.strictEqual(indicator.textContent, '105.00 · 105.124 · активен');
+  pushTracking([{ key: 'main', status: 'inactive', price: 105, nearestLevel: 105.12000001, distance: 0.12 }]);
+  assert.strictEqual(indicator.textContent, '105.00 · 105.12 · неактивен');
+  pushTracking([{ key: 'main', status: 'active', price: 105.123456789, activeLevel: 105, distance: 0.123456789 }]);
+  assert.strictEqual(indicator.textContent, '105.12 · 105 · активен');
+  pushTracking([{ key: 'main', status: 'inactive', price: 105.129876543, nearestLevel: 110, distance: 4.870123457 }]);
+  assert.strictEqual(indicator.textContent, '105.13 · 110 · неактивен');
+  duplicate.remove();
+  const placeholderKey = t.rowKey(placeholderRow);
+  for (const status of ['closed', 'profit', 'loss']) {
+    t.setCardState(placeholderKey, status);
+    assert.strictEqual(t.cardByKey(placeholderKey).querySelector('.card__tracked-level').hidden, true);
+    pushTracking([{ key: 'main', status: 'active', price: 106, activeLevel: 105, distance: 1 }]);
+    assert.strictEqual(t.cardByKey(placeholderKey).querySelector('.card__tracked-level').hidden, true);
+    t.render();
+    assert.strictEqual(t.cardByKey(placeholderKey).querySelector('.card__tracked-level').hidden, true);
+    t.setCardState(placeholderKey, null);
+    assert.strictEqual(t.cardByKey(placeholderKey).querySelector('.card__tracked-level').hidden, false);
+  }
+
+  t.cardByKey(t.rowKey(placeholderRow)).querySelector('button.btn[data-kind="LB"]').click();
   await new Promise(resolve => setTimeout(resolve, 20));
   const placeholderCall = calls.filter(c => c.ch === 'level-order:place' && c.payload.ticker === 'TSTPLACE').at(-1);
   assert(placeholderCall);
@@ -492,6 +544,31 @@ async function run() {
   assert.strictEqual(t.ticketToKey.has('old-repeat-ticket'), false);
   handlers['position:closed'](null, { ticket: 'old-repeat-ticket', provider: 'simulated', profit: -5 });
   assert.strictEqual(t.cardStates.get(repeatKey2), 'pending-exec');
+
+  // Bulk cleanup includes filtered-out terminal rows and preserves every live state.
+  const cleanupRows = ['closed', 'profit', 'loss', undefined, 'pending', 'pending-exec', 'placed', 'executing'].map((status, index) => {
+    const row = { cardType: 'levelOrder', ticker: `CLEAN${index}`, event: 'levelOrder', time: 100 + index, level: 100, provider: 'simulated', instrumentType: 'EQ' };
+    t.state.rows.push(row);
+    if (status) t.cardStates.set(t.rowKey(row), status);
+    return row;
+  });
+  const terminalKeys = cleanupRows.slice(0, 3).map(row => t.rowKey(row));
+  t.state.filter = 'REPEAT';
+  t.render();
+  assert.strictEqual(t.cardByKey(terminalKeys[0]), null);
+  const callsBeforeCleanup = calls.length;
+  handlers['orders:remove'](null, { completed: true });
+  terminalKeys.forEach(key => {
+    assert(!t.state.rows.some(row => t.rowKey(row) === key));
+    assert.strictEqual(t.cardStates.has(key), false);
+  });
+  cleanupRows.slice(3).forEach(row => assert(t.state.rows.includes(row)));
+  assert(t.state.rows.includes(repeatRow2));
+  assert.strictEqual(t.levelOrderGroups.has(repeatCall.payload.requestId), true);
+  assert(!calls.slice(callsBeforeCleanup).some(call => call.ch.startsWith('execution:')));
+  const remaining = t.state.rows.length;
+  handlers['orders:remove'](null, { completed: true });
+  assert.strictEqual(t.state.rows.length, remaining);
 
   Module._load = originalLoad;
   console.log('levelOrderRenderer tests passed');

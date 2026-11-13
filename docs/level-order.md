@@ -100,12 +100,23 @@ A level-order card shows:
 - `Stop off`
 - `Max lot`
 - `TP pts`
-- `Pt`, a compact point-price override beside the ticker
-
-`Pt` is optional. When blank, the app uses the normal tick-size resolution path. When set, it overrides the point price for this card. For example, `Pt = 0.001` means `3` points equals `0.003`.
 
 `Level` accepts either a positive number or `nearestTrackedLevel`. The placeholder is resolved only
 when `LB` or `LS` is clicked, so it uses the latest active `LevelTrack` state and quote.
+
+For `nearestTrackedLevel`, a live indicator beside the ticker shows the current LevelTrack quote
+price, selected level, and activity status, in that order (for example, `6501.00 · 6500 · активен`).
+The quote price comes from the same tracking snapshot used to select the level; unavailable prices
+are shown as `—`. Displayed prices use exactly two decimal places. Displayed levels are rounded to at most three decimal places; execution
+uses the original precision.
+When none is active, it shows the nearest known level as inactive. Text and color distinguish
+activity; the tooltip identifies the group and reason. Waiting, missing groups, and unavailable
+quotes have explicit labels. Disabled groups are excluded. The indicator uses background
+LevelTrack updates; execution still refreshes and validates the level on click.
+The price, level, and activity indicator is hidden for completed cards (`closed`, `profit`, `loss`).
+
+Point size always follows the normal instrument tick-size resolution path. Legacy `pointSize`
+card properties are ignored.
 
 Buttons:
 

@@ -1362,7 +1362,6 @@ function setupIpc(orderSvc) {
               stopOffsetPts: plan.stopOffsetPts,
               minLot: plan.minLot,
               quantityStep: plan.minLot,
-              pointSize: payload.pointSize,
               stopPrice: plan.stopPrice,
               levelOrderIntentKey: intentKey
             }

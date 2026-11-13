@@ -94,15 +94,30 @@ Opens the LevelTrack window. The window manages saved groups with `key`, `ticker
 `maxOffset`, shows the current quote-derived active level, and persists groups through the
 `Level Track` settings section under `Execution`.
 
-### rm
+### rm producingLineId:{id}
 
-```
+```text
 rm producingLineId:{id}
 ```
 
-Removes cards that match a specified criterion. Criteria are written as `key:value` pairs. The first supported key is `producingLineId`, which deletes the card created from the TradingView line with the given identifier. The command returns a validation error when the criterion is missing or malformed.
+Removes cards created from the TradingView line with the specified `producingLineId`.
+The command returns a validation error when the criterion is missing or malformed;
+unknown keys result in `Unknown criterion: {key}`.
 
-Additional criteria may be added in the future; attempting to use an unknown key results in `Unknown criterion: {key}`.
+### rm completed
+
+```text
+rm completed
+```
+
+Enter `rm completed` in the command input at the bottom of the panel and press `Enter`
+to remove all completed cards: `closed`, `profit`, and `loss`. This includes cards hidden
+by the ticker filter. New cards and cards in `pending`, `pending-exec`, `placed`, or
+`executing` states remain in the panel. Running the command when there are no completed
+cards leaves the panel unchanged.
+
+The command clears cards from the panel only; it does not send broker commands or delete
+execution logs. It takes no arguments.
 
 ### limit-current (alias: lc)
 

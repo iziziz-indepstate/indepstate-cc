@@ -1,4 +1,5 @@
 const { EventEmitter } = require('events');
+const { selectTrackedLevel } = require('./selection');
 const { normalizeTicker } = require('../levelOrder/command');
 
 const DEFAULT_REFRESH_MS = 1000;
@@ -130,9 +131,10 @@ function createLevelTrackService({
   }
 
   function configure(nextConfig = {}) {
+    const previous = cfg;
     cfg = normalizeConfig(nextConfig);
     for (const key of Array.from(states.keys())) {
-      if (!cfg.groups.some(group => group.key === key)) states.delete(key);
+      if (!cfg.groups.some(group => group.key === key && JSON.stringify(group) === JSON.stringify(previous.groups.find(old => old.key === key)))) states.delete(key);
     }
     return notify();
   }
@@ -172,22 +174,34 @@ function createLevelTrackService({
       notify();
       return { ok: false, error: 'LevelTrack group is disabled', state };
     }
-    if (!instrumentInfo || typeof instrumentInfo.get !== 'function') {
-      return { ok: false, error: 'Instrument info service is not available' };
+    let quoteSnapshot;
+    let failure;
+    try {
+      if (!instrumentInfo || typeof instrumentInfo.get !== 'function') throw new Error('Instrument info service is not available');
+      quoteSnapshot = await instrumentInfo.get(
+        { ticker: group.ticker, symbol: group.ticker },
+        { forceQuote: true, timeoutMs: cfg.timeoutMs }
+      );
+    } catch (err) {
+      failure = err?.message || String(err);
+    }
+    // A configuration change invalidates in-flight quotes as well as cached state.
+    if (getGroup(key) !== group) return { ok: false, error: 'LevelTrack configuration changed' };
+    if (failure) {
+      const state = { key: group.key, ticker: group.ticker, enabled: true, status: 'error', reason: failure, updatedAt: clock() };
+      states.set(group.key, state);
+      notify();
+      return { ok: false, error: failure, state };
     }
 
-    const snapshot = await instrumentInfo.get(
-      { ticker: group.ticker, symbol: group.ticker },
-      { forceQuote: true, timeoutMs: cfg.timeoutMs }
-    );
-    const price = pickQuotePrice(snapshot?.quote);
+    const price = pickQuotePrice(quoteSnapshot?.quote);
     const active = computeActiveLevel({ levels: group.levels, maxOffset: group.maxOffset, price });
     const ok = Number.isFinite(active.activeLevel);
     const state = {
       key: group.key,
       ticker: group.ticker,
       enabled: true,
-      provider: snapshot?.provider || null,
+      provider: quoteSnapshot?.provider || null,
       price,
       activeLevel: active.activeLevel,
       nearestLevel: active.nearestLevel ?? null,
@@ -272,16 +286,8 @@ function createLevelTrackService({
       }
     }
 
-    const active = results
-      .filter(item => item.result?.ok && Number.isFinite(parseNumber(item.result.level)))
-      .sort((a, b) => {
-        const aDistance = parseNumber(a.state?.distance);
-        const bDistance = parseNumber(b.state?.distance);
-        if (Number.isFinite(aDistance) && Number.isFinite(bDistance)) return aDistance - bDistance;
-        if (Number.isFinite(aDistance)) return -1;
-        if (Number.isFinite(bDistance)) return 1;
-        return 0;
-      })[0];
+    const selected = selectTrackedLevel(snapshot(), normalizedTicker);
+    const active = selected.status === 'active' ? selected : null;
 
     if (!active) {
       const reasons = results
@@ -310,17 +316,17 @@ function createLevelTrackService({
 
     return {
       ok: true,
-      level: active.result.level,
+      level: active.level,
       source: {
         placeholder,
         provider: 'levelTrack',
         ticker: normalizedTicker,
-        key: active.group.key,
-        price: active.state?.price ?? null,
-        distance: active.state?.distance ?? null,
-        nearestLevel: active.state?.nearestLevel ?? null,
-        activeLevel: active.state?.activeLevel ?? active.result.level,
-        reason: active.state?.reason || null
+        key: active.key,
+        price: active.price ?? null,
+        distance: active.distance ?? null,
+        nearestLevel: active.nearestLevel ?? null,
+        activeLevel: active.activeLevel ?? active.level,
+        reason: active.reason || null
       }
     };
   }

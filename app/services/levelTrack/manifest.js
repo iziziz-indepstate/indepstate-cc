@@ -31,8 +31,14 @@ function initService(servicesApi = {}) {
   let refreshTimer = null;
 
   function sendState(data) {
-    if (!levelTrackWindow || levelTrackWindow.isDestroyed()) return;
-    levelTrackWindow.webContents.send('level-track:state', data || service.snapshot());
+    const snapshot = data || service.snapshot();
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      const url = String(win.webContents.getURL() || '');
+      if (win === levelTrackWindow || /(?:^|[\\/])index\.html(?:$|[?#])/i.test(url)) {
+        win.webContents.send('level-track:state', snapshot);
+      }
+    }
   }
 
   const service = createLevelTrackService({

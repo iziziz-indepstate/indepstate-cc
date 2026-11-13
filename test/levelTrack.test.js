@@ -150,7 +150,77 @@ async function testNearestTrackedLevelNoGroups() {
   assert.strictEqual(res.error, 'No LevelTrack groups for SPX');
 }
 
+function testSnapshotSelection() {
+  const { selectTrackedLevel: select } = require('../app/services/levelTrack/selection');
+  const groups = [
+    { key: 'a', ticker: 'SPX' }, { key: 'b', ticker: 'spx' },
+    { key: 'off', ticker: 'SPX', enabled: false }, { key: 'other', ticker: 'NDX' }
+  ];
+  const states = [
+    { key: 'a', status: 'active', activeLevel: 100, distance: 2 },
+    { key: 'b', status: 'active', activeLevel: 104, distance: 1 },
+    { key: 'off', status: 'active', activeLevel: 103, distance: 0 }
+  ];
+  const snapshot = { config: { groups }, states };
+  assert.strictEqual(select(null, 'SPX').status, 'waiting');
+  assert.strictEqual(select(snapshot, 'ES').status, 'empty');
+  assert.strictEqual(select(snapshot, 'SpX').key, 'b');
+  states[0].distance = 1;
+  assert.strictEqual(select(snapshot, 'SPX').key, 'a');
+  states[0] = { key: 'a', status: 'inactive', nearestLevel: 100, distance: 0.1 };
+  assert.strictEqual(select(snapshot, 'SPX').key, 'b'); // Active wins even if farther.
+  states[1] = { key: 'b', status: 'inactive', nearestLevel: 104, distance: 4 };
+  assert.strictEqual(select(snapshot, 'SPX').level, 100);
+  states[0] = { key: 'a', status: 'error', reason: 'offline' };
+  states[1] = { key: 'b', status: 'inactive', nearestLevel: null, reason: 'No quote price' };
+  assert.strictEqual(select(snapshot, 'SPX').status, 'unavailable');
+  assert.strictEqual(select(snapshot, 'SPX').reason, 'offline');
+  snapshot.states = [];
+  assert.strictEqual(select(snapshot, 'SPX').status, 'waiting');
+}
+
+async function testInvalidationAndFailures() {
+  let fail = false;
+  let missing = false;
+  const config = { groups: [{ key: 'a', ticker: 'SPX', levels: [100], maxOffset: 5 }] };
+  const service = createLevelTrackService({ config, instrumentInfo: { async get() {
+    if (fail) throw new Error('offline');
+    return { quote: missing ? {} : { price: 101 } };
+  } } });
+  await service.refreshGroup('a');
+  assert.strictEqual(service.getState('a').activeLevel, 100);
+  fail = true;
+  const result = await service.resolveNearestTrackedLevel({ ticker: 'SPX' });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(service.getState('a').status, 'error');
+  assert.strictEqual(service.getState('a').activeLevel, null);
+  fail = false;
+  missing = true;
+  await service.refreshGroup('a');
+  assert.strictEqual(service.getState('a').activeLevel, null);
+  assert.strictEqual(service.getState('a').reason, 'No quote price');
+  missing = false;
+  await service.refreshGroup('a');
+  service.configure({ groups: [{ ...config.groups[0], levels: [110] }] });
+  assert.strictEqual(service.getState('a').activeLevel, null);
+  assert.strictEqual(service.getState('a').status, 'idle');
+  service.configure({ groups: [{ ...config.groups[0], enabled: false }] });
+  assert.strictEqual(service.getState('a').activeLevel, null);
+
+  let finish;
+  const pending = createLevelTrackService({ config, instrumentInfo: { get() {
+    return new Promise(resolve => { finish = resolve; });
+  } } });
+  const refresh = pending.refreshGroup('a');
+  pending.configure({ groups: [{ ...config.groups[0], levels: [120] }] });
+  finish({ quote: { price: 101 } });
+  assert.strictEqual((await refresh).ok, false);
+  assert.strictEqual(pending.getState('a').activeLevel, null);
+}
+
 async function run() {
+  testSnapshotSelection();
+  await testInvalidationAndFailures();
   await testServiceResolverUsesFreshQuote();
   await testServiceSave();
   await testNearestTrackedLevelProvider();

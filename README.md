@@ -41,7 +41,7 @@ Notable configuration files include:
 - **Deal Trackers: TradingView Log Source** – turns TradingView order logs into closed trade events. [Details](app/services/dealTrackers-source-tv-log/README.md)
 - **Deal Trackers: MT5 Log Source** – parses MetaTrader 5 reports for closed trades. [Details](app/services/dealTrackers-source-mt5-log/README.md)
 - **Webhooks** – converts raw webhook payloads into order card rows. [Details](app/services/webhooks/README.md)
-- **Command Line** – text interface for quick actions. [Details](docs/command-line.md)
+- **Command Line** – text interface for quick actions; `rm completed` clears completed cards from the panel. [Command list](docs/command-line.md)
 - **Instrument information** – centralizes quotes, trading metadata, tick-size overrides, and point conversion. [Details](docs/instrument-info.md)
 - **Order Calculator** – shared stop-loss, take-profit and position sizing math. [Details](docs/order-calculator.md)
 - **Event Bus** – broadcasts order lifecycle events. [Details](docs/events.md)

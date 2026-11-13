@@ -11,6 +11,8 @@ const {findTickSizeOverride, getDefaultTickSize} = require('./services/instrumen
 const orderCalc = servicesApi.orderCalculator || require('./services/orderCalculator');
 const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = require('./services/levelOrder/strategy');
 const { NEAREST_TRACKED_LEVEL_PLACEHOLDER, normalizeLevelPlaceholder } = require('./services/levelOrder/provider');
+const { selectTrackedLevel } = require('./services/levelTrack/selection');
+let levelTrackSnapshot = null;
 let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let levelOrderCfg = loadConfig('../services/levelOrder/config/level-order.json');
 
@@ -1485,6 +1487,7 @@ function setCardState(key, state) {
     }
     placedOrderByKey.delete(key);
   }
+  updateTrackedLevelIndicators(card);
 }
 
 // --- touched helpers ---
@@ -1724,6 +1727,7 @@ function render() {
     const st = cardStates.get(key);
     if (st) setCardState(key, st);
   }
+  updateTrackedLevelIndicators();
   if (state.autoscroll) {
     try {
       $wrap.scrollTo({top: 0, behavior: 'smooth'});
@@ -1751,18 +1755,10 @@ function createCard(row, index) {
   // Левая часть: тикер (+ bid/ask при наявності)
   const left = el('div', null, null, {style: 'display:flex;align-items:center;gap:6px'});
   left.appendChild(el('div', null, instrumentType === 'OPT' ? (row.name || row.ticker) : row.ticker, {style: 'font-weight:600;font-size:13px'}));
-  let $levelPointSize = null;
   if (row.cardType === 'levelOrder') {
-    $levelPointSize = inputNumber('Pt', 'point-size');
-    $levelPointSize.title = 'Point price override';
-    Object.assign($levelPointSize.style, {
-      width: '58px',
-      height: '20px',
-      padding: '2px 5px',
-      fontSize: '11px',
-      borderRadius: '5px'
-    });
-    left.appendChild($levelPointSize);
+    const indicator = el('span', 'card__tracked-level');
+    indicator.style.fontSize = '11px';
+    left.appendChild(indicator);
   }
   if (SHOW_BID_ASK) {
     const $bidask = el('span', 'card__bidask');
@@ -1835,13 +1831,13 @@ function createCard(row, index) {
   let body;
   switch (instrumentType) {
     case 'EQ':
-      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createEquitiesBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key) : createEquitiesBody(row, key);
       break;
     case 'FX':
-      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createFxBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key) : createFxBody(row, key);
       break;
     case 'CX':
-      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key, $levelPointSize) : createCryptoBody(row, key);
+      body = row.cardType === 'levelOrder' ? createLevelOrderBody(row, key) : createCryptoBody(row, key);
       break;
     case 'OPT':
       body = createOptionBody(row, key);
@@ -1897,7 +1893,7 @@ function createCard(row, index) {
   return card;
 }
 
-function createLevelOrderBody(row, key, $pointSize) {
+function createLevelOrderBody(row, key) {
   const defaults = resolveLevelOrderDefaults(levelOrderCfg, row.ticker);
   const defaultRisk = orderCalc.defaultRiskUsd({
     symbol: row.ticker,
@@ -1909,9 +1905,7 @@ function createLevelOrderBody(row, key, $pointSize) {
     stopOffsetPts: row.stopOffsetPts != null ? String(row.stopOffsetPts) : (defaults.stopOffsetPts != null ? String(defaults.stopOffsetPts) : ''),
     maxLot: row.maxLot != null ? String(row.maxLot) : (defaults.maxLot != null ? String(defaults.maxLot) : '0'),
     takeProfitPts: row.takeProfitPts != null ? String(row.takeProfitPts) : (defaults.takeProfitPts != null ? String(defaults.takeProfitPts) : ''),
-    pointSize: row.pointSize != null ? String(row.pointSize) : ''
   };
-  if ($pointSize) $pointSize.value = saved.pointSize;
 
   const line = el('div', 'quad-line level-order-line');
   line.style.display = 'grid';
@@ -1945,7 +1939,6 @@ function createLevelOrderBody(row, key, $pointSize) {
       stopOffsetPts: $stopOffset.value,
       maxLot: $maxLot.value,
       takeProfitPts: $tp.value,
-      pointSize: $pointSize ? $pointSize.value : ''
     });
   };
 
@@ -1966,7 +1959,6 @@ function createLevelOrderBody(row, key, $pointSize) {
       const stopOffsetPts = _normNum($stopOffset.value);
       const maxLot = _normNum($maxLot.value);
       const takeProfitPts = _normNum($tp.value);
-      const pointSize = _normNum($pointSize?.value);
       const info = instrumentInfoFor(row.ticker, row);
       const bid = Number(info?.bid);
       const ask = Number(info?.ask);
@@ -1974,15 +1966,14 @@ function createLevelOrderBody(row, key, $pointSize) {
       const sellPriceSource = normalizePriceSource(defaults.sellPriceSource, 'bid');
       const sourceForAction = action => String(action || '').toUpperCase() === 'LS' ? sellPriceSource : buyPriceSource;
       const quoteForAction = action => resolveQuotePrice({ bid, ask, source: sourceForAction(action) });
-      const pointSizeOk = !$pointSize || $pointSize.value === '' || (Number.isFinite(pointSize) && pointSize > 0);
-      const tick = pointSizeOk && Number.isFinite(pointSize) && pointSize > 0 ? pointSize : tickSize(row);
+      const tick = tickSize(row);
       const tickOk = Number.isFinite(tick) && tick > 0;
       const minLot = Number(defaults.minLot);
       const minLotOk = Number.isFinite(minLot) && minLot > 0;
       const tpOk = $tp.value === '' || (Number.isFinite(takeProfitPts) && takeProfitPts > 0);
       const maxLotOk = Number.isFinite(maxLot) && maxLot >= 0;
       const levelOk = isPos(level) || levelPlaceholder === NEAREST_TRACKED_LEVEL_PLACEHOLDER;
-      const commonValid = levelOk && isPos(risk) && isSL(stopOffsetPts) && maxLotOk && minLotOk && tpOk && pointSizeOk && tickOk;
+      const commonValid = levelOk && isPos(risk) && isSL(stopOffsetPts) && maxLotOk && minLotOk && tpOk && tickOk;
       const quoteByAction = {
         LB: quoteForAction('LB'),
         LS: quoteForAction('LS')
@@ -1999,7 +1990,6 @@ function createLevelOrderBody(row, key, $pointSize) {
       setErr($stopOffset, !isSL(stopOffsetPts));
       setErr($maxLot, !maxLotOk);
       setErr($tp, !tpOk);
-      if ($pointSize) setErr($pointSize, !pointSizeOk);
 
       const commonReason = !levelOk ? 'Level > 0 or nearestTrackedLevel'
         : !isPos(risk) ? 'Risk $ > 0'
@@ -2007,9 +1997,8 @@ function createLevelOrderBody(row, key, $pointSize) {
             : !maxLotOk ? 'Max lot >= 0'
               : !minLotOk ? 'Min lot > 0'
                 : !tpOk ? 'TP pts > 0 or blank'
-                  : !pointSizeOk ? 'Point price > 0 or blank'
-                    : !tickOk ? 'Tick size required'
-                      : '';
+                  : !tickOk ? 'Tick size required'
+                    : '';
       const quoteReason = requestedAction && !quoteOk(requestedAction)
         ? quoteByAction[requestedAction]?.reason
         : !quoteOk('LB') ? quoteByAction.LB.reason
@@ -2040,17 +2029,17 @@ function createLevelOrderBody(row, key, $pointSize) {
         takeProfitPts: $tp.value === '' ? null : takeProfitPts,
         buyPriceSource,
         sellPriceSource,
-        pointSize: $pointSize && $pointSize.value !== '' ? pointSize : null,
         tickSize: tick
       };
     }
   };
 
-  [$level, $risk, $stopOffset, $maxLot, $tp, $pointSize].filter(Boolean).forEach(inp => {
+  [$level, $risk, $stopOffset, $maxLot, $tp].forEach(inp => {
     inp.addEventListener('input', () => {
       markTouched(row.ticker);
       persist();
       body.validate();
+      updateTrackedLevelIndicators();
     });
   });
 
@@ -3252,7 +3241,6 @@ async function placeLevelOrder(kind, row, v, instrumentType, btnLabel) {
       takeProfitPts: v.takeProfitPts,
       buyPriceSource: v.buyPriceSource,
       sellPriceSource: v.sellPriceSource,
-      pointSize: v.pointSize,
       tickSize: v.tickSize,
       requestId,
       strategyId
@@ -3386,6 +3374,36 @@ function registerAttachedOptionRow(row) {
 }
 
 // ======= IPC wiring =======
+function updateTrackedLevelIndicators(root = document) {
+  root.querySelectorAll('.card__tracked-level').forEach(indicator => {
+    const card = indicator.closest('.card');
+    const level = card.querySelector('input.level')?.value ?? uiState.get(card.dataset.rowkey)?.level;
+    indicator.hidden = isTerminalCardState(cardStates.get(card.dataset.rowkey))
+      || normalizeLevelPlaceholder(level) !== NEAREST_TRACKED_LEVEL_PLACEHOLDER;
+    if (indicator.hidden) return;
+    const selected = selectTrackedLevel(levelTrackSnapshot, card.dataset.ticker);
+    const labels = { waiting: 'Уровень: ожидание', empty: 'Нет отслеживаемых уровней', unavailable: 'Уровень недоступен' };
+    indicator.textContent = selected.level != null
+      ? `${Number.isFinite(selected.price) ? selected.price.toFixed(2) : '—'} · ${Number(selected.level.toFixed(3))} · ${selected.status === 'active' ? 'активен' : 'неактивен'}`
+      : labels[selected.status];
+    indicator.style.color = selected.status === 'active' ? '#16a34a' : selected.status === 'inactive' ? '#d97706' : '#6b7280';
+    indicator.title = [selected.key, selected.reason].filter(Boolean).join(': ');
+  });
+}
+
+ipcRenderer.on('level-track:state', (_event, snapshot) => {
+  levelTrackSnapshot = snapshot;
+  updateTrackedLevelIndicators();
+});
+ipcRenderer.invoke('level-track:list').then(snapshot => {
+  // A pushed update may arrive before the initial request completes.
+  if (!levelTrackSnapshot) levelTrackSnapshot = snapshot;
+  updateTrackedLevelIndicators();
+}).catch(err => {
+  if (!levelTrackSnapshot) levelTrackSnapshot = { error: err?.message || 'LevelTrack is unavailable' };
+  updateTrackedLevelIndicators();
+});
+
 ipcRenderer.invoke('orders:list', 100).then(rows => {
   state.rows = Array.isArray(rows) ? rows : [];
   render();
@@ -3506,11 +3524,16 @@ ipcRenderer.on('execution:retry-stopped', (_evt, rec) => {
 
 ipcRenderer.on('orders:remove', (_evt, filter) => {
   if (!filter || typeof filter !== 'object') return;
-  const {producingLineId} = filter;
-  if (producingLineId == null) return;
-  const targetId = String(producingLineId);
-  if (!targetId) return;
-  const matches = state.rows.filter(row => String(row.producingLineId || '') === targetId);
+  let matches;
+  if (filter.completed === true) {
+    matches = state.rows.filter(row => isTerminalCardState(cardStates.get(rowKey(row))));
+  } else {
+    const {producingLineId} = filter;
+    if (producingLineId == null) return;
+    const targetId = String(producingLineId);
+    if (!targetId) return;
+    matches = state.rows.filter(row => String(row.producingLineId || '') === targetId);
+  }
   if (matches.length === 0) return;
   const keysToRemove = new Set(matches.map(row => rowKey(row)));
   const nextRows = [];
@@ -3600,7 +3623,6 @@ ipcRenderer.on('orders:new', (_evt, row) => {
         if (row.stopOffsetPts != null) patch.stopOffsetPts = String(row.stopOffsetPts);
         if (row.maxLot != null) patch.maxLot = String(row.maxLot);
         if (row.takeProfitPts != null) patch.takeProfitPts = String(row.takeProfitPts);
-        if (row.pointSize != null) patch.pointSize = String(row.pointSize);
       }
       return patch;
     }
