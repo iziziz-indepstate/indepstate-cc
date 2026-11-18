@@ -69,7 +69,16 @@ Config shape:
 - `sellPriceSource`: quote side used by `LS`; one of `bid`, `ask`, or `mid`. Default is `bid`.
 - `symbols`: ticker-specific overrides with the same fields plus `ticker`.
 
+Configure default risk only in **Execution → Order Calculator**, using `riskUsd.bySymbol` or
+`riskUsd.byInstrumentType`. Level Order settings have no separate risk defaults. Legacy
+`defaults.riskUsd` and `symbols[*].riskUsd` fields in `level-order.json` are ignored and can be
+removed; they are not migrated into the calculator. Other ticker-specific Level Order settings
+continue to apply.
+
 The Risk $ field uses the shared order-calculator risk configuration. An explicit `riskUsd` on the incoming row wins over an order-calculator symbol override, which wins over the instrument-type default. See [order-calculator.md](order-calculator.md).
+Untouched risk defaults on editable level-order cards update when calculator settings change.
+A manually edited risk, an explicit row risk, or a card already submitted for execution keeps its value.
+The required risk argument of `lo-lb` / `lo-ls` also remains an explicit per-order value.
 
 `mid` is calculated as `(bid + ask) / 2` and requires both quote sides.
 
@@ -105,12 +114,12 @@ A level-order card shows:
 when `LB` or `LS` is clicked, so it uses the latest active `LevelTrack` state and quote.
 
 For `nearestTrackedLevel`, a live indicator beside the ticker shows the current LevelTrack quote
-price, selected level, and activity status, in that order (for example, `6501.00 · 6500 · активен`).
+price and selected level, in that order (for example, `6501.00 · 6500`).
 The quote price comes from the same tracking snapshot used to select the level; unavailable prices
 are shown as `—`. Displayed prices use exactly two decimal places. Displayed levels are rounded to at most three decimal places; execution
 uses the original precision.
-When none is active, it shows the nearest known level as inactive. Text and color distinguish
-activity; the tooltip identifies the group and reason. Waiting, missing groups, and unavailable
+When none is active, it shows the nearest known level. Green indicates an active level and amber
+an inactive level, without status text; the tooltip identifies the group and reason. Waiting, missing groups, and unavailable
 quotes have explicit labels. Disabled groups are excluded. The indicator uses background
 LevelTrack updates; execution still refreshes and validates the level on click.
 The price, level, and activity indicator is hidden for completed cards (`closed`, `profit`, `loss`).

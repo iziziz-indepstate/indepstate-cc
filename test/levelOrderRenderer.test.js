@@ -10,11 +10,13 @@ const Module = require('module');
 async function run() {
   const handlers = {};
   const calls = [];
+  let resolveInitialRiskSettings;
   const ipcRenderer = {
     on: (ch, fn) => { handlers[ch] = fn; },
     invoke: async (ch, payload) => {
       calls.push({ ch, payload });
       if (ch === 'orders:list') return [];
+      if (ch === 'settings:get' && payload === 'order-calculator') return new Promise(resolve => { resolveInitialRiskSettings = resolve; });
       if (ch === 'settings:get') return {};
       if (ch === 'settings:list') return [];
       if (ch === 'settings:set') return true;
@@ -64,8 +66,14 @@ async function run() {
     }
   });
   t.setLevelOrderConfig({
-    defaults: { maxLot: 3, stopOffsetPts: 4, takeProfitPts: 12, buyPriceSource: 'bid', sellPriceSource: 'bid' },
-    symbols: [{ ticker: 'TSTMID', buyPriceSource: 'mid', sellPriceSource: 'bid' }]
+    // Legacy card-specific risks must not override the shared calculator or explicit row risk.
+    defaults: { riskUsd: 999, maxLot: 3, stopOffsetPts: 4, takeProfitPts: 12, buyPriceSource: 'bid', sellPriceSource: 'bid' },
+    symbols: [
+      { ticker: 'TSTMID', buyPriceSource: 'mid', sellPriceSource: 'bid' },
+      { ticker: 'TST', riskUsd: 888 },
+      { ticker: 'TSTSYMBOL', riskUsd: 777, stopOffsetPts: 6, maxLot: 2 },
+      { ticker: 'TSTEXPLICIT', riskUsd: 666 }
+    ]
   });
 
   const row = { cardType: 'levelOrder', ticker: 'TST', event: 'levelOrder', time: 0, level: 100, pointSize: 0.001, provider: 'simulated', instrumentType: 'EQ' };
@@ -112,17 +120,19 @@ async function run() {
   assert.strictEqual(placeholderCard.querySelector('.level-order-line input.level').value, 'nearestTrackedLevel');
   assert.strictEqual(placeholderButtons[0].disabled, false);
   const indicator = placeholderCard.querySelector('.card__tracked-level');
-  assert.strictEqual(indicator.textContent, '101.00 · 99 · активен');
+  assert.strictEqual(indicator.textContent, '101.00 · 99');
   assert.strictEqual(card.querySelector('.card__tracked-level').hidden, true);
   const pushTracking = (states, groups = [{ key: 'main', ticker: 'tstplace' }]) =>
     handlers['level-track:state'](null, { config: { groups }, states });
   pushTracking([{ key: 'main', status: 'idle' }]);
   assert.strictEqual(indicator.textContent, 'Уровень: ожидание');
   pushTracking([{ key: 'main', status: 'active', price: 101, activeLevel: 100, distance: 1 }]);
-  assert.strictEqual(indicator.textContent, '101.00 · 100 · активен');
+  assert.strictEqual(indicator.textContent, '101.00 · 100');
+  assert.strictEqual(indicator.style.color, 'rgb(22, 163, 74)');
   assert.strictEqual(indicator.title, 'main');
   pushTracking([{ key: 'main', status: 'inactive', price: 101, nearestLevel: 110, distance: 9, reason: 'No active level' }]);
-  assert.strictEqual(indicator.textContent, '101.00 · 110 · неактивен');
+  assert.strictEqual(indicator.textContent, '101.00 · 110');
+  assert.strictEqual(indicator.style.color, 'rgb(217, 119, 6)');
   assert.match(indicator.title, /main: No active level/);
   pushTracking([{ key: 'main', status: 'error', reason: 'Quote failed' }]);
   assert.strictEqual(indicator.textContent, 'Уровень недоступен');
@@ -140,18 +150,18 @@ async function run() {
   const duplicate = placeholderCard.cloneNode(true);
   document.getElementById('grid').appendChild(duplicate);
   pushTracking([{ key: 'main', status: 'active', price: 105, activeLevel: 105, distance: 0 }]);
-  assert.strictEqual(indicator.textContent, '105.00 · 105 · активен');
+  assert.strictEqual(indicator.textContent, '105.00 · 105');
   assert.strictEqual(duplicate.querySelector('.card__tracked-level').textContent, indicator.textContent);
   pushTracking([{ key: 'main', status: 'active', activeLevel: 105, distance: 0 }]);
-  assert.strictEqual(indicator.textContent, '— · 105 · активен');
+  assert.strictEqual(indicator.textContent, '— · 105');
   pushTracking([{ key: 'main', status: 'active', price: 105, activeLevel: 105.12356789, distance: 0 }]);
-  assert.strictEqual(indicator.textContent, '105.00 · 105.124 · активен');
+  assert.strictEqual(indicator.textContent, '105.00 · 105.124');
   pushTracking([{ key: 'main', status: 'inactive', price: 105, nearestLevel: 105.12000001, distance: 0.12 }]);
-  assert.strictEqual(indicator.textContent, '105.00 · 105.12 · неактивен');
+  assert.strictEqual(indicator.textContent, '105.00 · 105.12');
   pushTracking([{ key: 'main', status: 'active', price: 105.123456789, activeLevel: 105, distance: 0.123456789 }]);
-  assert.strictEqual(indicator.textContent, '105.12 · 105 · активен');
+  assert.strictEqual(indicator.textContent, '105.12 · 105');
   pushTracking([{ key: 'main', status: 'inactive', price: 105.129876543, nearestLevel: 110, distance: 4.870123457 }]);
-  assert.strictEqual(indicator.textContent, '105.13 · 110 · неактивен');
+  assert.strictEqual(indicator.textContent, '105.13 · 110');
   duplicate.remove();
   const placeholderKey = t.rowKey(placeholderRow);
   for (const status of ['closed', 'profit', 'loss']) {
@@ -175,6 +185,8 @@ async function run() {
   handlers['orders:new'](null, symbolRow);
   let symbolCard = t.cardByKey(t.rowKey(symbolRow));
   assert.strictEqual(symbolCard.querySelector('.level-order-line input.risk').value, '7');
+  assert.strictEqual(symbolCard.querySelector('.level-order-line input.sl').value, '6');
+  assert.strictEqual(symbolCard.querySelector('.level-order-line input.qty').value, '2');
 
   const explicitRow = { cardType: 'levelOrder', ticker: 'TSTEXPLICIT', event: 'levelOrder', time: 3, level: 100, riskUsd: 11, provider: 'simulated', instrumentType: 'EQ' };
   handlers['orders:new'](null, explicitRow);
@@ -569,6 +581,42 @@ async function run() {
   const remaining = t.state.rows.length;
   handlers['orders:remove'](null, { completed: true });
   assert.strictEqual(t.state.rows.length, remaining);
+
+  // A cached default follows main-process startup settings and live changes.
+  orderCalculator.configure({ riskUsd: { byInstrumentType: { EQ: 50 }, bySymbol: {} } });
+  const riskRows = ['DEFAULT', 'MANUAL', 'EXPLICIT', 'SUBMITTED'].map((suffix, index) => ({
+    cardType: 'levelOrder', ticker: `RISK${suffix}`, event: 'levelOrder', time: 200 + index,
+    level: 100, provider: 'simulated', instrumentType: 'EQ',
+    ...(suffix === 'EXPLICIT' ? { riskUsd: 11 } : {})
+  }));
+  t.state.filter = '';
+  t.state.rows.push(...riskRows);
+  t.render();
+  const riskInput = row => t.cardByKey(t.rowKey(row)).querySelector('input.risk');
+  assert.strictEqual(riskInput(riskRows[0]).value, '50');
+  riskInput(riskRows[1]).value = '12';
+  riskInput(riskRows[1]).dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  t.setCardState(t.rowKey(riskRows[3]), 'pending-exec');
+  resolveInitialRiskSettings({ config: { riskUsd: { byInstrumentType: { EQ: 15 }, bySymbol: { RISKDEFAULT: 15 } } } });
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.strictEqual(riskInput(riskRows[0]).value, '15');
+  assert.strictEqual(riskInput(riskRows[1]).value, '12');
+  assert.strictEqual(riskInput(riskRows[2]).value, '11');
+  assert.strictEqual(riskInput(riskRows[3]).value, '50');
+  await handlers['settings:changed'](null, {
+    saved: true, section: 'order-calculator', appliedPaths: ['riskUsd'],
+    config: { riskUsd: { byInstrumentType: { EQ: 25 }, bySymbol: { riskdefault: 7 } } }
+  });
+  assert.strictEqual(riskInput(riskRows[0]).value, '7');
+  assert.strictEqual(riskInput(riskRows[1]).value, '12');
+  assert.strictEqual(riskInput(riskRows[2]).value, '11');
+  assert.strictEqual(riskInput(riskRows[3]).value, '50');
+  // Removing a symbol override restores the new instrument default.
+  await handlers['settings:changed'](null, {
+    saved: true, section: 'order-calculator', appliedPaths: ['riskUsd'],
+    config: { riskUsd: { byInstrumentType: { EQ: 25 }, bySymbol: {} } }
+  });
+  assert.strictEqual(riskInput(riskRows[0]).value, '25');
 
   Module._load = originalLoad;
   console.log('levelOrderRenderer tests passed');

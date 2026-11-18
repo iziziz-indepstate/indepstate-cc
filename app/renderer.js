@@ -13,6 +13,7 @@ const { resolveLevelOrderDefaults, normalizePriceSource, resolveQuotePrice } = r
 const { NEAREST_TRACKED_LEVEL_PLACEHOLDER, normalizeLevelPlaceholder } = require('./services/levelOrder/provider');
 const { selectTrackedLevel } = require('./services/levelTrack/selection');
 let levelTrackSnapshot = null;
+let orderCalculatorSettingsUpdated = false;
 let orderCardsCfg = loadConfig('../services/orderCards/config/order-cards.json');
 let levelOrderCfg = loadConfig('../services/levelOrder/config/level-order.json');
 
@@ -209,7 +210,11 @@ settingsRuntime.onApply('ui', ({ config }) => {
   if (typeof config.autoscroll === 'boolean') state.autoscroll = config.autoscroll;
 });
 settingsRuntime.onApply('order-cards', ({ config }) => applyOrderCardsConfig(config));
-settingsRuntime.onApply('order-calculator', () => render());
+settingsRuntime.onApply('order-calculator', ({ config }) => {
+  orderCalculatorSettingsUpdated = true;
+  orderCalc.configure(config);
+  render();
+});
 settingsRuntime.onApply('level-order', ({ config }) => {
   levelOrderCfg = config || {};
   render();
@@ -1907,6 +1912,11 @@ function createLevelOrderBody(row, key) {
     takeProfitPts: row.takeProfitPts != null ? String(row.takeProfitPts) : (defaults.takeProfitPts != null ? String(defaults.takeProfitPts) : ''),
   };
 
+  // Only a manual risk edit or an execution state freezes the cached default.
+  if (!saved.riskTouched && !cardStates.get(key)) {
+    saved.risk = row.riskUsd != null ? String(row.riskUsd) : (defaultRisk != null ? String(defaultRisk) : '');
+  }
+
   const line = el('div', 'quad-line level-order-line');
   line.style.display = 'grid';
   line.style.gridTemplateColumns = '1fr 1fr 1fr 1fr 1fr';
@@ -1939,6 +1949,7 @@ function createLevelOrderBody(row, key) {
       stopOffsetPts: $stopOffset.value,
       maxLot: $maxLot.value,
       takeProfitPts: $tp.value,
+      riskTouched: saved.riskTouched === true,
     });
   };
 
@@ -2036,6 +2047,7 @@ function createLevelOrderBody(row, key) {
 
   [$level, $risk, $stopOffset, $maxLot, $tp].forEach(inp => {
     inp.addEventListener('input', () => {
+      if (inp === $risk) saved.riskTouched = true;
       markTouched(row.ticker);
       persist();
       body.validate();
@@ -3384,7 +3396,7 @@ function updateTrackedLevelIndicators(root = document) {
     const selected = selectTrackedLevel(levelTrackSnapshot, card.dataset.ticker);
     const labels = { waiting: 'Уровень: ожидание', empty: 'Нет отслеживаемых уровней', unavailable: 'Уровень недоступен' };
     indicator.textContent = selected.level != null
-      ? `${Number.isFinite(selected.price) ? selected.price.toFixed(2) : '—'} · ${Number(selected.level.toFixed(3))} · ${selected.status === 'active' ? 'активен' : 'неактивен'}`
+      ? `${Number.isFinite(selected.price) ? selected.price.toFixed(2) : '—'} · ${Number(selected.level.toFixed(3))}`
       : labels[selected.status];
     indicator.style.color = selected.status === 'active' ? '#16a34a' : selected.status === 'inactive' ? '#d97706' : '#6b7280';
     indicator.title = [selected.key, selected.reason].filter(Boolean).join(': ');
@@ -3395,6 +3407,13 @@ ipcRenderer.on('level-track:state', (_event, snapshot) => {
   levelTrackSnapshot = snapshot;
   updateTrackedLevelIndicators();
 });
+// Use the main process snapshot: packaged renderers may resolve local config roots differently.
+ipcRenderer.invoke('settings:get', 'order-calculator').then(result => {
+  if (!result?.config || orderCalculatorSettingsUpdated) return;
+  orderCalc.configure(result.config);
+  render();
+}).catch(() => {});
+
 ipcRenderer.invoke('level-track:list').then(snapshot => {
   // A pushed update may arrive before the initial request completes.
   if (!levelTrackSnapshot) levelTrackSnapshot = snapshot;

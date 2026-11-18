@@ -141,7 +141,8 @@ const orderCalculator = {
     }
   };
   const cfg = {
-    defaults: { maxLot: 10, minLot: 1, stopOffsetPts: 3, takeProfitPts: 20, buyPriceSource: 'ask', sellPriceSource: 'bid' }
+    defaults: { riskUsd: 999, maxLot: 10, minLot: 1, stopOffsetPts: 3, takeProfitPts: 20, buyPriceSource: 'ask', sellPriceSource: 'bid' },
+    symbols: [{ ticker: 'UPRO', riskUsd: 888 }]
   };
   const buy = new LevelOrderPlaceCommand('LB', {
     servicesApi,
@@ -213,8 +214,8 @@ const orderCalculator = {
 
 (function testDefaults() {
   const cfg = {
-    defaults: { maxLot: 0, minLot: 1, stopOffsetPts: 10, takeProfitPts: null, buyPriceSource: 'bid', sellPriceSource: 'bid' },
-    symbols: [{ ticker: 'SPX.cfd', maxLot: 3, minLot: 0.01, stopOffsetPts: 5, takeProfitPts: 30, buyPriceSource: 'mid', sellPriceSource: 'ask' }]
+    defaults: { riskUsd: 999, maxLot: 0, minLot: 1, stopOffsetPts: 10, takeProfitPts: null, buyPriceSource: 'bid', sellPriceSource: 'bid' },
+    symbols: [{ ticker: 'SPX.cfd', riskUsd: 888, maxLot: 3, minLot: 0.01, stopOffsetPts: 5, takeProfitPts: 30, buyPriceSource: 'mid', sellPriceSource: 'ask' }]
   };
   assert.deepStrictEqual(resolveLevelOrderDefaults(cfg, 'SPX.cfd'), {
     maxLot: 3,
